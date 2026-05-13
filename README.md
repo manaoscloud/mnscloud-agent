@@ -4,7 +4,7 @@ Agente local genérico da MNSCloud.
 
 O agente roda no servidor onde existe algum recurso operacional da plataforma e se comunica com a API central por HTTPS outbound. Ele não recebe credenciais permanentes de storage; quando precisa executar uma ação sensível, a API entrega um job com autorização temporária e escopo mínimo.
 
-A primeira capacidade implementada é `pabx`, usada para upload assíncrono de gravações geradas por Asterisk ou FreeSWITCH.
+A primeira capacidade operacional suportada pela API é `pabx`, usada para upload assíncrono de gravações geradas por Asterisk ou FreeSWITCH. Essa capacidade não é configurada no instalador; ela é atribuída depois pela aplicação.
 
 ## Contrato
 
@@ -20,16 +20,18 @@ A primeira capacidade implementada é `pabx`, usada para upload assíncrono de g
 ## Instalação
 
 ```bash
-scripts/install-agent.sh [--engine asterisk|freeswitch]
+scripts/install-agent.sh
 ```
 
-O instalador detecta Docker/Compose, oferece instalar Docker quando necessário, lê os tokens locais do PABX quando existirem e cria o `agent.conf`.
+O instalador detecta Docker/Compose, oferece instalar Docker quando necessário, gera ou reaproveita `/var/lib/mnscloud/agent/agent.uuid`, cria o `agent.conf` e sobe o container `mnscloud-agent`.
+
+Depois da instalação, copie o UUID exibido pelo instalador e cadastre o agente na aplicação MNSCloud. A aplicação/API define as capacidades, recursos e comandos permitidos para esse agente.
 
 ## Segurança
 
 - A comunicação é sempre outbound para a API.
-- O bootstrap inicial usa o token do recurso local, hoje `VoipPabxServer`.
-- Após o enrollment, o agente usa `agent.uuid` e `agent.token`.
+- O agente não recebe engine, recurso ou função no instalador.
+- A identidade local usa `agent.uuid` e, após ativação pela aplicação, `agent.token`.
 - O agente lê apenas caminhos permitidos em `recordings.roots`.
 - Uploads usam URL assinada de curta duração gerada pela API.
 

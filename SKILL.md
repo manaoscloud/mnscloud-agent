@@ -33,7 +33,8 @@ Não adicionar acoplamento direto de recurso na identidade principal do agente.
 ## Segurança
 
 - Comunicação apenas outbound por HTTPS.
-- Token bootstrap só para enrollment.
+- O instalador não define engine, recurso ou função.
+- O agente só recebe capacidades e assignments pela aplicação/API.
 - Token do agente fica em `/var/lib/mnscloud/agent/agent.token`.
 - Credenciais permanentes de storage ficam somente na API.
 - Jobs usam autorização temporária, preferencialmente URL assinada.

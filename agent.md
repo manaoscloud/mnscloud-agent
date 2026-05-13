@@ -6,15 +6,15 @@
 
 ## Arquitetura
 
-O agente roda próximo ao recurso operacional. No caso atual, ele roda no host onde Asterisk ou FreeSWITCH gravam arquivos de áudio. A API central controla identidade, permissões e jobs.
+O agente roda próximo ao recurso operacional. No caso atual, ele roda no host onde Asterisk ou FreeSWITCH gravam arquivos de áudio. A API central controla identidade, permissões, capacidades, assignments e jobs.
 
 Fluxo:
 
 1. O instalador cria `/etc/mnscloud/agent/agent.conf`.
-2. O agente lê `node.uuid` e o token bootstrap do recurso local.
-3. O agente faz enrollment em `POST /api/v1/agent/enroll`.
-4. A API cria ou atualiza `MonitoringAgent`, `MonitoringAgentCapability` e `MonitoringAgentAssignment`.
-5. O agente passa a enviar heartbeat em `POST /api/v1/agent/heartbeat`.
+2. O instalador gera ou reaproveita `/var/lib/mnscloud/agent/agent.uuid`.
+3. O operador cadastra o UUID na aplicação MNSCloud.
+4. A aplicação/API ativa o agente, define seu tenant, token, capacidades e assignments.
+5. O agente envia heartbeat em `POST /api/v1/agent/heartbeat` quando `agent.token` existir.
 6. O agente busca jobs em `POST /api/v1/agent/jobs/lease`.
 7. Para gravações, a API fornece URL assinada temporária.
 8. O agente faz upload e confirma ou falha o job.
@@ -32,8 +32,8 @@ Formato:
 ```ini
 [agent]
 name = asterisk-dev1
+hostname = asterisk-dev1.local
 api_base = https://dev1.publichost.cloud
-capabilities = pabx
 version = 0.1.0
 poll_interval_ms = 15000
 heartbeat_interval_ms = 60000
@@ -41,18 +41,13 @@ heartbeat_interval_ms = 60000
 [identity]
 agent_uuid_file = /var/lib/mnscloud/agent/agent.uuid
 agent_token_file = /var/lib/mnscloud/agent/agent.token
-node_uuid_file = /etc/mnscloud/agent/secrets/node.uuid
-api_token_file = /etc/mnscloud/agent/secrets/api.token
-
-[pabx]
-engine = freeswitch
 
 [recordings]
 roots = /recordings/freeswitch,/recordings/asterisk
 mounts = /var/lib/freeswitch/recordings=/recordings/freeswitch,/var/spool/asterisk/monitor=/recordings/asterisk
 ```
 
-Não usar `.env` para o agente. Seguir `agent.conf` para dados de configuração e `/etc/mnscloud/agent/secrets` para tokens bootstrap.
+Não usar `.env` para o agente. Seguir `agent.conf` para configuração local e `/var/lib/mnscloud/agent` para identidade/estado.
 
 ## Banco de Dados
 
@@ -68,7 +63,6 @@ Não adicionar colunas de tipo ou recurso diretamente em `MonitoringAgent`. A re
 
 Endpoints canônicos:
 
-- `POST /api/v1/agent/enroll`
 - `POST /api/v1/agent/heartbeat`
 - `POST /api/v1/agent/jobs/lease`
 - `POST /api/v1/agent/jobs/:uuid/complete`
@@ -77,8 +71,7 @@ Endpoints canônicos:
 Headers canônicos:
 
 - `Authorization: Bearer <token>`
-- `X-MNSCloud-Node-UUID: <uuid>`
-- `X-MNSCloud-Agent-UUID: <uuid>` depois do enrollment
+- `X-MNSCloud-Agent-UUID: <uuid>`
 
 Não criar endpoints específicos por capacidade. O PABX é tratado por payload/capability dentro do agente genérico.
 
@@ -108,9 +101,9 @@ O container deve ser restrito:
 
 ## Capacidade PABX
 
-O agente PABX faz:
+Quando o agente recebe a capacidade `pabx` e assignment para um `voip_pabx_server`, ele faz:
 
-- heartbeat do host/engine;
+- heartbeat do host;
 - lease de jobs de upload de gravações;
 - leitura de arquivo local validada por path allowlist;
 - upload por URL assinada;
