@@ -9,6 +9,7 @@ type AgentConfig = {
   agentTokenFile: string;
   recordingsRoots: string[];
   recordingMounts: Array<{ hostRoot: string; containerRoot: string }>;
+  deleteAfterUpload: boolean;
 };
 
 type LeaseJob = {
@@ -21,32 +22,36 @@ type LeaseJob = {
 
 type IniConfig = Record<string, Record<string, string>>;
 
-const CONFIG_PATH = '/etc/mnscloud/agent/agent.conf';
+const CONFIG_PATH = "/etc/mnscloud/agent/agent.conf";
 
 function parseList(value: string) {
-  return value.split(',').map((item) => item.trim()).filter(Boolean);
+  return value.split(",").map((item) => item.trim()).filter(Boolean);
 }
 
 function parseRecordingMounts(value: string) {
   return parseList(value).map((entry) => {
-    const [hostRoot, containerRoot] = entry.split('=').map((item) => item?.trim());
+    const [hostRoot, containerRoot] = entry.split("=").map((item) =>
+      item?.trim()
+    );
     return hostRoot && containerRoot ? { hostRoot, containerRoot } : null;
-  }).filter((item): item is { hostRoot: string; containerRoot: string } => item !== null);
+  }).filter((item): item is { hostRoot: string; containerRoot: string } =>
+    item !== null
+  );
 }
 
 function parseIni(text: string): IniConfig {
   const config: IniConfig = { default: {} };
-  let section = 'default';
+  let section = "default";
   for (const rawLine of text.split(/\r?\n/)) {
     const line = rawLine.trim();
-    if (!line || line.startsWith('#') || line.startsWith(';')) continue;
+    if (!line || line.startsWith("#") || line.startsWith(";")) continue;
     const sectionMatch = line.match(/^\[([a-zA-Z0-9_.-]+)\]$/);
     if (sectionMatch) {
       section = sectionMatch[1];
       config[section] ??= {};
       continue;
     }
-    const separator = line.indexOf('=');
+    const separator = line.indexOf("=");
     if (separator < 0) continue;
     const key = line.slice(0, separator).trim();
     const value = line.slice(separator + 1).trim();
@@ -74,69 +79,90 @@ function getNumber(
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
+function getBoolean(
+  config: IniConfig,
+  section: string,
+  key: string,
+  fallback: boolean,
+) {
+  const value = getConfigValue(config, section, key, String(fallback)).trim()
+    .toLowerCase();
+  if (["1", "true", "yes", "y", "sim", "on"].includes(value)) return true;
+  if (["0", "false", "no", "n", "nao", "não", "off"].includes(value)) {
+    return false;
+  }
+  return fallback;
+}
+
 async function loadConfig(): Promise<AgentConfig> {
   const parsed = parseIni(await Deno.readTextFile(CONFIG_PATH));
   return {
     apiBase: getConfigValue(
       parsed,
-      'agent',
-      'api_base',
-      'https://dev1.publichost.cloud',
+      "agent",
+      "api_base",
+      "https://dev1.publichost.cloud",
     ),
-    name: getConfigValue(parsed, 'agent', 'name', 'mnscloud-agent'),
-    hostname: getConfigValue(parsed, 'agent', 'hostname', 'mnscloud-agent'),
-    version: getConfigValue(parsed, 'agent', 'version', '0.1.0'),
-    pollIntervalMs: getNumber(parsed, 'agent', 'poll_interval_ms', 15_000),
+    name: getConfigValue(parsed, "agent", "name", "mnscloud-agent"),
+    hostname: getConfigValue(parsed, "agent", "hostname", "mnscloud-agent"),
+    version: getConfigValue(parsed, "agent", "version", "0.1.0"),
+    pollIntervalMs: getNumber(parsed, "agent", "poll_interval_ms", 15_000),
     heartbeatIntervalMs: getNumber(
       parsed,
-      'agent',
-      'heartbeat_interval_ms',
+      "agent",
+      "heartbeat_interval_ms",
       60_000,
     ),
     agentUUIDFile: getConfigValue(
       parsed,
-      'identity',
-      'agent_uuid_file',
-      '/var/lib/mnscloud/agent/agent.uuid',
+      "identity",
+      "agent_uuid_file",
+      "/var/lib/mnscloud/agent/agent.uuid",
     ),
     agentTokenFile: getConfigValue(
       parsed,
-      'identity',
-      'agent_token_file',
-      '/var/lib/mnscloud/agent/agent.token',
+      "identity",
+      "agent_token_file",
+      "/var/lib/mnscloud/agent/agent.token",
     ),
     recordingsRoots: parseList(
       getConfigValue(
         parsed,
-        'recordings',
-        'roots',
-        '/recordings/freeswitch,/recordings/asterisk',
+        "recordings",
+        "roots",
+        "/recordings/freeswitch,/recordings/asterisk",
       ),
     ),
     recordingMounts: parseRecordingMounts(
       getConfigValue(
         parsed,
-        'recordings',
-        'mounts',
-        '/var/lib/freeswitch/recordings=/recordings/freeswitch,/var/spool/asterisk/monitor=/recordings/asterisk',
+        "recordings",
+        "mounts",
+        "/var/lib/freeswitch/recordings=/recordings/freeswitch,/var/spool/asterisk/monitor=/recordings/asterisk",
       ),
+    ),
+    deleteAfterUpload: getBoolean(
+      parsed,
+      "recordings",
+      "delete_after_upload",
+      true,
     ),
   };
 }
 
 function log(
-  level: 'info' | 'warn' | 'error',
+  level: "info" | "warn" | "error",
   message: string,
   extra?: unknown,
 ) {
-  const suffix = extra === undefined ? '' : ` ${JSON.stringify(extra)}`;
+  const suffix = extra === undefined ? "" : ` ${JSON.stringify(extra)}`;
   console[level](
     `[mnscloud-agent] ${new Date().toISOString()} ${message}${suffix}`,
   );
 }
 
 function apiUrl(config: AgentConfig, path: string) {
-  return `${config.apiBase.replace(/\/+$/, '')}/api/v1${path}`;
+  return `${config.apiBase.replace(/\/+$/, "")}/api/v1${path}`;
 }
 
 async function readText(path: string) {
@@ -147,15 +173,15 @@ async function optionalRead(path: string) {
   try {
     return await readText(path);
   } catch {
-    return '';
+    return "";
   }
 }
 
 function bearerHeaders(token: string, agentUUID: string) {
   return {
-    'content-type': 'application/json',
+    "content-type": "application/json",
     authorization: `Bearer ${token}`,
-    'x-mnscloud-agent-uuid': agentUUID,
+    "x-mnscloud-agent-uuid": agentUUID,
   };
 }
 
@@ -167,14 +193,16 @@ async function jsonRequest<T>(
   body: Record<string, unknown>,
 ) {
   const response = await fetch(apiUrl(config, path), {
-    method: 'POST',
+    method: "POST",
     headers: bearerHeaders(token, agentUUID),
     body: JSON.stringify(body),
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
     throw new Error(
-      typeof payload?.error === 'string' ? payload.error : `HTTP ${response.status}`,
+      typeof payload?.error === "string"
+        ? payload.error
+        : `HTTP ${response.status}`,
     );
   }
   return payload as T;
@@ -185,7 +213,7 @@ async function heartbeat(
   agentUUID: string,
   agentToken: string,
 ) {
-  await jsonRequest(config, '/agent/heartbeat', agentToken, agentUUID, {
+  await jsonRequest(config, "/agent/heartbeat", agentToken, agentUUID, {
     name: config.name,
     hostname: config.hostname,
     version: config.version,
@@ -196,13 +224,13 @@ async function heartbeat(
 }
 
 function normalizePath(path: string) {
-  return path.replaceAll('\\', '/').replace(/\/+/g, '/');
+  return path.replaceAll("\\", "/").replace(/\/+/g, "/");
 }
 
 function isAllowedLocalPath(path: string, roots: string[]) {
   const normalized = normalizePath(path);
   return roots.some((root) => {
-    const normalizedRoot = normalizePath(root).replace(/\/+$/, '');
+    const normalizedRoot = normalizePath(root).replace(/\/+$/, "");
     return normalized === normalizedRoot ||
       normalized.startsWith(`${normalizedRoot}/`);
   });
@@ -211,18 +239,22 @@ function isAllowedLocalPath(path: string, roots: string[]) {
 function resolveReadablePath(path: string, config: AgentConfig) {
   const normalized = normalizePath(path);
   for (const mount of config.recordingMounts) {
-    const hostRoot = normalizePath(mount.hostRoot).replace(/\/+$/, '');
+    const hostRoot = normalizePath(mount.hostRoot).replace(/\/+$/, "");
     const containerRoot = normalizePath(mount.containerRoot).replace(
       /\/+$/,
-      '',
+      "",
     );
     if (normalized === hostRoot || normalized.startsWith(`${hostRoot}/`)) {
-      const suffix = normalized.slice(hostRoot.length).replace(/^\/+/, '');
+      const suffix = normalized.slice(hostRoot.length).replace(/^\/+/, "");
       const candidate = suffix ? `${containerRoot}/${suffix}` : containerRoot;
-      return isAllowedLocalPath(candidate, config.recordingsRoots) ? candidate : null;
+      return isAllowedLocalPath(candidate, config.recordingsRoots)
+        ? candidate
+        : null;
     }
   }
-  return isAllowedLocalPath(normalized, config.recordingsRoots) ? normalized : null;
+  return isAllowedLocalPath(normalized, config.recordingsRoots)
+    ? normalized
+    : null;
 }
 
 async function failJob(
@@ -233,10 +265,18 @@ async function failJob(
   code: string,
   message: string,
 ) {
-  await jsonRequest(config, `/agent/jobs/${jobUUID}/fail`, agentToken, agentUUID, {
-    errorCode: code,
-    message,
-  }).catch((error) => log('warn', 'Failed to report job failure.', String(error)));
+  await jsonRequest(
+    config,
+    `/agent/jobs/${jobUUID}/fail`,
+    agentToken,
+    agentUUID,
+    {
+      errorCode: code,
+      message,
+    },
+  ).catch((error) =>
+    log("warn", "Failed to report job failure.", String(error))
+  );
 }
 
 async function uploadJob(
@@ -252,7 +292,7 @@ async function uploadJob(
       job.jobUUID,
       agentUUID,
       agentToken,
-      'PATH_NOT_ALLOWED',
+      "PATH_NOT_ALLOWED",
       job.localPath,
     );
     return;
@@ -263,8 +303,8 @@ async function uploadJob(
       job.jobUUID,
       agentUUID,
       agentToken,
-      'UPLOAD_URL_MISSING',
-      'No signed upload URL was provided.',
+      "UPLOAD_URL_MISSING",
+      "No signed upload URL was provided.",
     );
     return;
   }
@@ -278,14 +318,14 @@ async function uploadJob(
       job.jobUUID,
       agentUUID,
       agentToken,
-      'FILE_NOT_FOUND',
+      "FILE_NOT_FOUND",
       String(error),
     );
     return;
   }
 
   const response = await fetch(job.uploadUrl, {
-    method: job.uploadMethod || 'PUT',
+    method: job.uploadMethod || "PUT",
     headers: job.uploadHeaders ?? {},
     body: file,
   });
@@ -295,15 +335,37 @@ async function uploadJob(
       job.jobUUID,
       agentUUID,
       agentToken,
-      'UPLOAD_FAILED',
+      "UPLOAD_FAILED",
       `HTTP ${response.status}`,
     );
     return;
   }
 
-  await jsonRequest(config, `/agent/jobs/${job.jobUUID}/complete`, agentToken, agentUUID, {
-    size: file.byteLength,
-  });
+  await jsonRequest(
+    config,
+    `/agent/jobs/${job.jobUUID}/complete`,
+    agentToken,
+    agentUUID,
+    {
+      size: file.byteLength,
+    },
+  );
+
+  if (config.deleteAfterUpload) {
+    try {
+      await Deno.remove(readablePath);
+      log("info", "Local recording removed after successful upload.", {
+        jobUUID: job.jobUUID,
+        path: readablePath,
+      });
+    } catch (error) {
+      log("warn", "Uploaded recording could not be removed locally.", {
+        jobUUID: job.jobUUID,
+        path: readablePath,
+        error: String(error),
+      });
+    }
+  }
 }
 
 async function pollJobs(
@@ -313,7 +375,7 @@ async function pollJobs(
 ) {
   const result = await jsonRequest<{ data?: { jobs?: LeaseJob[] } }>(
     config,
-    '/agent/jobs/lease',
+    "/agent/jobs/lease",
     agentToken,
     agentUUID,
     { limit: 3 },
@@ -326,7 +388,7 @@ async function pollJobs(
 async function main() {
   const config = await loadConfig();
   const agentUUID = await readText(config.agentUUIDFile);
-  log('info', 'Agent started.', {
+  log("info", "Agent started.", {
     config: CONFIG_PATH,
     name: config.name,
     agentUUID,
@@ -337,11 +399,13 @@ async function main() {
     try {
       const agentToken = await optionalRead(config.agentTokenFile);
       if (!agentToken) {
-        log('warn', 'Agent is installed but not activated.', {
+        log("warn", "Agent is installed but not activated.", {
           agentUUID,
           tokenFile: config.agentTokenFile,
         });
-        await new Promise((resolve) => setTimeout(resolve, config.heartbeatIntervalMs));
+        await new Promise((resolve) =>
+          setTimeout(resolve, config.heartbeatIntervalMs)
+        );
         continue;
       }
 
@@ -352,7 +416,7 @@ async function main() {
       }
       await pollJobs(config, agentUUID, agentToken);
     } catch (error) {
-      log('warn', 'Agent loop failed.', String(error));
+      log("warn", "Agent loop failed.", String(error));
     }
     await new Promise((resolve) => setTimeout(resolve, config.pollIntervalMs));
   }
@@ -360,7 +424,7 @@ async function main() {
 
 if (import.meta.main) {
   main().catch((error) => {
-    log('error', 'Fatal agent error.', String(error));
+    log("error", "Fatal agent error.", String(error));
     Deno.exit(1);
   });
 }

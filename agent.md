@@ -45,6 +45,7 @@ agent_token_file = /var/lib/mnscloud/agent/agent.token
 [recordings]
 roots = /recordings/freeswitch,/recordings/asterisk
 mounts = /var/lib/freeswitch/recordings=/recordings/freeswitch,/var/spool/asterisk/monitor=/recordings/asterisk
+delete_after_upload = true
 ```
 
 Não usar `.env` para o agente. Seguir `agent.conf` para configuração local e `/var/lib/mnscloud/agent` para identidade/estado.
@@ -97,7 +98,8 @@ O container deve ser restrito:
 - `security_opt: no-new-privileges:true`
 - `/etc/mnscloud/agent` montado somente leitura
 - `/var/lib/mnscloud/agent` gravável para `agent.uuid` e `agent.token`
-- diretórios de gravação montados somente leitura
+- diretórios de gravação montados somente nos roots configurados e com escrita limitada
+  para remover a cópia local após upload confirmado
 
 ## Capacidade PABX
 
@@ -108,6 +110,8 @@ Quando o agente recebe a capacidade `pabx` e assignment para um `voip_pabx_serve
 - leitura de arquivo local validada por path allowlist;
 - upload por URL assinada;
 - confirmação ou falha do job.
+- remoção da gravação local quando `recordings.delete_after_upload = true` e o
+  upload já tiver sido confirmado pela API.
 
 Asterisk e FreeSWITCH gravam primeiro em filesystem local. O agente é responsável por mover a gravação para storage externo quando o PABX estiver configurado para storage.
 

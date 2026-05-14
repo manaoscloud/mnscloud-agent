@@ -34,5 +34,7 @@ Depois da instalação, copie o UUID exibido pelo instalador e cadastre o agente
 - A identidade local usa `agent.uuid` e, após ativação pela aplicação, `agent.token`.
 - O agente lê apenas caminhos permitidos em `recordings.roots`.
 - Uploads usam URL assinada de curta duração gerada pela API.
+- Quando configurado com `recordings.delete_after_upload = true`, a cópia local
+  é removida somente depois que o upload for aceito e confirmado na API.
 
 Veja [agent.md](./agent.md) para a documentação completa do módulo e [SKILL.md](./SKILL.md) para o contrato de evolução técnica.

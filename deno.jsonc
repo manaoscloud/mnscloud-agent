@@ -1,6 +1,6 @@
 {
   "tasks": {
-    "start": "deno run --allow-read=/etc/mnscloud/agent,/var/lib/mnscloud/agent,/recordings --allow-write=/var/lib/mnscloud/agent,/var/log/mnscloud/agent --allow-net main.ts",
+    "start": "deno run --allow-read=/etc/mnscloud/agent,/var/lib/mnscloud/agent,/recordings --allow-write=/var/lib/mnscloud/agent,/var/log/mnscloud/agent,/recordings --allow-net main.ts",
     "check": "deno check main.ts",
     "fmt": "deno fmt"
   },
