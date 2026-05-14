@@ -10,11 +10,18 @@ type AgentConfig = {
   recordingsRoots: string[];
   recordingMounts: Array<{ hostRoot: string; containerRoot: string }>;
   deleteAfterUpload: boolean;
+  mediaRoots: string[];
+  mediaMounts: Array<{ hostRoot: string; containerRoot: string }>;
 };
 
 type LeaseJob = {
   jobUUID: string;
+  jobType?: "recording_upload" | "media_file_sync" | string | null;
+  action?: "sync" | "delete" | string | null;
   localPath: string;
+  downloadUrl?: string | null;
+  downloadMethod?: string | null;
+  downloadHeaders?: Record<string, string> | null;
   uploadUrl?: string | null;
   uploadMethod?: string | null;
   uploadHeaders?: Record<string, string> | null;
@@ -147,6 +154,22 @@ async function loadConfig(): Promise<AgentConfig> {
       "delete_after_upload",
       true,
     ),
+    mediaRoots: parseList(
+      getConfigValue(
+        parsed,
+        "media_files",
+        "roots",
+        "/media-files",
+      ),
+    ),
+    mediaMounts: parseRecordingMounts(
+      getConfigValue(
+        parsed,
+        "media_files",
+        "mounts",
+        "/var/lib/mnscloud/pabx/media-files=/media-files",
+      ),
+    ),
   };
 }
 
@@ -220,6 +243,8 @@ async function heartbeat(
     uptimeSeconds: Math.floor(performance.now() / 1000),
     recordingsRoots: config.recordingsRoots,
     recordingMounts: config.recordingMounts,
+    mediaRoots: config.mediaRoots,
+    mediaMounts: config.mediaMounts,
   });
 }
 
@@ -257,6 +282,32 @@ function resolveReadablePath(path: string, config: AgentConfig) {
     : null;
 }
 
+function resolveMediaPath(path: string, config: AgentConfig) {
+  const normalized = normalizePath(path);
+  for (const mount of config.mediaMounts) {
+    const hostRoot = normalizePath(mount.hostRoot).replace(/\/+$/, "");
+    const containerRoot = normalizePath(mount.containerRoot).replace(
+      /\/+$/,
+      "",
+    );
+    if (normalized === hostRoot || normalized.startsWith(`${hostRoot}/`)) {
+      const suffix = normalized.slice(hostRoot.length).replace(/^\/+/, "");
+      const candidate = suffix ? `${containerRoot}/${suffix}` : containerRoot;
+      return isAllowedLocalPath(candidate, config.mediaRoots)
+        ? candidate
+        : null;
+    }
+  }
+  return isAllowedLocalPath(normalized, config.mediaRoots) ? normalized : null;
+}
+
+async function ensureParentDirectory(path: string) {
+  const normalized = normalizePath(path);
+  const separator = normalized.lastIndexOf("/");
+  if (separator <= 0) return;
+  await Deno.mkdir(normalized.slice(0, separator), { recursive: true });
+}
+
 async function failJob(
   config: AgentConfig,
   jobUUID: string,
@@ -264,6 +315,7 @@ async function failJob(
   agentToken: string,
   code: string,
   message: string,
+  jobType = "recording_upload",
 ) {
   await jsonRequest(
     config,
@@ -271,6 +323,7 @@ async function failJob(
     agentToken,
     agentUUID,
     {
+      jobType,
       errorCode: code,
       message,
     },
@@ -368,6 +421,116 @@ async function uploadJob(
   }
 }
 
+async function syncMediaFileJob(
+  job: LeaseJob,
+  config: AgentConfig,
+  agentUUID: string,
+  agentToken: string,
+) {
+  const localPath = resolveMediaPath(job.localPath, config);
+  if (!localPath) {
+    await failJob(
+      config,
+      job.jobUUID,
+      agentUUID,
+      agentToken,
+      "PATH_NOT_ALLOWED",
+      job.localPath,
+      "media_file_sync",
+    );
+    return;
+  }
+
+  if (job.action === "delete") {
+    try {
+      await Deno.remove(localPath);
+    } catch (error) {
+      if (!(error instanceof Deno.errors.NotFound)) {
+        await failJob(
+          config,
+          job.jobUUID,
+          agentUUID,
+          agentToken,
+          "DELETE_FAILED",
+          String(error),
+          "media_file_sync",
+        );
+        return;
+      }
+    }
+    await jsonRequest(
+      config,
+      `/agent/jobs/${job.jobUUID}/complete`,
+      agentToken,
+      agentUUID,
+      { jobType: "media_file_sync", action: "delete" },
+    );
+    log("info", "Offline media file removed.", {
+      jobUUID: job.jobUUID,
+      path: localPath,
+    });
+    return;
+  }
+
+  if (!job.downloadUrl) {
+    await failJob(
+      config,
+      job.jobUUID,
+      agentUUID,
+      agentToken,
+      "DOWNLOAD_URL_MISSING",
+      "No download URL was provided.",
+      "media_file_sync",
+    );
+    return;
+  }
+
+  const downloadUrl = job.downloadUrl.startsWith("/")
+    ? `${config.apiBase.replace(/\/+$/, "")}${job.downloadUrl}`
+    : job.downloadUrl;
+  const headers = { ...(job.downloadHeaders ?? {}) };
+  const sameApi = downloadUrl.startsWith(apiUrl(config, "/"));
+  if (sameApi) {
+    Object.assign(headers, bearerHeaders(agentToken, agentUUID));
+  }
+
+  const response = await fetch(downloadUrl, {
+    method: job.downloadMethod || "GET",
+    headers,
+  });
+  if (!response.ok) {
+    await failJob(
+      config,
+      job.jobUUID,
+      agentUUID,
+      agentToken,
+      "DOWNLOAD_FAILED",
+      `HTTP ${response.status}`,
+      "media_file_sync",
+    );
+    return;
+  }
+
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  await ensureParentDirectory(localPath);
+  const tmpPath = `${localPath}.tmp-${crypto.randomUUID()}`;
+  await Deno.writeFile(tmpPath, bytes);
+  await Deno.rename(tmpPath, localPath);
+
+  await jsonRequest(
+    config,
+    `/agent/jobs/${job.jobUUID}/complete`,
+    agentToken,
+    agentUUID,
+    { jobType: "media_file_sync", action: "sync", size: bytes.byteLength },
+  );
+  log("info", "Offline media file synced.", {
+    jobUUID: job.jobUUID,
+    path: localPath,
+    size: bytes.byteLength,
+  });
+}
+
 async function pollJobs(
   config: AgentConfig,
   agentUUID: string,
@@ -381,7 +544,11 @@ async function pollJobs(
     { limit: 3 },
   );
   for (const job of result.data?.jobs ?? []) {
-    await uploadJob(job, config, agentUUID, agentToken);
+    if (job.jobType === "media_file_sync") {
+      await syncMediaFileJob(job, config, agentUUID, agentToken);
+    } else {
+      await uploadJob(job, config, agentUUID, agentToken);
+    }
   }
 }
 

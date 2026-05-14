@@ -46,6 +46,10 @@ agent_token_file = /var/lib/mnscloud/agent/agent.token
 roots = /recordings/freeswitch,/recordings/asterisk
 mounts = /var/lib/freeswitch/recordings=/recordings/freeswitch,/var/spool/asterisk/monitor=/recordings/asterisk
 delete_after_upload = true
+
+[media_files]
+roots = /media-files
+mounts = /var/lib/mnscloud/pabx/media-files=/media-files
 ```
 
 Não usar `.env` para o agente. Seguir `agent.conf` para configuração local e `/var/lib/mnscloud/agent` para identidade/estado.
@@ -107,6 +111,7 @@ Quando o agente recebe a capacidade `pabx` e assignment para um `voip_pabx_serve
 
 - heartbeat do host;
 - lease de jobs de upload de gravações;
+- lease de jobs de sincronização offline de media files;
 - leitura de arquivo local validada por path allowlist;
 - upload por URL assinada;
 - confirmação ou falha do job.
@@ -114,6 +119,12 @@ Quando o agente recebe a capacidade `pabx` e assignment para um `voip_pabx_serve
   upload já tiver sido confirmado pela API.
 
 Asterisk e FreeSWITCH gravam primeiro em filesystem local. O agente é responsável por mover a gravação para storage externo quando o PABX estiver configurado para storage.
+
+Para media files offline, a API entrega um job `media_file_sync` com ação `sync`
+ou `delete`. Na ação `sync`, o agente baixa o arquivo por URL temporária
+assinada ou por endpoint autenticado do próprio job, grava atomicamente no
+diretório permitido e confirma. Na ação `delete`, remove a cópia local e confirma.
+Credenciais permanentes de storage continuam somente na API.
 
 ## Regras de Evolução
 

@@ -4,7 +4,7 @@ Agente local genérico da MNSCloud.
 
 O agente roda no servidor onde existe algum recurso operacional da plataforma e se comunica com a API central por HTTPS outbound. Ele não recebe credenciais permanentes de storage; quando precisa executar uma ação sensível, a API entrega um job com autorização temporária e escopo mínimo.
 
-A primeira capacidade operacional suportada pela API é `pabx`, usada para upload assíncrono de gravações geradas por Asterisk ou FreeSWITCH. Essa capacidade não é configurada no instalador; ela é atribuída depois pela aplicação.
+A primeira capacidade operacional suportada pela API é `pabx`, usada para upload assíncrono de gravações geradas por Asterisk ou FreeSWITCH e para sincronização offline de media files do PABX. Essa capacidade não é configurada no instalador; ela é atribuída depois pela aplicação.
 
 ## Contrato
 
@@ -36,5 +36,7 @@ Depois da instalação, copie o UUID exibido pelo instalador e cadastre o agente
 - Uploads usam URL assinada de curta duração gerada pela API.
 - Quando configurado com `recordings.delete_after_upload = true`, a cópia local
   é removida somente depois que o upload for aceito e confirmado na API.
+- Media files offline são sincronizados para `media_files.roots` usando jobs
+  temporários da API. O agente não recebe credenciais permanentes de storage.
 
 Veja [agent.md](./agent.md) para a documentação completa do módulo e [SKILL.md](./SKILL.md) para o contrato de evolução técnica.
