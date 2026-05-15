@@ -1563,6 +1563,21 @@ async function collectCyberSecurityStatus(config: AgentConfig) {
     "-lc",
     "systemctl is-active crowdsec-firewall-bouncer 2>/dev/null || true",
   ], 3000);
+  const firewallStatus = nft
+    ? (nftRules?.code === 0 ? "running" : "error")
+    : "missing";
+  const crowdsecStatus = crowdsec || cscli
+    ? (crowdsecActive.stdout === "active" ? "running" : "stopped")
+    : "missing";
+  const bouncerStatus = bouncer
+    ? (bouncerActive.stdout === "active" ? "running" : "stopped")
+    : "missing";
+  const protectionStatus = firewallStatus === "running" &&
+      crowdsecStatus === "running" && bouncerStatus === "running"
+    ? "protected"
+    : nft && (crowdsec || cscli) && bouncer
+    ? "partial"
+    : "unprotected";
 
   return {
     hostname,
@@ -1571,18 +1586,10 @@ async function collectCyberSecurityStatus(config: AgentConfig) {
     osVersion,
     kernelVersion,
     firewallBackend: "nftables",
-    firewallStatus: nft
-      ? (nftRules?.code === 0 ? "running" : "error")
-      : "missing",
-    crowdsecStatus: crowdsec || cscli
-      ? (crowdsecActive.stdout === "active" ? "running" : "stopped")
-      : "missing",
-    bouncerStatus: bouncer
-      ? (bouncerActive.stdout === "active" ? "running" : "stopped")
-      : "missing",
-    protectionStatus: nft && (crowdsec || cscli) && bouncer
-      ? "partial"
-      : "unprotected",
+    firewallStatus,
+    crowdsecStatus,
+    bouncerStatus,
+    protectionStatus,
     binaries: { nft, crowdsec, cscli, bouncer },
   };
 }
