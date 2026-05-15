@@ -992,6 +992,21 @@ async function ensureCrowdSecRepository(timeoutMs: number) {
   );
 }
 
+async function resolveCrowdSecFirewallBouncerPackage() {
+  const candidates = [
+    "crowdsec-firewall-bouncer-nftables",
+    "crowdsec-firewall-bouncer",
+  ];
+  for (const packageName of candidates) {
+    if (await debianPackageAvailable(packageName)) return packageName;
+  }
+  throw new Error(
+    `No CrowdSec firewall bouncer package is available. Checked: ${
+      candidates.join(", ")
+    }`,
+  );
+}
+
 async function configureCrowdSecFirewallBouncer(timeoutMs: number) {
   const configPath = "/etc/crowdsec/bouncers/crowdsec-firewall-bouncer.yaml";
   const configExists = await runLocalCommand("test", ["-f", configPath], 3000);
@@ -1181,11 +1196,25 @@ async function installCyberSecurityStack(
       "DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::ForceIPv4=true update -y",
     ),
   );
+  await progress(
+    "Select CrowdSec firewall bouncer package",
+    48,
+    "Detecting available CrowdSec firewall bouncer package.",
+  );
+  const bouncerPackage = await resolveCrowdSecFirewallBouncerPackage();
+  await progress(
+    "Select CrowdSec firewall bouncer package",
+    48,
+    `Using ${bouncerPackage}.`,
+    { package: bouncerPackage },
+  );
   steps.push(
     await runStep(
       55,
       "Install CrowdSec and nftables firewall bouncer",
-      "DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends crowdsec crowdsec-firewall-bouncer-nftables nftables",
+      `DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends crowdsec ${
+        shellQuote(bouncerPackage)
+      } nftables`,
     ),
   );
   steps.push(
@@ -1258,7 +1287,7 @@ async function installCyberSecurityStack(
     installedPackages: [
       "nftables",
       "crowdsec",
-      "crowdsec-firewall-bouncer-nftables",
+      bouncerPackage,
     ],
     installedCollections: collections,
     steps,
