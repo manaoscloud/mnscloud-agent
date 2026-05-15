@@ -985,6 +985,36 @@ async function writeCrowdSecProfileAcquisition(services: unknown[]) {
   return entries;
 }
 
+function crowdSecCollectionInstallCommand(collection: string) {
+  const quotedCollection = shellQuote(collection);
+  const regularInstall =
+    `cscli collections install ${quotedCollection} || cscli collections inspect ${quotedCollection} >/dev/null`;
+  if (collection !== "crowdsecurity/freeswitch") return regularInstall;
+
+  const baseUrl = "https://raw.githubusercontent.com/crowdsecurity/hub/master";
+  const manualInstall = [
+    "mkdir -p /etc/crowdsec/parsers/s01-parse/mnscloud /etc/crowdsec/scenarios/mnscloud",
+    `curl -fsSL ${
+      shellQuote(`${baseUrl}/parsers/s01-parse/crowdsecurity/freeswitch.yaml`)
+    } -o /etc/crowdsec/parsers/s01-parse/mnscloud/freeswitch.yaml`,
+    `curl -fsSL ${
+      shellQuote(`${baseUrl}/scenarios/crowdsecurity/freeswitch-bf.yaml`)
+    } -o /etc/crowdsec/scenarios/mnscloud/freeswitch-bf.yaml`,
+    `curl -fsSL ${
+      shellQuote(
+        `${baseUrl}/scenarios/crowdsecurity/freeswitch-user-enumeration.yaml`,
+      )
+    } -o /etc/crowdsec/scenarios/mnscloud/freeswitch-user-enumeration.yaml`,
+    `curl -fsSL ${
+      shellQuote(
+        `${baseUrl}/scenarios/crowdsecurity/freeswitch-acl-reject.yaml`,
+      )
+    } -o /etc/crowdsec/scenarios/mnscloud/freeswitch-acl-reject.yaml`,
+  ].join(" && ");
+
+  return `(${regularInstall}) || (cscli hub update --force >/dev/null 2>&1 || true; ${regularInstall}) || (${manualInstall})`;
+}
+
 function assertCapability(config: AgentConfig, capability: string) {
   if (!config.capabilities[capability]) {
     throw new Error(`Capability is disabled: ${capability}`);
@@ -1311,7 +1341,7 @@ async function installCyberSecurityStack(
       await runStep(
         90,
         `Install CrowdSec collection ${collection}`,
-        `cscli collections install ${shellQuote(collection)} || true`,
+        `${crowdSecCollectionInstallCommand(collection)} || true`,
         true,
       ),
     );
@@ -1469,9 +1499,7 @@ async function applyCyberSecurityProfile(
         await runStep(
           Math.min(percent, 85),
           `Install CrowdSec collection ${collection}`,
-          `cscli collections install ${
-            shellQuote(collection)
-          } || cscli collections inspect ${shellQuote(collection)} >/dev/null`,
+          crowdSecCollectionInstallCommand(collection),
         ),
       );
       installedCollections.push(collection);
