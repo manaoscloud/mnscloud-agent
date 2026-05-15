@@ -112,8 +112,8 @@ function getBoolean(
 ) {
   const value = getConfigValue(config, section, key, String(fallback)).trim()
     .toLowerCase();
-  if (['1', 'true', 'yes', 'y', 'sim', 'on'].includes(value)) return true;
-  if (['0', 'false', 'no', 'n', 'nao', 'não', 'off'].includes(value)) {
+  if (['1', 'true', 'yes', 'y', 'on'].includes(value)) return true;
+  if (['0', 'false', 'no', 'n', 'off'].includes(value)) {
     return false;
   }
   return fallback;

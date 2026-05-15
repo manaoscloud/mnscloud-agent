@@ -1,29 +1,29 @@
 # MNSCloud Agent
 
-## Visao Geral
+## Overview
 
-`mnscloud-agent` e o agente local generico da plataforma. Ele nao e um agente PABX, firewall ou Docker por nome; esses comportamentos entram como capabilities e jobs. Existe um unico runtime. O limite real vem das permissoes do sistema operacional, do `agent.conf`, das capabilities sincronizadas e dos assignments cadastrados na API.
+`mnscloud-agent` is the platform's standalone local Agent. It is not named after PABX, firewall, Docker, or any other specific function; those behaviors are represented as capabilities and jobs. There is a single runtime. Its effective limits come from operating system permissions, `agent.conf`, synchronized capabilities, and API assignments.
 
-## Arquitetura
+## Architecture
 
-1. O instalador cria `/etc/mnscloud/agent/agent.conf`.
-2. O instalador gera ou reaproveita `/var/lib/mnscloud/agent/agent.uuid`.
-3. O operador cadastra o UUID na aplicacao MNSCloud.
-4. A aplicacao gera o token e o operador grava `/var/lib/mnscloud/agent/agent.token`.
-5. O agente envia heartbeat em `POST /api/v1/agent/heartbeat`.
-6. O heartbeat sincroniza capabilities declaradas pelo host.
-7. A API entrega jobs em `POST /api/v1/agent/jobs/lease` conforme capability e assignment.
-8. O agente executa o job localmente e confirma sucesso ou falha.
+1. The installer creates `/etc/mnscloud/agent/agent.conf`.
+2. The installer creates or reuses `/var/lib/mnscloud/agent/agent.uuid`.
+3. The operator registers the UUID in MNSCloud.
+4. MNSCloud generates the token and the operator writes `/var/lib/mnscloud/agent/agent.token`.
+5. The Agent sends heartbeat requests to `POST /api/v1/agent/heartbeat`.
+6. Heartbeat synchronizes host-declared capabilities.
+7. The API returns jobs through `POST /api/v1/agent/jobs/lease` according to capabilities and assignments.
+8. The Agent runs the job locally and reports success or failure.
 
-## Configuracao
+## Configuration
 
-Arquivo canonico local:
+Canonical local file:
 
 ```text
 /etc/mnscloud/agent/agent.conf
 ```
 
-Formato:
+Format:
 
 ```ini
 [agent]
@@ -73,37 +73,41 @@ freeswitch_esl_password =
 timeout_ms = 15000
 ```
 
-Nao usar `.env` para o agente. Identidade e estado ficam em `/var/lib/mnscloud/agent`.
+Do not use `.env` for the Agent. Identity and state live under `/var/lib/mnscloud/agent`.
 
-## Banco de Dados
+## Database
 
-Modelo canonico:
+Canonical model:
 
-- `MonitoringAgent`: identidade, token, hostname, versao, status, heartbeat e tenant.
-- `MonitoringAgentCapability`: capabilities declaradas pelo agente, como `linux.status`, `security.crowdsec.manage`, `voip.asterisk.manage`.
-- `MonitoringAgentAssignment`: recursos atribuidos ao agente, como `voip_pabx_server` ou futuros recursos de cyber security.
+- `MonitoringAgent`: identity, token, hostname, version, status, heartbeat, and tenant.
+- `MonitoringAgentCapability`: capabilities declared by the Agent, such as `linux.status`, `security.crowdsec.manage`, and `voip.asterisk.manage`.
+- `MonitoringAgentAssignment`: resources assigned to the Agent, such as `voip_pabx_server` or future cyber security resources.
 
-Nao adicionar colunas de tipo, modo ou recurso diretamente em `MonitoringAgent`. A relacao deve ser sempre por capability e assignment.
+Do not add type, mode, privilege, or resource columns directly to `MonitoringAgent`. Relationships must stay capability-based and assignment-based.
 
 ## API
 
-Endpoints canonicos:
+Canonical endpoints:
 
 - `POST /api/v1/agent/heartbeat`
 - `POST /api/v1/agent/jobs/lease`
 - `POST /api/v1/agent/jobs/:uuid/complete`
 - `POST /api/v1/agent/jobs/:uuid/fail`
 
-Headers canonicos:
+Canonical headers:
 
 - `Authorization: Bearer <token>`
 - `X-MNSCloud-Agent-UUID: <uuid>`
 
-Nao criar endpoints especificos por tecnologia. PABX, cyber security e futuras funcoes devem trafegar pelo mesmo lease/complete/fail com `jobType` e payload tipado.
+Do not create technology-specific Agent endpoints. PABX, cyber security, and future functions must use the same lease/complete/fail flow with `jobType` and typed payloads.
+
+## Language Policy
+
+All public Agent repository content must be written in English: documentation, installer messages, code comments, examples, commit-facing text, and user-facing runtime output. Keep Portuguese only in external discussions, not inside this repository.
 
 ## Capabilities
 
-Capabilities sao nomes estaveis e granulares. Exemplos:
+Capabilities are stable, granular names. Examples:
 
 - `linux.status`
 - `linux.package.install`
@@ -117,23 +121,23 @@ Capabilities sao nomes estaveis e granulares. Exemplos:
 - `docker.manage`
 - `shell.exec`
 
-O agente declara capabilities no heartbeat. A API usa essas capabilities junto com assignments para decidir quais jobs podem ser entregues.
+The Agent declares capabilities in heartbeat requests. The API uses capabilities together with assignments to decide which jobs may be delivered.
 
 ## PABX
 
-Para PABX, o assignment continua sendo `voip_pabx_server`, mas a capability agora e do engine:
+For PABX, the assignment remains `voip_pabx_server`, but the capability is engine-specific:
 
 - Asterisk: `voip.asterisk.manage`
 - FreeSWITCH: `voip.freeswitch.manage`
 
-Com assignment e capability compativeis, o agente pode:
+With a compatible assignment and capability, the Agent can:
 
-- sincronizar upload de gravacoes;
-- remover gravacao local apos upload confirmado;
-- sincronizar media files offline;
-- executar comandos locais permitidos por job;
-- usar AMI/ESL local quando configurado ou CLI local como fallback.
+- sync recording uploads;
+- remove local recordings after confirmed upload;
+- sync offline media files;
+- run typed local commands allowed by jobs;
+- use local AMI/ESL when configured, or local CLI as fallback.
 
 ## Cyber Security
 
-Cyber security usa o mesmo runtime. Jobs como instalacao/configuracao de nftables e CrowdSec devem exigir capabilities explicitas (`security.nftables.manage`, `security.crowdsec.manage`) e assignments adequados.
+Cyber security uses the same runtime. Jobs such as nftables and CrowdSec installation/configuration must require explicit capabilities (`security.nftables.manage`, `security.crowdsec.manage`) and suitable assignments.

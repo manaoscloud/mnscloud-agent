@@ -1,37 +1,37 @@
 # mnscloud-agent
 
-Agente local unico e generico da MNSCloud.
+Standalone native MNSCloud Agent.
 
-O agente roda como servico nativo `systemd` no servidor Linux e se comunica com a API central por HTTPS outbound. Existe somente um runtime: ele executa o que estiver permitido pelas capabilities declaradas no `agent.conf`, pelos assignments da API e pelo tipo de job recebido.
+The Agent runs as a native `systemd` service on a Linux server and communicates with the MNSCloud API through outbound HTTPS. There is a single runtime: the Agent only runs work allowed by local capabilities declared in `agent.conf`, API assignments, and typed jobs.
 
-## Contrato
+## Contract
 
-- Produto/runtime: `mnscloud-agent`
-- Pasta do projeto: `agent/`
-- Instalador: `agent/scripts/install-agent.sh`
-- Servico: `mnscloud-agent.service`
-- Configuracao local: `/etc/mnscloud/agent/agent.conf`
-- Estado local: `/var/lib/mnscloud/agent`
-- Logs locais: `/var/log/mnscloud/agent`
+- Product/runtime: `mnscloud-agent`
+- Project directory: `agent/`
+- Installer: `agent/scripts/install-agent.sh`
+- Service: `mnscloud-agent.service`
+- Local configuration: `/etc/mnscloud/agent/agent.conf`
+- Local state: `/var/lib/mnscloud/agent`
+- Local logs: `/var/log/mnscloud/agent`
 
-## Instalacao
+## Installation
 
 ```bash
 agent/scripts/install-agent.sh
 ```
 
-O instalador prepara Deno, cria ou reaproveita `/var/lib/mnscloud/agent/agent.uuid`, grava `agent.conf`, instala o unit file e inicia `mnscloud-agent`.
+The installer prepares Deno, creates or reuses `/var/lib/mnscloud/agent/agent.uuid`, writes `agent.conf`, installs the systemd unit, and starts `mnscloud-agent`.
 
-Depois da instalacao, cadastre o UUID na aplicacao MNSCloud e gere o token. O token fica em `/var/lib/mnscloud/agent/agent.token`; apos gravar o token, reinicie o servico.
+After installation, register the UUID in MNSCloud and generate an Agent token. The token is stored in `/var/lib/mnscloud/agent/agent.token`; restart the service after writing it.
 
-## Seguranca
+## Security
 
-- Comunicacao sempre outbound para a API.
-- Um unico agente; limites sao por permissao do sistema, capabilities e jobs.
-- Capabilities sao declaradas pelo host e sincronizadas no heartbeat.
-- Credenciais permanentes de storage ficam somente na API.
-- Jobs usam autorizacao temporaria, como URLs assinadas.
-- Arquivos locais so podem ser lidos/escritos nos roots configurados.
-- Gravacoes locais podem ser removidas somente depois de upload confirmado.
+- Communication is always outbound to the API.
+- There is one Agent runtime; limits are enforced through OS permissions, capabilities, assignments, and jobs.
+- Capabilities are declared by the host and synchronized on heartbeat.
+- Permanent storage credentials stay only in the API.
+- Jobs use temporary authorization, such as signed URLs.
+- Local files can only be read or written inside configured roots.
+- Local recordings may be removed only after upload is confirmed.
 
-Veja [agent.md](./agent.md) para o desenho completo e [SKILL.md](./SKILL.md) para o contrato de evolucao tecnica.
+See [agent.md](./agent.md) for the full design and [SKILL.md](./SKILL.md) for the technical evolution contract.
