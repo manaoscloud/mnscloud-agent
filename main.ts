@@ -282,6 +282,39 @@ function bearerHeaders(token: string, agentUUID: string) {
   };
 }
 
+async function reportJobProgress(
+  config: AgentConfig,
+  jobUUID: string,
+  agentUUID: string,
+  agentToken: string,
+  step: string,
+  percent: number,
+  message: string,
+  extra: Record<string, unknown> = {},
+) {
+  try {
+    await jsonRequest(
+      config,
+      `/agent/jobs/${jobUUID}/progress`,
+      agentToken,
+      agentUUID,
+      {
+        jobType: "cyber_security",
+        step,
+        percent,
+        message,
+        ...extra,
+      },
+    );
+  } catch (error) {
+    log("warn", "Failed to report job progress.", {
+      jobUUID,
+      step,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
 async function jsonRequest<T>(
   config: AgentConfig,
   path: string,
@@ -904,7 +937,15 @@ async function runInstallStep(
   timeoutMs: number,
   allowFailure = false,
 ) {
-  const result = await runLocalCommand("sh", ["-lc", command], timeoutMs);
+  const timeoutSeconds = Math.max(1, Math.ceil(timeoutMs / 1000));
+  const wrappedCommand = `timeout -k 10s ${timeoutSeconds}s sh -lc ${
+    shellQuote(command)
+  }`;
+  const result = await runLocalCommand(
+    "sh",
+    ["-lc", wrappedCommand],
+    timeoutMs + 15_000,
+  );
   const step = {
     label,
     code: result.code,
@@ -1045,6 +1086,12 @@ async function configureCrowdSecFirewallBouncer(timeoutMs: number) {
 async function installCyberSecurityStack(
   config: AgentConfig,
   payload: Record<string, unknown> | null | undefined,
+  progress: (
+    step: string,
+    percent: number,
+    message: string,
+    extra?: Record<string, unknown>,
+  ) => Promise<void>,
 ) {
   assertCapability(config, "linux.package.install");
   assertCapability(config, "linux.service.manage");
@@ -1074,85 +1121,132 @@ async function installCyberSecurityStack(
     "crowdsecurity/sshd",
   ]);
   const steps = [];
+  const runStep = async (
+    percent: number,
+    label: string,
+    command: string,
+    allowFailure = false,
+  ) => {
+    await progress(label, percent, `${label} started.`);
+    const result = await runInstallStep(
+      label,
+      command,
+      timeoutMs,
+      allowFailure,
+    );
+    await progress(
+      label,
+      percent,
+      result.code === 0
+        ? `${label} completed.`
+        : `${label} completed with warnings.`,
+      {
+        status: result.code === 0 ? "running" : "warning",
+        output: result.stdout || result.stderr,
+      },
+    );
+    return result;
+  };
+
+  await progress(
+    "Validate operating system",
+    5,
+    "Validating Linux distribution.",
+  );
 
   steps.push(
-    await runInstallStep(
+    await runStep(
+      10,
       "Refresh APT metadata",
-      "apt-get update -y",
-      timeoutMs,
+      "DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::ForceIPv4=true update -y",
     ),
   );
   steps.push(
-    await runInstallStep(
+    await runStep(
+      20,
       "Install base packages",
       "DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates curl gnupg jq nftables",
-      timeoutMs,
     ),
+  );
+  await progress(
+    "Prepare CrowdSec repository",
+    32,
+    "Checking CrowdSec package repository.",
   );
   steps.push(await ensureCrowdSecRepository(timeoutMs));
   steps.push(
-    await runInstallStep(
+    await runStep(
+      42,
       "Refresh CrowdSec APT metadata",
-      "apt-get update -y",
-      timeoutMs,
+      "DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::ForceIPv4=true update -y",
     ),
   );
   steps.push(
-    await runInstallStep(
+    await runStep(
+      55,
       "Install CrowdSec and nftables firewall bouncer",
       "DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends crowdsec crowdsec-firewall-bouncer-nftables nftables",
-      timeoutMs,
     ),
   );
   steps.push(
-    await runInstallStep(
+    await runStep(
+      68,
       "Enable nftables",
       "systemctl enable --now nftables",
-      timeoutMs,
       true,
     ),
   );
   steps.push(
-    await runInstallStep(
+    await runStep(
+      74,
       "Enable CrowdSec",
       "systemctl enable --now crowdsec",
-      timeoutMs,
     ),
+  );
+  await progress(
+    "Configure CrowdSec firewall bouncer",
+    80,
+    "Configuring local bouncer credentials.",
   );
   steps.push(await configureCrowdSecFirewallBouncer(timeoutMs));
   steps.push(
-    await runInstallStep(
+    await runStep(
+      86,
       "Update CrowdSec Hub",
       "cscli hub update",
-      timeoutMs,
       true,
     ),
   );
   for (const collection of collections) {
     steps.push(
-      await runInstallStep(
+      await runStep(
+        90,
         `Install CrowdSec collection ${collection}`,
         `cscli collections install ${shellQuote(collection)} || true`,
-        timeoutMs,
         true,
       ),
     );
   }
   steps.push(
-    await runInstallStep(
+    await runStep(
+      95,
       "Restart CrowdSec",
       "systemctl restart crowdsec",
-      timeoutMs,
     ),
   );
   steps.push(
-    await runInstallStep(
+    await runStep(
+      98,
       "Restart CrowdSec firewall bouncer",
       "systemctl restart crowdsec-firewall-bouncer",
-      timeoutMs,
     ),
   );
 
+  await progress(
+    "Collect protection status",
+    99,
+    "Collecting final security service status.",
+  );
   const status = await collectCyberSecurityStatus(config);
   return {
     ...status,
@@ -1256,7 +1350,21 @@ async function executeCyberSecurityJob(
     }
 
     if (leasedCommand === "cyber.security.install") {
-      const result = await installCyberSecurityStack(config, job.payload);
+      const result = await installCyberSecurityStack(
+        config,
+        job.payload,
+        (step, percent, message, extra = {}) =>
+          reportJobProgress(
+            config,
+            job.jobUUID,
+            agentUUID,
+            agentToken,
+            step,
+            percent,
+            message,
+            extra,
+          ),
+      );
       await jsonRequest(
         config,
         `/agent/jobs/${job.jobUUID}/complete`,
@@ -1286,6 +1394,21 @@ async function executeCyberSecurityJob(
       "cyber_security",
     );
   } catch (error) {
+    if (leasedCommand === "cyber.security.install") {
+      await reportJobProgress(
+        config,
+        job.jobUUID,
+        agentUUID,
+        agentToken,
+        "failed",
+        100,
+        error instanceof Error ? error.message : String(error),
+        {
+          status: "failed",
+          error: error instanceof Error ? error.message : String(error),
+        },
+      );
+    }
     await failJob(
       config,
       job.jobUUID,

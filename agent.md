@@ -103,6 +103,7 @@ Canonical endpoints:
 
 - `POST /api/v1/agent/heartbeat`
 - `POST /api/v1/agent/jobs/lease`
+- `POST /api/v1/agent/jobs/:uuid/progress`
 - `POST /api/v1/agent/jobs/:uuid/complete`
 - `POST /api/v1/agent/jobs/:uuid/fail`
 
@@ -112,8 +113,8 @@ Canonical headers:
 - `X-MNSCloud-Agent-UUID: <uuid>`
 
 Do not create technology-specific Agent endpoints. PABX, cyber security, and
-future functions must use the same lease/complete/fail flow with `jobType` and
-typed payloads.
+future functions must use the same lease/progress/complete/fail flow with
+`jobType` and typed payloads.
 
 ## Language Policy
 
@@ -177,3 +178,7 @@ Implemented cyber security jobs:
 The install job is intentionally conservative. It does not flush existing
 firewall rules, does not open inbound ports, and configures the CrowdSec
 firewall bouncer for nftables using a local bouncer API key.
+
+Long-running cyber security jobs report progress before and after each major
+step so the platform can display the current stage, percentage, and failure
+details without requiring direct database access.
