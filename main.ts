@@ -646,12 +646,20 @@ async function runLocalCommand(
   args: string[],
   timeoutMs: number,
 ) {
-  const process = new Deno.Command(command, {
-    args,
+  const script = `exec setsid ${[command, ...args].map(shellQuote).join(" ")}`;
+  const process = new Deno.Command("sh", {
+    args: ["-lc", script],
     stdout: "piped",
     stderr: "piped",
   }).spawn();
+  let timedOut = false;
   const timeout = setTimeout(() => {
+    timedOut = true;
+    try {
+      Deno.kill(-process.pid, "SIGKILL");
+    } catch {
+      // The command may not be a process-group leader anymore.
+    }
     try {
       process.kill("SIGKILL");
     } catch {
@@ -660,10 +668,14 @@ async function runLocalCommand(
   }, timeoutMs);
   try {
     const output = await process.output();
+    const stderr = new TextDecoder().decode(output.stderr).trim();
     return {
       code: output.code,
       stdout: new TextDecoder().decode(output.stdout).trim(),
-      stderr: new TextDecoder().decode(output.stderr).trim(),
+      stderr: timedOut
+        ? [stderr, `Command timed out after ${timeoutMs}ms.`].filter(Boolean)
+          .join("\n")
+        : stderr,
     };
   } finally {
     clearTimeout(timeout);
@@ -1077,12 +1089,20 @@ async function runInstallStep(
   allowFailure = false,
 ) {
   const timeoutSeconds = Math.max(1, Math.ceil(timeoutMs / 1000));
-  const wrappedCommand = `timeout -k 10s ${timeoutSeconds}s sh -lc ${
-    shellQuote(command)
-  }`;
   const result = await runLocalCommand(
-    "sh",
-    ["-lc", wrappedCommand],
+    "flock",
+    [
+      "-w",
+      "10",
+      "/var/run/mnscloud-agent-cyber-security.lock",
+      "timeout",
+      "-k",
+      "10s",
+      `${timeoutSeconds}s`,
+      "sh",
+      "-lc",
+      command,
+    ],
     timeoutMs + 15_000,
   );
   const diagnostic = result.code !== 0 && label.includes("CrowdSec")
