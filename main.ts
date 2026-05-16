@@ -999,11 +999,20 @@ async function writeCrowdSecProfileAcquisition(services: unknown[]) {
 
 function crowdSecCollectionInstallCommand(collection: string) {
   const quotedCollection = shellQuote(collection);
-  const regularInstall =
-    `cscli collections inspect ${quotedCollection} >/dev/null 2>&1 || cscli collections install ${quotedCollection}`;
+  const collectionName = collection.split("/").pop() || collection;
+  const collectionFile = `/etc/crowdsec/collections/${collectionName}.yaml`;
+  const regularInstall = `test -f ${shellQuote(collectionFile)} && echo ${
+    shellQuote(`CrowdSec collection ${collection} already installed.`)
+  } || cscli collections install ${quotedCollection}`;
   if (collection !== "crowdsecurity/freeswitch") return regularInstall;
 
   const baseUrl = "https://raw.githubusercontent.com/crowdsecurity/hub/master";
+  const manualFiles = [
+    "/etc/crowdsec/parsers/s01-parse/mnscloud/freeswitch.yaml",
+    "/etc/crowdsec/scenarios/mnscloud/freeswitch-bf.yaml",
+    "/etc/crowdsec/scenarios/mnscloud/freeswitch-user-enumeration.yaml",
+    "/etc/crowdsec/scenarios/mnscloud/freeswitch-acl-reject.yaml",
+  ];
   const manualInstall = [
     "mkdir -p /etc/crowdsec/parsers/s01-parse/mnscloud /etc/crowdsec/scenarios/mnscloud",
     `curl -fsSL ${
@@ -1024,7 +1033,10 @@ function crowdSecCollectionInstallCommand(collection: string) {
     } -o /etc/crowdsec/scenarios/mnscloud/freeswitch-acl-reject.yaml`,
   ].join(" && ");
 
-  return `(${regularInstall}) || (cscli hub update --force >/dev/null 2>&1 || true; ${regularInstall}) || (${manualInstall})`;
+  const manualAlreadyInstalled = manualFiles
+    .map((path) => `test -f ${shellQuote(path)}`)
+    .join(" && ");
+  return `(${manualAlreadyInstalled} && echo 'MNSCloud FreeSWITCH CrowdSec rules already installed.') || (${regularInstall}) || (cscli hub update --force >/dev/null 2>&1 || true; ${regularInstall}) || (${manualInstall})`;
 }
 
 function packagesInstalledCommand(packages: string[]) {
