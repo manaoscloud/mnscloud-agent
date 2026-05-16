@@ -94,6 +94,30 @@ detect_os() {
   esac
 }
 
+ensure_local_hostname() {
+  local short_hostname fqdn
+  short_hostname="$(hostname -s 2>/dev/null || hostname 2>/dev/null || true)"
+  fqdn="$(hostname -f 2>/dev/null || true)"
+  [[ -n "$short_hostname" ]] || return 0
+
+  if grep -Eq "^[[:space:]]*[0-9a-fA-F:.]+[[:space:]].*(^|[[:space:]])${short_hostname}([[:space:]]|$)" /etc/hosts 2>/dev/null; then
+    ok "Local hostname already present in /etc/hosts: ${short_hostname}"
+    return 0
+  fi
+
+  if $DRY_RUN; then
+    log DRY-RUN "append local hostname to /etc/hosts: ${short_hostname}"
+    return 0
+  fi
+
+  info "Adding local hostname to /etc/hosts: ${short_hostname}"
+  if [[ -n "$fqdn" && "$fqdn" != "$short_hostname" ]]; then
+    printf "127.0.1.1\t%s %s\n" "$fqdn" "$short_hostname" >> /etc/hosts
+  else
+    printf "127.0.1.1\t%s\n" "$short_hostname" >> /etc/hosts
+  fi
+}
+
 install_packages() {
   local os="$1"
   case "$os" in
@@ -251,6 +275,7 @@ main() {
   local service_file="/etc/systemd/system/mnscloud-agent.service"
 
   require_root
+  ensure_local_hostname
   ensure_deno
 
   hostname="$(hostname -f 2>/dev/null || hostname)"
