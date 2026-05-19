@@ -4,18 +4,18 @@ Use this contract when changing the `agent/` module.
 
 ## Source Of Truth
 
-- Runtime: `agent/main.ts`
-- Installer: `agent/scripts/install-agent.sh`
-- Update command: `agent/scripts/update-agent.sh`
+- Runtime: `main.ts`
+- Installer: `scripts/install-agent.sh`
+- Update command: `scripts/update-agent.sh`
 - Generated systemd unit: `mnscloud-agent.service`
-- Documentation: `agent/agent.md`
-- API runtime: `api/routes/agentRoute.ts`, `api/controllers/agentController.ts`, `api/services/agentRuntimeService.ts`
+- Documentation: `agent.md`
+- API runtime: `mnscloud-api/routes/agentRoute.ts`, `mnscloud-api/controllers/agentController.ts`, `mnscloud-api/services/agentRuntimeService.ts`
 - Monitoring model: `MonitoringAgent`, `MonitoringAgentCapability`, `MonitoringAgentAssignment`
 
 ## Required Naming
 
 - Product: `mnscloud-agent`
-- Directory: `agent`
+- Directory: `mnscloud-agent`
 - Service: `mnscloud-agent`
 - Local configuration: `agent.conf`
 
@@ -23,7 +23,7 @@ Never create technology-specific names, routes, modes, or installers. This modul
 
 ## Language Policy
 
-All files inside `agent/` must use English only for documentation, installer messages, code comments, examples, commit-facing text, and runtime output. Do not add Portuguese text to this repository.
+All files inside `mnscloud-agent/` must use English only for documentation, installer messages, code comments, examples, commit-facing text, and runtime output. Do not add Portuguese text to this repository.
 
 ## Model
 
@@ -52,9 +52,9 @@ Do not add direct resource, mode, or privilege coupling to the Agent's primary i
 
 - Update documentation when changing the Agent contract.
 - Run a residue search for obsolete names.
-- Check that `agent/` contains no Portuguese text.
-- Validate `agent/scripts/install-agent.sh` with `bash -n`.
-- Validate `agent/main.ts` with `deno check`.
+- Check that `mnscloud-agent/` contains no Portuguese text.
+- Validate `scripts/install-agent.sh` with `bash -n`.
+- Validate `main.ts` with `deno check`.
 - Validate related API services with `deno check` when changing the API contract.
 - Validate frontend with `npm --prefix mnscloud-app run build` when changing UI.
 
