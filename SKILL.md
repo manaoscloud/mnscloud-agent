@@ -56,7 +56,7 @@ Do not add direct resource, mode, or privilege coupling to the Agent's primary i
 - Validate `agent/scripts/install-agent.sh` with `bash -n`.
 - Validate `agent/main.ts` with `deno check`.
 - Validate related API services with `deno check` when changing the API contract.
-- Validate frontend with `npm --prefix app run build` when changing UI.
+- Validate frontend with `npm --prefix mnscloud-app run build` when changing UI.
 
 ## Contribution Governance
 
