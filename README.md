@@ -17,10 +17,26 @@ assignments, and typed jobs.
 - Local state: `/var/lib/mnscloud/agent`
 - Local logs: `/var/log/mnscloud/agent`
 
+## Repository Access
+
+Install GitHub CLI if needed, authenticate, and clone the private repository. If
+`gh` is not installed yet, follow the official installation guide:
+[cli/cli installation](https://github.com/cli/cli#installation).
+
+```bash
+gh auth login
+gh auth status
+
+sudo install -d -m 0755 /opt/mnscloud
+cd /opt/mnscloud
+gh repo clone manaoscloud/mnscloud-agent
+cd /opt/mnscloud/mnscloud-agent
+```
+
 ## Installation
 
 ```bash
-bash scripts/install-agent.sh
+sudo bash scripts/install-agent.sh
 ```
 
 The installer prepares Deno, creates or reuses
@@ -37,12 +53,11 @@ view as the primary troubleshooting surface instead of querying the database.
 
 ## Updating
 
-Use the explicit update command when this public repository has a newer Agent
-version:
+Use the explicit update command when this repository has a newer Agent version:
 
 ```bash
-cd ~/mnscloud-agent
-bash scripts/update-agent.sh
+cd /opt/mnscloud/mnscloud-agent
+sudo bash scripts/update-agent.sh
 ```
 
 The update command syncs the repository, reinstalls service files, preserves the
@@ -52,11 +67,11 @@ existing Agent UUID/token, reuses the current API base URL and Agent name from
 Manual equivalent:
 
 ```bash
-cd ~/mnscloud-agent
+cd /opt/mnscloud/mnscloud-agent
 gh repo sync
-bash scripts/install-agent.sh
-systemctl restart mnscloud-agent.service
-systemctl status mnscloud-agent.service --no-pager
+sudo bash scripts/install-agent.sh
+sudo systemctl restart mnscloud-agent.service
+sudo systemctl status mnscloud-agent.service --no-pager
 ```
 
 The installer does not automatically pull code on every run. Updates are
