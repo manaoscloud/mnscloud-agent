@@ -18,6 +18,12 @@ Use this contract when changing the `agent/` module.
 - Monitoring model: `MonitoringAgent`, `MonitoringAgentCapability`,
   `MonitoringAgentAssignment`
 
+## Supported Systems
+
+- Linux: Debian 12/13, RHEL 9/10, Rocky Linux 9/10, AlmaLinux 9/10.
+- Windows: Windows Server 2019/2022/2025 and Windows 10/11 Pro/Enterprise.
+- Other systems are experimental and must be documented as best-effort only.
+
 ## Required Naming
 
 - Product: `mnscloud-agent`

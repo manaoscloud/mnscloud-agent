@@ -1904,7 +1904,7 @@ async function installCyberSecurityStack(
     throw new Error(
       `Unsupported Linux distribution for automatic install: ${
         osID || "unknown"
-      }`,
+      }. Supported automatic Linux cyber security install currently requires Debian-like package management. Other supported Linux distributions may run the Agent but CrowdSec installation is experimental until RPM support is implemented.`,
     );
   }
 

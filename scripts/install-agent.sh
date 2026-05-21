@@ -87,10 +87,14 @@ detect_os() {
   [[ -r /etc/os-release ]] || fail "Could not read /etc/os-release"
   # shellcheck disable=SC1091
   . /etc/os-release
-  case "${ID:-}:${VERSION_ID:-}" in
+  local major="${VERSION_ID%%.*}"
+  case "${ID:-}:${major}" in
     debian:12|debian:13) echo "debian" ;;
-    rocky:8*|rocky:9*) echo "rocky" ;;
-    *) fail "Unsupported operating system. Supported: Debian 12/13 and Rocky 8/9." ;;
+    rhel:9|rhel:10|rocky:9|rocky:10|almalinux:9|almalinux:10) echo "rhel" ;;
+    *)
+      warn "Unsupported or experimental Linux distribution: ${PRETTY_NAME:-${ID:-unknown} ${VERSION_ID:-}}. Supported: Debian 12/13, RHEL 9/10, Rocky Linux 9/10, AlmaLinux 9/10."
+      echo "experimental"
+      ;;
   esac
 }
 
@@ -125,9 +129,20 @@ install_packages() {
       run "apt-get update -y"
       run "apt-get install -y --no-install-recommends ca-certificates curl unzip"
       ;;
-    rocky)
+    rhel)
       run "dnf -y makecache"
       run "dnf -y install ca-certificates curl unzip"
+      ;;
+    experimental)
+      if command -v apt-get >/dev/null 2>&1; then
+        run "apt-get update -y"
+        run "apt-get install -y --no-install-recommends ca-certificates curl unzip"
+      elif command -v dnf >/dev/null 2>&1; then
+        run "dnf -y makecache"
+        run "dnf -y install ca-certificates curl unzip"
+      else
+        fail "Unsupported experimental Linux distribution: apt-get or dnf is required."
+      fi
       ;;
   esac
 }

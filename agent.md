@@ -137,6 +137,24 @@ Do not add type, mode, privilege, or resource columns directly to
 `MonitoringAgent`. Relationships must stay capability-based and
 assignment-based.
 
+## Supported Systems
+
+Supported Linux systems:
+
+- Debian 12/13
+- RHEL 9/10
+- Rocky Linux 9/10
+- AlmaLinux 9/10
+
+Supported Windows systems:
+
+- Windows Server 2019/2022/2025
+- Windows 10/11 Pro/Enterprise
+
+Other Linux distributions or Windows editions are experimental. They may work
+when the required runtime tools are available, but they are not guaranteed to be
+100% compatible.
+
 ## API
 
 Canonical endpoints:
@@ -222,7 +240,7 @@ Implemented cyber security jobs:
 - `cyber.security.status`: reports nftables, CrowdSec, firewall bouncer, OS,
   kernel, and server network status.
 - `cyber.security.install`: installs and enables `nftables`, `crowdsec`, and
-  `crowdsec-firewall-bouncer-nftables` on supported Debian-like systems. It also
+  `crowdsec-firewall-bouncer-nftables` on Debian-like systems. It also
   installs the default CrowdSec collections `crowdsecurity/linux` and
   `crowdsecurity/sshd`, unless a job payload supplies a different `collections`
   array.

@@ -20,6 +20,24 @@ capabilities declared in `agent.conf`, API assignments, and typed jobs.
 - Linux state: `/var/lib/mnscloud/agent`
 - Windows state: `C:\ProgramData\MNSCloud\Agent`
 
+## Supported Systems
+
+Supported Linux systems:
+
+- Debian 12/13
+- RHEL 9/10
+- Rocky Linux 9/10
+- AlmaLinux 9/10
+
+Supported Windows systems:
+
+- Windows Server 2019/2022/2025
+- Windows 10/11 Pro/Enterprise
+
+Other Linux distributions or Windows editions are experimental. They may work
+when the required runtime tools are available, but they are not guaranteed to be
+100% compatible.
+
 ## Repository Access
 
 Install GitHub CLI if needed:
