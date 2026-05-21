@@ -80,11 +80,14 @@ identity.
 - Keep Linux and Windows capabilities separate. Linux jobs must not assume
   Windows paths/services, and Windows jobs must not assume systemd, nftables,
   `/etc`, `/var`, or POSIX shells.
-- Windows Cyber Security must use CrowdSec for Windows plus the CrowdSec
-  Windows Firewall remediation component.
+- Linux Cyber Security must install CrowdSec through the official CrowdSec
+  package repository on Debian/RHEL package families, using `apt` for Debian
+  12/13 and `dnf`/RPM for RHEL, Rocky Linux, and AlmaLinux 9/10.
+- Windows Cyber Security must use CrowdSec for Windows plus the CrowdSec Windows
+  Firewall remediation component.
 - Validate `scripts/install-agent.sh` with `bash -n`.
-- Validate PowerShell installers with PowerShell parser checks when PowerShell is
-  available.
+- Validate PowerShell installers with PowerShell parser checks when PowerShell
+  is available.
 - Validate `main.ts` with `deno check`.
 - Validate related API services with `deno check` when changing the API
   contract.

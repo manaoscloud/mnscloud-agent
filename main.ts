@@ -1605,7 +1605,35 @@ function crowdSecCollectionInstallCommand(collection: string) {
   return `cscli collections install ${quotedCollection} && ${verifyCollection}`;
 }
 
-function packagesInstalledCommand(packages: string[]) {
+type LinuxPackageFamily = "debian" | "rhel" | "unsupported";
+
+async function detectLinuxPackageFamily() {
+  const osID = await commandText(
+    '. /etc/os-release 2>/dev/null && printf "%s" "${ID:-}"',
+  );
+  const osLike = await commandText(
+    '. /etc/os-release 2>/dev/null && printf "%s" "${ID_LIKE:-}"',
+  );
+  const combined = `${osID} ${osLike}`.toLowerCase();
+  const family: LinuxPackageFamily = /\b(debian|ubuntu)\b/.test(combined)
+    ? "debian"
+    : /\b(rhel|rocky|almalinux|centos|fedora)\b/.test(combined)
+    ? "rhel"
+    : "unsupported";
+  return { family, osID, osLike };
+}
+
+function packagesInstalledForFamilyCommand(
+  packages: string[],
+  family: LinuxPackageFamily,
+) {
+  if (family === "rhel") {
+    const checks = packages
+      .map((pkg) => `rpm -q ${shellQuote(pkg)} >/dev/null 2>&1`)
+      .join(" && ");
+    return `! (${checks})`;
+  }
+
   const checks = packages
     .map((pkg) =>
       `dpkg-query -W -f='\\${"${Status}"}' ${
@@ -1623,6 +1651,22 @@ async function commandOk(command: string, timeoutMs = 5000) {
 
 async function stepResult(label: string, stdout: string) {
   return { label, code: 0, stdout, stderr: "" };
+}
+
+function metadataRefreshCommand(family: LinuxPackageFamily) {
+  if (family === "rhel") return "dnf -y makecache";
+  return "DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::ForceIPv4=true update -y";
+}
+
+function packageInstallCommand(
+  packages: string[],
+  family: LinuxPackageFamily,
+) {
+  const quotedPackages = packages.map(shellQuote).join(" ");
+  if (family === "rhel") {
+    return `dnf install -y ${quotedPackages}`;
+  }
+  return `DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ${quotedPackages}`;
 }
 
 function parseJsonArray(text: string) {
@@ -1720,7 +1764,19 @@ async function runInstallStep(
   return step;
 }
 
-async function debianPackageAvailable(packageName: string) {
+async function packageAvailable(
+  packageName: string,
+  family: LinuxPackageFamily,
+) {
+  if (family === "rhel") {
+    const result = await runLocalCommand(
+      "sh",
+      ["-lc", `dnf -q list ${shellQuote(packageName)} >/dev/null 2>&1`],
+      10_000,
+    );
+    return result.code === 0;
+  }
+
   const result = await runLocalCommand(
     "sh",
     [
@@ -1734,8 +1790,11 @@ async function debianPackageAvailable(packageName: string) {
   return result.code === 0 && result.stdout && result.stdout !== "(none)";
 }
 
-async function ensureCrowdSecRepository(timeoutMs: number) {
-  if (await debianPackageAvailable("crowdsec")) {
+async function ensureCrowdSecRepository(
+  family: LinuxPackageFamily,
+  timeoutMs: number,
+) {
+  if (await packageAvailable("crowdsec", family)) {
     return {
       label: "CrowdSec repository already available",
       code: 0,
@@ -1745,7 +1804,7 @@ async function ensureCrowdSecRepository(timeoutMs: number) {
   }
   return await runInstallStep(
     "Add CrowdSec package repository",
-    "curl -fsSL https://packagecloud.io/install/repositories/crowdsec/crowdsec/script.deb.sh | bash",
+    "curl -fsSL https://install.crowdsec.net | sh",
     timeoutMs,
   );
 }
@@ -1769,13 +1828,14 @@ async function ensureCrowdSecHubReady(timeoutMs: number) {
   );
 }
 
-async function resolveCrowdSecFirewallBouncerPackage() {
-  const candidates = [
-    "crowdsec-firewall-bouncer-nftables",
-    "crowdsec-firewall-bouncer",
-  ];
+async function resolveCrowdSecFirewallBouncerPackage(
+  family: LinuxPackageFamily,
+) {
+  const candidates = family === "rhel"
+    ? ["crowdsec-firewall-bouncer-iptables", "crowdsec-firewall-bouncer"]
+    : ["crowdsec-firewall-bouncer-nftables", "crowdsec-firewall-bouncer"];
   for (const packageName of candidates) {
-    if (await debianPackageAvailable(packageName)) return packageName;
+    if (await packageAvailable(packageName, family)) return packageName;
   }
   throw new Error(
     `No CrowdSec firewall bouncer package is available. Checked: ${
@@ -1784,7 +1844,10 @@ async function resolveCrowdSecFirewallBouncerPackage() {
   );
 }
 
-async function configureCrowdSecFirewallBouncer(timeoutMs: number) {
+async function configureCrowdSecFirewallBouncer(
+  timeoutMs: number,
+  mode: "iptables" | "nftables",
+) {
   const configPath = "/etc/crowdsec/bouncers/crowdsec-firewall-bouncer.yaml";
   const configExists = await runLocalCommand("test", ["-f", configPath], 3000);
   if (configExists.code !== 0) {
@@ -1863,9 +1926,9 @@ async function configureCrowdSecFirewallBouncer(timeoutMs: number) {
     apiKeyScript,
     `if grep -q '^mode:' ${
       shellQuote(configPath)
-    }; then sed -i 's#^mode:.*#mode: nftables#' ${
+    }; then sed -i 's#^mode:.*#mode: ${mode}#' ${
       shellQuote(configPath)
-    }; else printf '\\nmode: nftables\\n' >> ${shellQuote(configPath)}; fi`,
+    }; else printf '\\nmode: ${mode}\\n' >> ${shellQuote(configPath)}; fi`,
   ].join(" && ");
 
   return await runInstallStep(
@@ -1894,19 +1957,15 @@ async function installCyberSecurityStack(
   assertCapability(config, "security.nftables.manage");
   assertCapability(config, "security.crowdsec.manage");
 
-  const osID = await commandText(
-    '. /etc/os-release 2>/dev/null && printf "%s" "${ID:-}"',
-  );
-  const osLike = await commandText(
-    '. /etc/os-release 2>/dev/null && printf "%s" "${ID_LIKE:-}"',
-  );
-  if (!`${osID} ${osLike}`.match(/\b(debian|ubuntu)\b/i)) {
+  const packageInfo = await detectLinuxPackageFamily();
+  if (packageInfo.family === "unsupported") {
     throw new Error(
       `Unsupported Linux distribution for automatic install: ${
-        osID || "unknown"
-      }. Supported automatic Linux cyber security install currently requires Debian-like package management. Other supported Linux distributions may run the Agent but CrowdSec installation is experimental until RPM support is implemented.`,
+        packageInfo.osID || "unknown"
+      }. Supported automatic Linux cyber security install requires Debian 12/13, RHEL 9/10, Rocky Linux 9/10, or AlmaLinux 9/10.`,
     );
   }
+  const packageFamily = packageInfo.family;
 
   const timeoutMs = Math.max(
     120_000,
@@ -1916,9 +1975,9 @@ async function installCyberSecurityStack(
     "crowdsecurity/linux",
     "crowdsecurity/sshd",
   ]);
-  const bouncerPackage = await resolveCrowdSecFirewallBouncerPackage();
-  const basePackages = ["ca-certificates", "curl", "gnupg", "jq", "nftables"];
-  const securityPackages = ["crowdsec", bouncerPackage, "nftables"];
+  const basePackages = packageFamily === "rhel"
+    ? ["ca-certificates", "curl", "jq", "nftables", "dnf-plugins-core"]
+    : ["ca-certificates", "curl", "gnupg", "jq", "nftables"];
   const steps = [];
   const runStep = async (
     percent: number,
@@ -1951,16 +2010,26 @@ async function installCyberSecurityStack(
   await progress(
     "Validate operating system",
     5,
-    "Validating Linux distribution.",
+    `Using ${packageFamily} package management for ${packageInfo.osID}.`,
+    {
+      osID: packageInfo.osID,
+      osLike: packageInfo.osLike,
+      packageFamily,
+    },
   );
 
   steps.push(
     await runStep(
       10,
-      "Refresh APT metadata",
+      "Refresh package metadata",
       `if ${
-        packagesInstalledCommand([...basePackages, "crowdsec"])
-      }; then DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::ForceIPv4=true update -y; else echo 'APT metadata refresh skipped; required packages are already installed.'; fi`,
+        packagesInstalledForFamilyCommand(
+          [...basePackages, "crowdsec"],
+          packageFamily,
+        )
+      }; then ${
+        metadataRefreshCommand(packageFamily)
+      }; else echo 'Package metadata refresh skipped; required packages are already installed.'; fi`,
       true,
       75_000,
     ),
@@ -1970,9 +2039,9 @@ async function installCyberSecurityStack(
       20,
       "Install base packages",
       `if ${
-        packagesInstalledCommand(basePackages)
-      }; then DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ${
-        basePackages.map(shellQuote).join(" ")
+        packagesInstalledForFamilyCommand(basePackages, packageFamily)
+      }; then ${
+        packageInstallCommand(basePackages, packageFamily)
       }; else echo 'Base packages already installed.'; fi`,
       false,
       90_000,
@@ -1983,18 +2052,29 @@ async function installCyberSecurityStack(
     32,
     "Checking CrowdSec package repository.",
   );
-  steps.push(await ensureCrowdSecRepository(Math.min(timeoutMs, 90_000)));
+  steps.push(
+    await ensureCrowdSecRepository(packageFamily, Math.min(timeoutMs, 90_000)),
+  );
   steps.push(
     await runStep(
       42,
-      "Refresh CrowdSec APT metadata",
+      "Refresh CrowdSec package metadata",
       `if ${
-        packagesInstalledCommand(securityPackages)
-      }; then DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::ForceIPv4=true update -y; else echo 'CrowdSec APT metadata refresh skipped; security packages are already installed.'; fi`,
+        packagesInstalledForFamilyCommand(["crowdsec"], packageFamily)
+      }; then ${
+        metadataRefreshCommand(packageFamily)
+      }; else echo 'CrowdSec package metadata refresh skipped; CrowdSec is already installed.'; fi`,
       true,
       75_000,
     ),
   );
+  const bouncerPackage = await resolveCrowdSecFirewallBouncerPackage(
+    packageFamily,
+  );
+  const bouncerMode = bouncerPackage.includes("nftables")
+    ? "nftables"
+    : "iptables";
+  const securityPackages = ["crowdsec", bouncerPackage, "nftables"];
   await progress(
     "Select CrowdSec firewall bouncer package",
     48,
@@ -2009,11 +2089,11 @@ async function installCyberSecurityStack(
   steps.push(
     await runStep(
       55,
-      "Install CrowdSec and nftables firewall bouncer",
+      "Install CrowdSec and firewall bouncer",
       `if ${
-        packagesInstalledCommand(securityPackages)
-      }; then DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ${
-        securityPackages.map(shellQuote).join(" ")
+        packagesInstalledForFamilyCommand(securityPackages, packageFamily)
+      }; then ${
+        packageInstallCommand(securityPackages, packageFamily)
       }; else echo 'CrowdSec and firewall bouncer already installed.'; fi`,
       false,
       120_000,
@@ -2048,7 +2128,10 @@ async function installCyberSecurityStack(
     "Configuring local bouncer credentials.",
   );
   steps.push(
-    await configureCrowdSecFirewallBouncer(Math.min(timeoutMs, 60_000)),
+    await configureCrowdSecFirewallBouncer(
+      Math.min(timeoutMs, 60_000),
+      bouncerMode,
+    ),
   );
   steps.push(await ensureCrowdSecHubReady(Math.min(timeoutMs, 75_000)));
   for (const collection of collections) {

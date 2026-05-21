@@ -13,8 +13,7 @@ capabilities, and API assignments.
 1. The installer creates the local `agent.conf`.
 2. The installer creates or reuses the local `agent.uuid`.
 3. The operator registers the UUID in MNSCloud.
-4. MNSCloud generates the token and the operator writes
-   the local `agent.token`.
+4. MNSCloud generates the token and the operator writes the local `agent.token`.
 5. The Agent sends heartbeat requests to `POST /api/v1/agent/heartbeat`.
 6. Heartbeat synchronizes host-declared capabilities.
 7. The API returns jobs through `POST /api/v1/agent/jobs/lease` according to
@@ -239,15 +238,16 @@ Implemented cyber security jobs:
 
 - `cyber.security.status`: reports nftables, CrowdSec, firewall bouncer, OS,
   kernel, and server network status.
-- `cyber.security.install`: installs and enables `nftables`, `crowdsec`, and
-  `crowdsec-firewall-bouncer-nftables` on Debian-like systems. It also
-  installs the default CrowdSec collections `crowdsecurity/linux` and
-  `crowdsecurity/sshd`, unless a job payload supplies a different `collections`
-  array.
+- `cyber.security.install`: installs and enables `nftables`, `crowdsec`, and the
+  CrowdSec firewall bouncer on supported Linux systems. Debian uses the nftables
+  bouncer package when available; RHEL-compatible systems use the official RPM
+  bouncer package. It also installs the default CrowdSec collections
+  `crowdsecurity/linux` and `crowdsecurity/sshd`, unless a job payload supplies
+  a different `collections` array.
 
 The Linux install job is intentionally conservative. It does not flush existing
 firewall rules, does not open inbound ports, and configures the CrowdSec
-firewall bouncer for nftables using a local bouncer API key.
+firewall bouncer using a local bouncer API key.
 
 Windows cyber security uses CrowdSec for Windows and the CrowdSec Windows
 Firewall remediation component. Windows jobs must require Windows capabilities
@@ -256,21 +256,24 @@ such as `windows.package.install`, `windows.service.manage`,
 
 Implemented Windows cyber security behavior:
 
-- `cyber.security.status`: reports Windows Firewall, CrowdSec service,
-  CrowdSec Windows Firewall bouncer, OS, host IP, alerts, and decisions.
+- `cyber.security.status`: reports Windows Firewall, CrowdSec service, CrowdSec
+  Windows Firewall bouncer, OS, host IP, alerts, and decisions.
 - `cyber.security.install`: installs CrowdSec and the Windows Firewall bouncer
   through Chocolatey, enables Windows Firewall profiles, starts CrowdSec
   services, and installs the `crowdsecurity/windows` collection by default.
 - `cyber.security.profile.apply`: installs configured CrowdSec collections and
   restarts CrowdSec services.
 
-The Windows install job requires Chocolatey. If Chocolatey is not installed,
-the job must either install it beforehand or set `installChocolatey=true` in the
-job payload.
+The Windows install job requires Chocolatey. If Chocolatey is not installed, the
+job must either install it beforehand or set `installChocolatey=true` in the job
+payload.
 
 Reference:
 
-- CrowdSec Windows installation: <https://docs.crowdsec.net/u/getting_started/installation/windows>
+- CrowdSec Linux installation:
+  <https://docs.crowdsec.net/u/getting_started/installation/linux/>
+- CrowdSec Windows installation:
+  <https://docs.crowdsec.net/u/getting_started/installation/windows>
 - CrowdSec Windows Firewall remediation component:
   <https://docs.crowdsec.net/u/bouncers/windows_firewall/>
 
