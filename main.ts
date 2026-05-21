@@ -1,4 +1,5 @@
 type AgentConfig = {
+  os: "linux" | "windows" | "other";
   apiBase: string;
   name: string;
   hostname: string;
@@ -62,8 +63,17 @@ type LeaseJob = {
 
 type IniConfig = Record<string, Record<string, string>>;
 
+const IS_WINDOWS = Deno.build.os === "windows";
+const AGENT_OS: AgentConfig["os"] = IS_WINDOWS
+  ? "windows"
+  : Deno.build.os === "linux"
+  ? "linux"
+  : "other";
+const PROGRAM_DATA = Deno.env.get("ProgramData") ?? "C:\\ProgramData";
 const CONFIG_PATH = Deno.env.get("MNSCLOUD_AGENT_CONFIG") ??
-  "/etc/mnscloud/agent/agent.conf";
+  (IS_WINDOWS
+    ? `${PROGRAM_DATA}\\MNSCloud\\Agent\\agent.conf`
+    : "/etc/mnscloud/agent/agent.conf");
 
 function parseList(value: string) {
   return value.split(",").map((item) => item.trim()).filter(Boolean);
@@ -145,7 +155,17 @@ function getBoolean(
 
 async function loadConfig(): Promise<AgentConfig> {
   const parsed = parseIni(await Deno.readTextFile(CONFIG_PATH));
+  const defaultStateDir = IS_WINDOWS
+    ? `${PROGRAM_DATA}\\MNSCloud\\Agent`
+    : "/var/lib/mnscloud/agent";
+  const defaultRecordingRoots = IS_WINDOWS
+    ? `${PROGRAM_DATA}\\MNSCloud\\Recordings`
+    : "/var/lib/freeswitch/recordings,/var/spool/asterisk/monitor";
+  const defaultMediaRoots = IS_WINDOWS
+    ? `${PROGRAM_DATA}\\MNSCloud\\MediaFiles`
+    : "/var/lib/mnscloud/pabx/media-files";
   return {
+    os: AGENT_OS,
     apiBase: getConfigValue(
       parsed,
       "agent",
@@ -166,20 +186,20 @@ async function loadConfig(): Promise<AgentConfig> {
       parsed,
       "identity",
       "agent_uuid_file",
-      "/var/lib/mnscloud/agent/agent.uuid",
+      `${defaultStateDir}${IS_WINDOWS ? "\\" : "/"}agent.uuid`,
     ),
     agentTokenFile: getConfigValue(
       parsed,
       "identity",
       "agent_token_file",
-      "/var/lib/mnscloud/agent/agent.token",
+      `${defaultStateDir}${IS_WINDOWS ? "\\" : "/"}agent.token`,
     ),
     recordingsRoots: parseList(
       getConfigValue(
         parsed,
         "recordings",
         "roots",
-        "/var/lib/freeswitch/recordings,/var/spool/asterisk/monitor",
+        defaultRecordingRoots,
       ),
     ),
     recordingMounts: parseRecordingMounts(
@@ -201,7 +221,7 @@ async function loadConfig(): Promise<AgentConfig> {
         parsed,
         "media_files",
         "roots",
-        "/var/lib/mnscloud/pabx/media-files",
+        defaultMediaRoots,
       ),
     ),
     mediaMounts: parseRecordingMounts(
@@ -422,6 +442,7 @@ async function heartbeat(
     name: config.name,
     hostname: config.hostname,
     version: config.version,
+    os: config.os,
     uptimeSeconds: Math.floor(performance.now() / 1000),
     recordingsRoots: config.recordingsRoots,
     recordingMounts: config.recordingMounts,
@@ -721,6 +742,37 @@ async function runLocalCommand(
   args: string[],
   timeoutMs: number,
 ) {
+  if (IS_WINDOWS) {
+    const process = new Deno.Command(command, {
+      args,
+      stdout: "piped",
+      stderr: "piped",
+    }).spawn();
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      try {
+        process.kill("SIGKILL");
+      } catch {
+        // Process may already have exited.
+      }
+    }, timeoutMs);
+    try {
+      const output = await process.output();
+      const stderr = new TextDecoder().decode(output.stderr).trim();
+      return {
+        code: output.code,
+        stdout: new TextDecoder().decode(output.stdout).trim(),
+        stderr: timedOut
+          ? [stderr, `Command timed out after ${timeoutMs}ms.`].filter(Boolean)
+            .join("\n")
+          : stderr,
+      };
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
   const script = `exec setsid ${[command, ...args].map(shellQuote).join(" ")}`;
   const process = new Deno.Command("sh", {
     args: ["-lc", script],
@@ -1421,6 +1473,18 @@ async function executeCertbotJob(
 }
 
 async function commandAvailable(command: string) {
+  if (IS_WINDOWS) {
+    const result = await runPowerShell(
+      `($cmd = Get-Command ${
+        powerShellQuote(command)
+      } -ErrorAction SilentlyContinue) | ForEach-Object { $_.Source }`,
+      3000,
+    );
+    return result.code === 0 && result.stdout
+      ? result.stdout.split(/\r?\n/)[0] || command
+      : null;
+  }
+
   const result = await runLocalCommand(
     "sh",
     ["-lc", `command -v ${command}`],
@@ -1430,12 +1494,35 @@ async function commandAvailable(command: string) {
 }
 
 async function commandText(command: string, fallback = "") {
+  if (IS_WINDOWS) {
+    const result = await runPowerShell(command, 8000);
+    return result.code === 0 ? result.stdout : fallback;
+  }
+
   const result = await runLocalCommand("sh", ["-lc", command], 8000);
   return result.code === 0 ? result.stdout : fallback;
 }
 
 function shellQuote(value: string) {
   return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function powerShellQuote(value: string) {
+  return `'${value.replaceAll("'", "''")}'`;
+}
+
+function powerShellExecutable() {
+  return Deno.env.get("MNSCLOUD_POWERSHELL") ?? "powershell.exe";
+}
+
+async function runPowerShell(script: string, timeoutMs: number) {
+  return await runLocalCommand(powerShellExecutable(), [
+    "-NoProfile",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-Command",
+    script,
+  ], timeoutMs);
 }
 
 function payloadStringArray(
@@ -1798,6 +1885,10 @@ async function installCyberSecurityStack(
     extra?: Record<string, unknown>,
   ) => Promise<void>,
 ) {
+  if (IS_WINDOWS) {
+    return await installWindowsCyberSecurityStack(config, payload, progress);
+  }
+
   assertCapability(config, "linux.package.install");
   assertCapability(config, "linux.service.manage");
   assertCapability(config, "security.nftables.manage");
@@ -2028,6 +2119,174 @@ async function installCyberSecurityStack(
   };
 }
 
+async function installChocolateyIfAllowed(
+  payload: Record<string, unknown> | null | undefined,
+  timeoutMs: number,
+) {
+  if (await commandAvailable("choco")) {
+    return await stepResult(
+      "Chocolatey already available",
+      "Chocolatey is already installed.",
+    );
+  }
+  if (payload?.["installChocolatey"] !== true) {
+    throw new Error(
+      "Chocolatey is required to install CrowdSec on Windows. Install Chocolatey first or pass installChocolatey=true in the job payload.",
+    );
+  }
+  return await runPowerShellInstallStep(
+    "Install Chocolatey",
+    "Set-ExecutionPolicy Bypass -Scope Process -Force; [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; Invoke-Expression ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))",
+    timeoutMs,
+  );
+}
+
+async function runPowerShellInstallStep(
+  label: string,
+  script: string,
+  timeoutMs: number,
+  allowFailure = false,
+) {
+  const result = await runPowerShell(script, timeoutMs);
+  const step = {
+    label,
+    code: result.code,
+    stdout: result.stdout.slice(-2000),
+    stderr: result.stderr.slice(-2000),
+  };
+  if (result.code !== 0 && !allowFailure) {
+    throw new Error(
+      `${label} failed: ${
+        [result.stderr, result.stdout].filter(Boolean).join("\n").slice(-6000)
+      }`,
+    );
+  }
+  return step;
+}
+
+async function installWindowsCyberSecurityStack(
+  config: AgentConfig,
+  payload: Record<string, unknown> | null | undefined,
+  progress: (
+    step: string,
+    percent: number,
+    message: string,
+    extra?: Record<string, unknown>,
+  ) => Promise<void>,
+) {
+  assertCapability(config, "windows.package.install");
+  assertCapability(config, "windows.service.manage");
+  assertCapability(config, "security.crowdsec.manage");
+  assertCapability(config, "security.windows.firewall.manage");
+
+  const timeoutMs = Math.max(
+    120_000,
+    Math.min(Number(payload?.["timeoutMs"] ?? 900_000), 1_800_000),
+  );
+  const collections = payloadStringArray(payload, "collections", [
+    "crowdsecurity/windows",
+  ]);
+  const steps = [];
+  const runStep = async (
+    percent: number,
+    label: string,
+    script: string,
+    allowFailure = false,
+    stepTimeoutMs = timeoutMs,
+  ) => {
+    await progress(label, percent, `${label} started.`);
+    const result = await runPowerShellInstallStep(
+      label,
+      script,
+      stepTimeoutMs,
+      allowFailure,
+    );
+    await progress(
+      label,
+      percent,
+      result.code === 0
+        ? `${label} completed.`
+        : `${label} completed with warnings.`,
+      {
+        status: result.code === 0 ? "running" : "warning",
+        output: result.stdout || result.stderr,
+      },
+    );
+    return result;
+  };
+
+  await progress(
+    "Validate operating system",
+    5,
+    "Validating Windows host.",
+  );
+  steps.push(
+    await installChocolateyIfAllowed(payload, Math.min(timeoutMs, 180_000)),
+  );
+  steps.push(
+    await runStep(
+      35,
+      "Install CrowdSec Security Engine",
+      "choco install crowdsec -y --no-progress",
+      false,
+      300_000,
+    ),
+  );
+  steps.push(
+    await runStep(
+      55,
+      "Install CrowdSec Windows Firewall bouncer",
+      "choco install crowdsec-windows-firewall-bouncer -y --no-progress",
+      false,
+      300_000,
+    ),
+  );
+  for (const collection of collections) {
+    steps.push(
+      await runStep(
+        75,
+        `Install CrowdSec collection ${collection}`,
+        `if (Get-Command cscli -ErrorAction SilentlyContinue) { cscli collections install ${
+          powerShellQuote(collection)
+        }; cscli hub update } else { Write-Output 'cscli not found; collection install skipped.' }`,
+        true,
+        90_000,
+      ),
+    );
+  }
+  steps.push(
+    await runStep(
+      90,
+      "Enable Windows Firewall profiles",
+      "Set-NetFirewallProfile -Profile Domain,Private,Public -Enabled True",
+      false,
+      60_000,
+    ),
+  );
+  steps.push(
+    await runStep(
+      95,
+      "Start CrowdSec services",
+      "$services = @('crowdsec','cs-windows-firewall-bouncer','crowdsec-windows-firewall-bouncer'); foreach ($name in $services) { $svc = Get-Service -Name $name -ErrorAction SilentlyContinue; if ($svc) { Set-Service -Name $svc.Name -StartupType Automatic; Start-Service -Name $svc.Name -ErrorAction SilentlyContinue } }",
+      false,
+      90_000,
+    ),
+  );
+
+  await progress(
+    "Collect protection status",
+    99,
+    "Collecting final Windows security service status.",
+  );
+  const status = await collectCyberSecurityStatus(config);
+  return {
+    ...status,
+    installedPackages: ["crowdsec", "crowdsec-windows-firewall-bouncer"],
+    installedCollections: collections,
+    steps,
+  };
+}
+
 async function applyCyberSecurityProfile(
   config: AgentConfig,
   payload: Record<string, unknown> | null | undefined,
@@ -2038,6 +2297,10 @@ async function applyCyberSecurityProfile(
     extra?: Record<string, unknown>,
   ) => Promise<void>,
 ) {
+  if (IS_WINDOWS) {
+    return await applyWindowsCyberSecurityProfile(config, payload, progress);
+  }
+
   assertCapability(config, "linux.service.manage");
   assertCapability(config, "security.crowdsec.manage");
 
@@ -2182,7 +2445,89 @@ async function applyCyberSecurityProfile(
   };
 }
 
+async function applyWindowsCyberSecurityProfile(
+  config: AgentConfig,
+  payload: Record<string, unknown> | null | undefined,
+  progress: (
+    step: string,
+    percent: number,
+    message: string,
+    extra?: Record<string, unknown>,
+  ) => Promise<void>,
+) {
+  assertCapability(config, "windows.service.manage");
+  assertCapability(config, "security.crowdsec.manage");
+
+  const timeoutMs = Math.max(
+    120_000,
+    Math.min(Number(payload?.["timeoutMs"] ?? 600_000), 1_800_000),
+  );
+  const profileName = typeof payload?.["profileName"] === "string"
+    ? payload["profileName"]
+    : "Windows security profile";
+  const collections = payloadStringArray(payload, "collections", [
+    "crowdsecurity/windows",
+  ]);
+  const steps = [];
+
+  await progress(
+    "Validate CrowdSec profile prerequisites",
+    10,
+    `Preparing to apply ${profileName}.`,
+    { collections },
+  );
+  if (!(await commandAvailable("cscli"))) {
+    throw new Error(
+      "CrowdSec cscli is not available. Install protection first.",
+    );
+  }
+
+  let percent = 35;
+  for (const collection of collections) {
+    await progress(
+      `Install CrowdSec collection ${collection}`,
+      Math.min(percent, 85),
+      `Installing ${collection}.`,
+    );
+    steps.push(
+      await runPowerShellInstallStep(
+        `Install CrowdSec collection ${collection}`,
+        `cscli collections install ${
+          powerShellQuote(collection)
+        }; cscli hub update`,
+        Math.min(timeoutMs, 90_000),
+        true,
+      ),
+    );
+    percent += Math.max(5, Math.floor(45 / Math.max(collections.length, 1)));
+  }
+  steps.push(
+    await runPowerShellInstallStep(
+      "Restart CrowdSec services",
+      "$services = @('crowdsec','cs-windows-firewall-bouncer','crowdsec-windows-firewall-bouncer'); foreach ($name in $services) { $svc = Get-Service -Name $name -ErrorAction SilentlyContinue; if ($svc) { Restart-Service -Name $svc.Name -Force -ErrorAction SilentlyContinue } }",
+      90_000,
+      true,
+    ),
+  );
+
+  await progress(
+    "Collect protection status",
+    98,
+    "Collecting Windows security service status after profile apply.",
+  );
+  const status = await collectCyberSecurityStatus(config);
+  return {
+    ...status,
+    profileName,
+    mode: payload?.["mode"] ?? "monitor",
+    installedCollections: collections,
+    steps,
+  };
+}
+
 async function collectCyberSecurityStatus(config: AgentConfig) {
+  if (IS_WINDOWS) return await collectWindowsCyberSecurityStatus(config);
+
   const nft = await commandAvailable("nft");
   const crowdsec = await commandAvailable("crowdsec");
   const cscli = await commandAvailable("cscli");
@@ -2241,6 +2586,104 @@ async function collectCyberSecurityStatus(config: AgentConfig) {
     crowdsecAlerts: securityEvents.alerts,
     crowdsecDecisions: securityEvents.decisions,
     binaries: { nft, crowdsec, cscli, bouncer },
+  };
+}
+
+async function collectWindowsCrowdSecSecurityEvents(config: AgentConfig) {
+  const cscli = await commandAvailable("cscli");
+  if (!cscli) return { alerts: [], decisions: [] };
+
+  const alertsResult = await runPowerShell(
+    "try { cscli alerts list -o json 2>$null } catch { '[]' }",
+    config.commandTimeoutMs,
+  );
+  const decisionsResult = await runPowerShell(
+    "try { cscli decisions list -o json 2>$null } catch { '[]' }",
+    config.commandTimeoutMs,
+  );
+
+  return {
+    alerts: parseJsonArray(alertsResult.stdout).slice(0, 200),
+    decisions: parseJsonArray(decisionsResult.stdout).slice(0, 500),
+  };
+}
+
+async function windowsServiceStatus(serviceNames: string[]) {
+  const names = serviceNames.map(powerShellQuote).join(",");
+  const result = await runPowerShell(
+    `$names = @(${names}); $svc = Get-Service -ErrorAction SilentlyContinue | Where-Object { $names -contains $_.Name -or $names -contains $_.DisplayName } | Select-Object -First 1; if ($svc) { $svc.Status.ToString().ToLowerInvariant() } else { 'missing' }`,
+    5000,
+  );
+  if (result.code !== 0 || !result.stdout) return "missing";
+  const status = result.stdout.trim().toLowerCase();
+  return status === "running"
+    ? "running"
+    : status === "missing"
+    ? "missing"
+    : "stopped";
+}
+
+async function collectWindowsCyberSecurityStatus(config: AgentConfig) {
+  const crowdsec = await commandAvailable("crowdsec");
+  const cscli = await commandAvailable("cscli");
+  const bouncer = await commandAvailable("cs-windows-firewall-bouncer") ??
+    await commandAvailable("crowdsec-windows-firewall-bouncer");
+  const choco = await commandAvailable("choco");
+
+  const hostname = await commandText("[System.Net.Dns]::GetHostName()");
+  const osName = await commandText(
+    "(Get-CimInstance Win32_OperatingSystem).Caption",
+    "Windows",
+  );
+  const osVersion = await commandText(
+    "(Get-CimInstance Win32_OperatingSystem).Version",
+  );
+  const kernelVersion = await commandText(
+    "[System.Environment]::OSVersion.VersionString",
+  );
+  const privateIP = await commandText(
+    "Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -notlike '169.254.*' -and $_.IPAddress -ne '127.0.0.1' } | Select-Object -First 1 -ExpandProperty IPAddress",
+  );
+  const firewallProfiles = await runPowerShell(
+    "Get-NetFirewallProfile | Select-Object Name,Enabled | ConvertTo-Json -Compress",
+    config.commandTimeoutMs,
+  );
+  const anyFirewallEnabled = firewallProfiles.code === 0 &&
+    /"Enabled":true/i.test(firewallProfiles.stdout);
+  const crowdsecStatus = crowdsec || cscli
+    ? await windowsServiceStatus(["crowdsec", "CrowdSec"])
+    : "missing";
+  const bouncerStatus = bouncer
+    ? await windowsServiceStatus([
+      "cs-windows-firewall-bouncer",
+      "crowdsec-windows-firewall-bouncer",
+      "CrowdSec Windows Firewall Bouncer",
+    ])
+    : "missing";
+  const firewallStatus = anyFirewallEnabled ? "running" : "stopped";
+  const protectionStatus = firewallStatus === "running" &&
+      crowdsecStatus === "running" && bouncerStatus === "running"
+    ? "protected"
+    : (crowdsec || cscli) && bouncer
+    ? "partial"
+    : "unprotected";
+  const securityEvents = await collectWindowsCrowdSecSecurityEvents(config);
+
+  return {
+    hostname,
+    privateIP,
+    osName,
+    osVersion,
+    kernelVersion,
+    firewallBackend: "windows-firewall",
+    firewallStatus,
+    crowdsecStatus,
+    bouncerStatus,
+    protectionStatus,
+    crowdsecAlerts: securityEvents.alerts,
+    crowdsecDecisions: securityEvents.decisions,
+    binaries: { crowdsec, cscli, bouncer, choco },
+    firewallProfiles: firewallProfiles.stdout,
   };
 }
 

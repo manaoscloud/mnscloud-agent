@@ -2,20 +2,23 @@
 
 Standalone native MNSCloud Agent.
 
-The Agent runs as a native `systemd` service on a Linux server and communicates
-with the MNSCloud API through outbound HTTPS. There is a single runtime: the
-Agent only runs work allowed by local capabilities declared in `agent.conf`, API
-assignments, and typed jobs.
+The Agent runs as a native service and communicates with the MNSCloud API
+through outbound HTTPS. Linux hosts use `systemd`; Windows hosts use a Windows
+Service. There is a single runtime: the Agent only runs work allowed by local
+capabilities declared in `agent.conf`, API assignments, and typed jobs.
 
 ## Contract
 
 - Product/runtime: `mnscloud-agent`
 - Project directory: `agent/`
-- Installer: `agent/scripts/install-agent.sh`
-- Service: `mnscloud-agent.service`
-- Local configuration: `/etc/mnscloud/agent/agent.conf`
-- Local state: `/var/lib/mnscloud/agent`
-- Local logs: `/var/log/mnscloud/agent`
+- Linux installer: `scripts/install-agent.sh`
+- Windows installer: `scripts/install-agent-windows.ps1`
+- Linux service: `mnscloud-agent.service`
+- Windows service: `MNSCloudAgent`
+- Linux configuration: `/etc/mnscloud/agent/agent.conf`
+- Windows configuration: `C:\ProgramData\MNSCloud\Agent\agent.conf`
+- Linux state: `/var/lib/mnscloud/agent`
+- Windows state: `C:\ProgramData\MNSCloud\Agent`
 
 ## Repository Access
 
@@ -37,7 +40,7 @@ gh repo clone manaoscloud/mnscloud-agent
 cd /opt/mnscloud/mnscloud-agent
 ```
 
-## Installation
+## Linux Installation
 
 ```bash
 sudo bash scripts/install-agent.sh
@@ -51,6 +54,27 @@ After installation, register the UUID in MNSCloud and generate an Agent token.
 The token is stored in `/var/lib/mnscloud/agent/agent.token`; restart the
 service after writing it.
 
+## Windows Installation
+
+Run from an elevated PowerShell session:
+
+```powershell
+Set-ExecutionPolicy Bypass -Scope Process -Force
+.\scripts\install-agent-windows.ps1 -ApiBase "https://api.example.com" -Name "windows-server-01"
+```
+
+The Windows installer prepares Deno, creates or reuses
+`C:\ProgramData\MNSCloud\Agent\agent.uuid`, writes `agent.conf`, installs the
+`MNSCloudAgent` Windows Service, and starts it.
+
+After installation, register the UUID in MNSCloud and generate an Agent token.
+The token is stored in `C:\ProgramData\MNSCloud\Agent\agent.token`; restart the
+service after writing it:
+
+```powershell
+Restart-Service MNSCloudAgent
+```
+
 Long-running jobs report progress back to the platform, including stage,
 percentage, and error details. Operators should use the MNSCloud UI job details
 view as the primary troubleshooting surface instead of querying the database.
@@ -62,6 +86,12 @@ Use the explicit update command when this repository has a newer Agent version:
 ```bash
 cd /opt/mnscloud/mnscloud-agent
 sudo bash scripts/update-agent.sh
+```
+
+Windows update:
+
+```powershell
+.\scripts\update-agent-windows.ps1
 ```
 
 The update command syncs the repository, reinstalls service files, preserves the
@@ -90,6 +120,8 @@ operator intentionally requests it.
 - Capabilities are declared by the host and synchronized on heartbeat.
 - Nginx edge and Certbot can be enabled on the public edge host through
   `nginx-edge.manage` and `certbot.manage` capabilities.
+- Windows cyber security uses Windows-specific capabilities and jobs. It does
+  not receive Linux-only nftables/systemd jobs.
 - Permanent storage credentials stay only in the API.
 - Jobs use temporary authorization, such as signed URLs.
 - Local files can only be read or written inside configured roots.

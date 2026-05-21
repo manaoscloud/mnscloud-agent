@@ -8,6 +8,9 @@ Use this contract when changing the `agent/` module.
 - Installer: `scripts/install-agent.sh`
 - Update command: `scripts/update-agent.sh`
 - Generated systemd unit: `mnscloud-agent.service`
+- Windows installer: `scripts/install-agent-windows.ps1`
+- Windows update command: `scripts/update-agent-windows.ps1`
+- Generated Windows service: `MNSCloudAgent`
 - Documentation: `agent.md`
 - API runtime: `mnscloud-api/routes/agentRoute.ts`,
   `mnscloud-api/controllers/agentController.ts`,
@@ -51,6 +54,8 @@ identity.
 - The Agent declares local capabilities; the API decides delivery by capability
   and assignment.
 - The Agent token lives at `/var/lib/mnscloud/agent/agent.token`.
+- On Windows, the Agent token lives at
+  `C:\ProgramData\MNSCloud\Agent\agent.token`.
 - Permanent storage credentials stay only in the API.
 - Jobs use temporary authorization, preferably signed URLs.
 - Local commands must be typed and allowlisted in the runtime.
@@ -66,7 +71,14 @@ identity.
   not create a separate edge-specific agent runtime.
 - Keep Certbot functionality capability-based with `certbot.manage`; private
   keys remain local to the edge host.
+- Keep Linux and Windows capabilities separate. Linux jobs must not assume
+  Windows paths/services, and Windows jobs must not assume systemd, nftables,
+  `/etc`, `/var`, or POSIX shells.
+- Windows Cyber Security must use CrowdSec for Windows plus the CrowdSec
+  Windows Firewall remediation component.
 - Validate `scripts/install-agent.sh` with `bash -n`.
+- Validate PowerShell installers with PowerShell parser checks when PowerShell is
+  available.
 - Validate `main.ts` with `deno check`.
 - Validate related API services with `deno check` when changing the API
   contract.

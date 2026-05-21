@@ -1,0 +1,143 @@
+param(
+  [string]$ApiBase = $env:MNSCLOUD_API_BASE,
+  [string]$Name = $env:AGENT_NAME,
+  [switch]$DryRun
+)
+
+$ErrorActionPreference = "Stop"
+$ServiceName = "MNSCloudAgent"
+$InstallDir = "C:\Program Files\MNSCloud\Agent"
+$ConfigDir = Join-Path $env:ProgramData "MNSCloud\Agent"
+$ConfigFile = Join-Path $ConfigDir "agent.conf"
+$UuidFile = Join-Path $ConfigDir "agent.uuid"
+$TokenFile = Join-Path $ConfigDir "agent.token"
+$RunScript = Join-Path $InstallDir "run-agent.ps1"
+$DefaultApiBase = if ($ApiBase) { $ApiBase.TrimEnd("/") } else { "https://api.publichost.cloud" }
+$AgentName = if ($Name) { $Name } else { $env:COMPUTERNAME }
+
+function Write-Step([string]$Message) {
+  Write-Host "[install-agent-windows] $Message"
+}
+
+function Invoke-Step([scriptblock]$Block) {
+  if ($DryRun) {
+    Write-Step "DRY-RUN: $Block"
+    return
+  }
+  & $Block
+}
+
+function Ensure-Deno {
+  $deno = Get-Command deno -ErrorAction SilentlyContinue
+  if ($deno) {
+    Write-Step "Deno is available: $($deno.Source)"
+    return $deno.Source
+  }
+
+  Write-Step "Installing Deno for Windows"
+  Invoke-Step { irm https://deno.land/install.ps1 | iex }
+  $candidate = Join-Path $env:USERPROFILE ".deno\bin\deno.exe"
+  if (!(Test-Path $candidate)) {
+    throw "Deno installation did not create $candidate"
+  }
+  return $candidate
+}
+
+function Write-AgentConfig([string]$DenoPath) {
+  $content = @"
+# MNSCloud Agent configuration
+# Managed by scripts/install-agent-windows.ps1
+
+[agent]
+name = $AgentName
+hostname = $env:COMPUTERNAME
+api_base = $DefaultApiBase
+version = 1.0.0
+poll_interval_ms = 15000
+heartbeat_interval_ms = 60000
+
+[identity]
+agent_uuid_file = $UuidFile
+agent_token_file = $TokenFile
+
+[recordings]
+roots = $($env:ProgramData)\MNSCloud\Recordings
+mounts =
+delete_after_upload = true
+
+[media_files]
+roots = $($env:ProgramData)\MNSCloud\MediaFiles
+mounts =
+
+[capabilities]
+windows.status = true
+windows.package.install = true
+windows.service.manage = true
+windows.file.manage = true
+windows.eventlog.read = true
+windows.firewall.manage = true
+windows.defender.status = true
+security.crowdsec.manage = true
+security.windows.firewall.manage = true
+security.windows.eventlog.read = true
+security.windows.defender.manage = false
+shell.exec = false
+
+[commands]
+timeout_ms = 15000
+"@
+  Invoke-Step { Set-Content -Path $ConfigFile -Value $content -Encoding UTF8 }
+}
+
+function Install-Service([string]$DenoPath) {
+  $runContent = @"
+`$env:MNSCLOUD_AGENT_CONFIG = "$ConfigFile"
+& "$DenoPath" run --allow-read --allow-write --allow-net --allow-run --allow-env "$InstallDir\main.ts"
+"@
+  Invoke-Step { Set-Content -Path $RunScript -Value $runContent -Encoding UTF8 }
+
+  $existing = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+  if ($existing) {
+    Write-Step "Stopping existing service"
+    Invoke-Step { Stop-Service -Name $ServiceName -Force -ErrorAction SilentlyContinue }
+    Invoke-Step { sc.exe delete $ServiceName | Out-Null }
+    Start-Sleep -Seconds 2
+  }
+
+  $binPath = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$RunScript`""
+  Write-Step "Creating Windows service $ServiceName"
+  Invoke-Step { sc.exe create $ServiceName binPath= $binPath start= auto DisplayName= "MNSCloud Agent" | Out-Null }
+  Invoke-Step { sc.exe description $ServiceName "MNSCloud native agent" | Out-Null }
+  Invoke-Step { Start-Service -Name $ServiceName }
+}
+
+if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator)) {
+  throw "Run this installer from an elevated PowerShell session."
+}
+
+Write-Step "Preparing directories"
+Invoke-Step {
+  New-Item -ItemType Directory -Force -Path $InstallDir, $ConfigDir, "$($env:ProgramData)\MNSCloud\Recordings", "$($env:ProgramData)\MNSCloud\MediaFiles" | Out-Null
+}
+
+$DenoSource = Ensure-Deno
+$DenoPath = Join-Path $InstallDir "deno.exe"
+Write-Step "Copying agent runtime"
+Invoke-Step {
+  Copy-Item -Path $DenoSource -Destination $DenoPath -Force
+  Copy-Item -Path "$PSScriptRoot\..\main.ts" -Destination "$InstallDir\main.ts" -Force
+  Copy-Item -Path "$PSScriptRoot\..\deno.jsonc" -Destination "$InstallDir\deno.jsonc" -Force
+}
+
+if (!(Test-Path $UuidFile)) {
+  Write-Step "Creating agent UUID"
+  Invoke-Step { Set-Content -Path $UuidFile -Value ([guid]::NewGuid().ToString()) -Encoding ASCII }
+}
+
+Write-AgentConfig -DenoPath $DenoPath
+Install-Service -DenoPath $DenoPath
+
+$uuid = if (Test-Path $UuidFile) { (Get-Content $UuidFile -Raw).Trim() } else { "<dry-run>" }
+Write-Step "mnscloud-agent installed as Windows service."
+Write-Step "Agent UUID: $uuid"
+Write-Step "Register this UUID in MNSCloud, then paste the generated token into $TokenFile and restart $ServiceName."

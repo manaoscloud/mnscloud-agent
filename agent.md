@@ -10,11 +10,11 @@ capabilities, and API assignments.
 
 ## Architecture
 
-1. The installer creates `/etc/mnscloud/agent/agent.conf`.
-2. The installer creates or reuses `/var/lib/mnscloud/agent/agent.uuid`.
+1. The installer creates the local `agent.conf`.
+2. The installer creates or reuses the local `agent.uuid`.
 3. The operator registers the UUID in MNSCloud.
 4. MNSCloud generates the token and the operator writes
-   `/var/lib/mnscloud/agent/agent.token`.
+   the local `agent.token`.
 5. The Agent sends heartbeat requests to `POST /api/v1/agent/heartbeat`.
 6. Heartbeat synchronizes host-declared capabilities.
 7. The API returns jobs through `POST /api/v1/agent/jobs/lease` according to
@@ -23,13 +23,19 @@ capabilities, and API assignments.
 
 ## Configuration
 
-Canonical local file:
+Canonical Linux local file:
 
 ```text
 /etc/mnscloud/agent/agent.conf
 ```
 
-Format:
+Canonical Windows local file:
+
+```text
+C:\ProgramData\MNSCloud\Agent\agent.conf
+```
+
+Linux format:
 
 ```ini
 [agent]
@@ -94,8 +100,27 @@ freeswitch_esl_password =
 timeout_ms = 15000
 ```
 
+Windows hosts use Windows-specific capabilities:
+
+```ini
+[capabilities]
+windows.status = true
+windows.package.install = true
+windows.service.manage = true
+windows.file.manage = true
+windows.eventlog.read = true
+windows.firewall.manage = true
+windows.defender.status = true
+security.crowdsec.manage = true
+security.windows.firewall.manage = true
+security.windows.eventlog.read = true
+security.windows.defender.manage = false
+shell.exec = false
+```
+
 Do not use `.env` for the Agent. Identity and state live under
-`/var/lib/mnscloud/agent`.
+`/var/lib/mnscloud/agent` on Linux and `C:\ProgramData\MNSCloud\Agent` on
+Windows.
 
 ## Database
 
@@ -155,6 +180,16 @@ Capabilities are stable, granular names. Examples:
 - `voip.freeswitch.manage`
 - `docker.manage`
 - `shell.exec`
+- `windows.status`
+- `windows.package.install`
+- `windows.service.manage`
+- `windows.file.manage`
+- `windows.eventlog.read`
+- `windows.firewall.manage`
+- `windows.defender.status`
+- `security.windows.firewall.manage`
+- `security.windows.eventlog.read`
+- `security.windows.defender.manage`
 
 The Agent declares capabilities in heartbeat requests. The API uses capabilities
 together with assignments to decide which jobs may be delivered.
@@ -192,9 +227,34 @@ Implemented cyber security jobs:
   `crowdsecurity/sshd`, unless a job payload supplies a different `collections`
   array.
 
-The install job is intentionally conservative. It does not flush existing
+The Linux install job is intentionally conservative. It does not flush existing
 firewall rules, does not open inbound ports, and configures the CrowdSec
 firewall bouncer for nftables using a local bouncer API key.
+
+Windows cyber security uses CrowdSec for Windows and the CrowdSec Windows
+Firewall remediation component. Windows jobs must require Windows capabilities
+such as `windows.package.install`, `windows.service.manage`,
+`security.crowdsec.manage`, and `security.windows.firewall.manage`.
+
+Implemented Windows cyber security behavior:
+
+- `cyber.security.status`: reports Windows Firewall, CrowdSec service,
+  CrowdSec Windows Firewall bouncer, OS, host IP, alerts, and decisions.
+- `cyber.security.install`: installs CrowdSec and the Windows Firewall bouncer
+  through Chocolatey, enables Windows Firewall profiles, starts CrowdSec
+  services, and installs the `crowdsecurity/windows` collection by default.
+- `cyber.security.profile.apply`: installs configured CrowdSec collections and
+  restarts CrowdSec services.
+
+The Windows install job requires Chocolatey. If Chocolatey is not installed,
+the job must either install it beforehand or set `installChocolatey=true` in the
+job payload.
+
+Reference:
+
+- CrowdSec Windows installation: <https://docs.crowdsec.net/u/getting_started/installation/windows>
+- CrowdSec Windows Firewall remediation component:
+  <https://docs.crowdsec.net/u/bouncers/windows_firewall/>
 
 Long-running cyber security jobs report progress before and after each major
 step so the platform can display the current stage, percentage, and failure
