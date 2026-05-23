@@ -1,7 +1,7 @@
 param(
   [string]$ApiBase = $env:MNSCLOUD_API_BASE,
   [string]$EnrollmentToken = $env:MNSCLOUD_AGENT_ENROLLMENT_TOKEN,
-  [string]$Name = $env:AGENT_NAME,
+  [string]$InstallLabel = $env:MNSCLOUD_AGENT_INSTALL_LABEL,
   [switch]$DryRun
 )
 
@@ -14,7 +14,7 @@ $UuidFile = Join-Path $ConfigDir "agent.uuid"
 $TokenFile = Join-Path $ConfigDir "agent.token"
 $RunScript = Join-Path $InstallDir "run-agent.ps1"
 $DefaultApiBase = if ($ApiBase) { $ApiBase.TrimEnd("/") } else { "https://api.publichost.cloud" }
-$AgentName = if ($Name) { $Name } else { $env:COMPUTERNAME }
+$AgentInstallLabel = if ($InstallLabel) { $InstallLabel } else { $env:COMPUTERNAME }
 
 function Write-Step([string]$Message) {
   Write-Host "[install-agent-windows] $Message"
@@ -50,7 +50,7 @@ function Write-AgentConfig([string]$DenoPath) {
 # Managed by scripts/install-agent-windows.ps1
 
 [agent]
-name = $AgentName
+name = $AgentInstallLabel
 hostname = $env:COMPUTERNAME
 api_base = $DefaultApiBase
 version = 1.0.0
@@ -104,7 +104,7 @@ function Enroll-Agent {
   $payload = @{
     enrollmentToken = $EnrollmentToken
     agentUUID = $uuid
-    name = $AgentName
+    installationName = $AgentInstallLabel
     hostname = $env:COMPUTERNAME
   } | ConvertTo-Json -Depth 5
 

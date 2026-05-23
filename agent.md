@@ -59,6 +59,10 @@ The MNSCloud App builds `--api-base` from the current browser origin. In product
 the same public origin that serves `/api/v1`. In local development, do not use a `localhost` command
 on a remote server unless that server can actually reach that address.
 
+The Agent name shown in the MNSCloud App is the canonical name stored in the enrollment record. The
+installer's local label is reported separately as `installationName` and should not overwrite the
+App-side Agent name.
+
 Do not register the local UUID manually for new installs. The installer sends the UUID while
 consuming the enrollment, and the API links the Agent automatically.
 
@@ -80,7 +84,7 @@ Linux format:
 
 ```ini
 [agent]
-name = server-01
+name = server-01-local-label
 hostname = server-01.local
 api_base = https://dev1.publichost.cloud
 version = 0.1.0

@@ -99,7 +99,7 @@ Set-ExecutionPolicy Bypass -Scope Process -Force
 .\scripts\install-agent-windows.ps1 `
   -ApiBase "https://api.example.com" `
   -EnrollmentToken "<short-lived-enrollment-token>" `
-  -Name "windows-server-01"
+  -InstallLabel "windows-server-01"
 ```
 
 The Windows installer prepares Deno, creates or reuses
@@ -129,8 +129,8 @@ Windows update:
 ```
 
 The update command syncs the repository, reinstalls service files, preserves the
-existing Agent UUID/token, reuses the current API base URL and Agent name from
-`/etc/mnscloud/agent/agent.conf`, then restarts `mnscloud-agent.service`.
+existing Agent UUID/token, reuses the current API base URL and local install label
+from `/etc/mnscloud/agent/agent.conf`, then restarts `mnscloud-agent.service`.
 
 Manual equivalent:
 

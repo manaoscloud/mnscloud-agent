@@ -14,14 +14,14 @@ LOG_FILE="${LOG_FILE:-/var/log/mnscloud-agent-install.log}"
 usage() {
   cat <<'TXT'
 Usage:
-  agent/scripts/install-agent.sh [--dry-run] [--api-base URL] [--name NAME] [--enrollment-token TOKEN]
+  agent/scripts/install-agent.sh [--dry-run] [--api-base URL] [--install-label LABEL] [--enrollment-token TOKEN]
 
 Installs the single native MNSCloud Agent as a systemd service.
 TXT
 }
 
 API_BASE=""
-AGENT_NAME=""
+INSTALL_LABEL=""
 ENROLLMENT_TOKEN="${MNSCLOUD_AGENT_ENROLLMENT_TOKEN:-}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -33,8 +33,8 @@ while [[ $# -gt 0 ]]; do
       API_BASE="${2:-}"
       shift 2
       ;;
-    --name)
-      AGENT_NAME="${2:-}"
+    --install-label)
+      INSTALL_LABEL="${2:-}"
       shift 2
       ;;
     --enrollment-token)
@@ -213,12 +213,12 @@ detect_executable_file() {
 }
 
 write_agent_config() {
-  local config_file="$1" agent_name="$2" hostname="$3" api_base="$4"
+  local config_file="$1" install_label="$2" hostname="$3" api_base="$4"
   write_file "$config_file" "# MNSCloud Agent configuration
 # Managed by agent/scripts/install-agent.sh
 
 [agent]
-name = ${agent_name}
+name = ${install_label}
 hostname = ${hostname}
 api_base = ${api_base}
 version = 1.0.0
@@ -312,7 +312,7 @@ WantedBy=multi-user.target
 }
 
 activate_enrollment() {
-  local api_base="$1" agent_uuid="$2" agent_name="$3" hostname="$4" token_file="$5"
+  local api_base="$1" agent_uuid="$2" install_label="$3" hostname="$4" token_file="$5"
   [[ -n "${ENROLLMENT_TOKEN}" ]] || return 0
   if $DRY_RUN; then
     log DRY-RUN "consume agent enrollment token at ${api_base}/api/v1/agent/enroll"
@@ -322,12 +322,12 @@ activate_enrollment() {
   local payload_file response_file agent_token
   payload_file="$(mktemp)"
   response_file="$(mktemp)"
-  TOKEN="${ENROLLMENT_TOKEN}" AGENT_UUID="${agent_uuid}" AGENT_NAME="${agent_name}" AGENT_HOSTNAME="${hostname}" \
-    deno run --allow-env=TOKEN,AGENT_UUID,AGENT_NAME,AGENT_HOSTNAME - <<'DENO' > "${payload_file}"
+  TOKEN="${ENROLLMENT_TOKEN}" AGENT_UUID="${agent_uuid}" INSTALL_LABEL="${install_label}" AGENT_HOSTNAME="${hostname}" \
+    deno run --allow-env=TOKEN,AGENT_UUID,INSTALL_LABEL,AGENT_HOSTNAME - <<'DENO' > "${payload_file}"
       const payload = {
         enrollmentToken: Deno.env.get("TOKEN"),
         agentUUID: Deno.env.get("AGENT_UUID"),
-        name: Deno.env.get("AGENT_NAME"),
+        installationName: Deno.env.get("INSTALL_LABEL"),
         hostname: Deno.env.get("AGENT_HOSTNAME"),
       };
       console.log(JSON.stringify(payload));
@@ -360,7 +360,7 @@ DENO
 }
 
 main() {
-  local api_base agent_uuid agent_name hostname existing_api_base existing_agent_name
+  local api_base agent_uuid install_label hostname existing_api_base existing_install_label
   local install_dir="/opt/mnscloud/agent"
   local config_dir="/etc/mnscloud/agent"
   local data_dir="/var/lib/mnscloud/agent"
@@ -374,9 +374,9 @@ main() {
 
   hostname="$(hostname -f 2>/dev/null || hostname)"
   existing_api_base="$(read_config_value "$config_file" "agent" "api_base")"
-  existing_agent_name="$(read_config_value "$config_file" "agent" "name")"
+  existing_install_label="$(read_config_value "$config_file" "agent" "name")"
   api_base="$(normalize_url "${API_BASE:-$(prompt_value "MNSCloud API base URL" "${existing_api_base:-$DEFAULT_API_BASE}")}")"
-  agent_name="${AGENT_NAME:-$(prompt_value "Agent name" "${existing_agent_name:-$hostname}")}"
+  install_label="${INSTALL_LABEL:-$(prompt_value "Local install label" "${existing_install_label:-$hostname}")}"
 
   info "Preparing native mnscloud-agent..."
   run "mkdir -p '${install_dir}' '${config_dir}' '${data_dir}' '${logs_dir}' /var/lib/mnscloud/pabx/media-files /etc/nginx/mnscloud/theme-domains /var/www/certbot"
@@ -390,9 +390,9 @@ main() {
     write_file "${data_dir}/agent.uuid" "${agent_uuid}"
   fi
 
-  write_agent_config "$config_file" "$agent_name" "$hostname" "$api_base"
+  write_agent_config "$config_file" "$install_label" "$hostname" "$api_base"
   write_service_file "$service_file" "$install_dir" "$config_file"
-  activate_enrollment "$api_base" "$agent_uuid" "$agent_name" "$hostname" "${data_dir}/agent.token"
+  activate_enrollment "$api_base" "$agent_uuid" "$install_label" "$hostname" "${data_dir}/agent.token"
 
   run "chmod 0755 '${install_dir}' '${config_dir}'"
   run "chmod 0700 '${data_dir}' '${logs_dir}'"
