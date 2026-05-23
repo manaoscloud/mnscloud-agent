@@ -152,6 +152,9 @@ operator intentionally requests it.
 - There is one Agent runtime; limits are enforced through OS permissions,
   capabilities, assignments, and jobs.
 - Capabilities are declared by the host and synchronized on heartbeat.
+- FreeSWITCH hosts with `voip.freeswitch.manage` report live SIP registrations
+  in heartbeat payloads so dashboards count registered extensions, not merely
+  configured extensions.
 - Nginx edge and Certbot can be enabled on the public edge host through
   `nginx-edge.manage` and `certbot.manage` capabilities.
 - WebRTC edge sync can be enabled on `mnscloud-kamailio-webrtc` hosts through

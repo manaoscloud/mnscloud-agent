@@ -63,6 +63,16 @@ type LeaseJob = {
   uploadHeaders?: Record<string, string> | null;
 };
 
+type PabxRegistrationReport = {
+  engine: "freeswitch";
+  username: string;
+  domain?: string;
+  contact?: string;
+  userAgent?: string;
+  networkIP?: string;
+  expiresAt?: string;
+};
+
 type IniConfig = Record<string, Record<string, string>>;
 
 const IS_WINDOWS = Deno.build.os === "windows";
@@ -441,11 +451,154 @@ async function jsonRequest<T>(
   return payload as T;
 }
 
+function recordString(
+  row: Record<string, unknown>,
+  aliases: string[],
+): string | undefined {
+  const values = new Map<string, unknown>();
+  for (const [key, value] of Object.entries(row)) {
+    values.set(key.toLowerCase(), value);
+  }
+  for (const alias of aliases) {
+    const value = values.get(alias.toLowerCase());
+    if (typeof value === "string" && value.trim()) return value.trim();
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return String(value);
+    }
+  }
+  return undefined;
+}
+
+function isoDateFromFreeSwitch(value: string | undefined) {
+  if (!value) return undefined;
+  const numeric = Number(value);
+  if (Number.isFinite(numeric) && numeric > 1_000_000_000) {
+    return new Date(numeric * 1000).toISOString();
+  }
+  const parsed = new Date(value);
+  return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : undefined;
+}
+
+function normalizeFreeSwitchRegistrationRow(
+  row: Record<string, unknown>,
+): PabxRegistrationReport | null {
+  const username = recordString(row, [
+    "reg_user",
+    "user",
+    "username",
+    "sip_auth_username",
+    "sip_user",
+  ]);
+  if (!username) return null;
+  return {
+    engine: "freeswitch",
+    username,
+    domain: recordString(row, ["realm", "domain", "host"]),
+    contact: recordString(row, ["url", "contact", "uri"]),
+    userAgent: recordString(row, ["user_agent", "userAgent"]),
+    networkIP: recordString(row, ["network_ip", "networkIP", "ip"]),
+    expiresAt: isoDateFromFreeSwitch(
+      recordString(row, ["expires", "expires_at", "expiresAt"]),
+    ),
+  };
+}
+
+function rowsFromJsonPayload(payload: unknown): Record<string, unknown>[] {
+  if (Array.isArray(payload)) {
+    return payload.filter((item): item is Record<string, unknown> =>
+      item !== null && typeof item === "object" && !Array.isArray(item)
+    );
+  }
+  if (
+    payload !== null && typeof payload === "object" && !Array.isArray(payload)
+  ) {
+    const object = payload as Record<string, unknown>;
+    for (const key of ["rows", "data", "registrations"]) {
+      const value = object[key];
+      if (Array.isArray(value)) {
+        return value.filter((item): item is Record<string, unknown> =>
+          item !== null && typeof item === "object" && !Array.isArray(item)
+        );
+      }
+    }
+  }
+  return [];
+}
+
+function parseFreeSwitchRegistrationsText(
+  output: string,
+): PabxRegistrationReport[] {
+  const lines = output.split(/\r?\n/).map((line) => line.trim()).filter(
+    Boolean,
+  );
+  const registrations: PabxRegistrationReport[] = [];
+  for (const line of lines) {
+    if (/^(reg_user|total|=|-|name\b)/i.test(line)) continue;
+    const parts = line.includes("|")
+      ? line.split("|").map((part) => part.trim())
+      : line.includes(",")
+      ? line.split(",").map((part) => part.trim())
+      : line.split(/\s+/).map((part) => part.trim());
+    if (parts.length < 2) continue;
+    const row = normalizeFreeSwitchRegistrationRow({
+      reg_user: parts[0],
+      realm: parts[1],
+      url: parts[2],
+      expires: parts[3],
+      network_ip: parts[4],
+      user_agent: parts.slice(5).join(" "),
+    });
+    if (row) registrations.push(row);
+  }
+  return registrations;
+}
+
+async function collectPabxRegistrations(config: AgentConfig) {
+  if (!config.capabilities["voip.freeswitch.manage"]) return [];
+  try {
+    const result = await runLocalCommand(
+      config.freeswitchCli,
+      ["-x", "show registrations as json"],
+      config.commandTimeoutMs,
+    );
+    if (result.code === 0 && result.stdout) {
+      const rows = rowsFromJsonPayload(JSON.parse(result.stdout));
+      return rows.map(normalizeFreeSwitchRegistrationRow)
+        .filter((item): item is PabxRegistrationReport => item !== null);
+    }
+  } catch (error) {
+    log(
+      "warn",
+      "FreeSWITCH registration JSON collection failed.",
+      String(error),
+    );
+  }
+
+  try {
+    const result = await runLocalCommand(
+      config.freeswitchCli,
+      ["-x", "show registrations"],
+      config.commandTimeoutMs,
+    );
+    if (result.code === 0 && result.stdout) {
+      return parseFreeSwitchRegistrationsText(result.stdout);
+    }
+  } catch (error) {
+    log(
+      "warn",
+      "FreeSWITCH registration text collection failed.",
+      String(error),
+    );
+  }
+  return [];
+}
+
 async function heartbeat(
   config: AgentConfig,
   agentUUID: string,
   agentToken: string,
 ) {
+  const pabxRegistrations = await collectPabxRegistrations(config);
   await jsonRequest(config, "/agent/heartbeat", agentToken, agentUUID, {
     name: config.name,
     hostname: config.hostname,
@@ -457,6 +610,7 @@ async function heartbeat(
     mediaRoots: config.mediaRoots,
     mediaMounts: config.mediaMounts,
     capabilities: config.capabilities,
+    pabxRegistrations,
   });
 }
 
