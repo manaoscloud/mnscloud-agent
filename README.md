@@ -138,8 +138,13 @@ operator intentionally requests it.
 - Capabilities are declared by the host and synchronized on heartbeat.
 - Nginx edge and Certbot can be enabled on the public edge host through
   `nginx-edge.manage` and `certbot.manage` capabilities.
+- WebRTC edge sync can be enabled on `mnscloud-kamailio-webrtc` hosts through
+  the `webrtc.kamailio.manage` capability.
 - Theme domain web and certificate actions are delivered to the edge host as
   Agent Runtime jobs, not generic worker containers.
+- WebRTC domain provisioning is delivered as a typed `webrtc.edge.sync` job. The
+  Agent runs only the configured local sync command, never an arbitrary command
+  from the API payload.
 - Windows cyber security uses Windows-specific capabilities and jobs. It does
   not receive Linux-only nftables/systemd jobs.
 - Permanent storage credentials stay only in the API.

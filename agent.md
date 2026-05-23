@@ -59,6 +59,7 @@ security.crowdsec.manage = true
 security.logs.read = true
 voip.asterisk.manage = false
 voip.freeswitch.manage = false
+webrtc.kamailio.manage = false
 docker.manage = false
 shell.exec = false
 
@@ -85,6 +86,9 @@ reload_command = systemctl reload nginx
 [certbot]
 command = certbot
 default_email =
+
+[webrtc_edge]
+sync_command = /opt/mnscloud/kamailio-webrtc/scripts/update-kamailio-webrtc.sh
 
 [commands]
 asterisk_cli = asterisk
@@ -320,3 +324,19 @@ Implemented Certbot commands:
 For HTTP-01 validation, the Nginx edge host must serve
 `/.well-known/acme-challenge/` from the configured `acme_root`, normally
 `/var/www/certbot`.
+
+## WebRTC Edge Jobs
+
+WebRTC edge provisioning uses a dedicated job contract instead of the generic
+Nginx edge domain commands.
+
+- Capability: `webrtc.kamailio.manage`
+- Job type: `webrtc_edge`
+- Command: `webrtc.edge.sync`
+- Local command: `[webrtc_edge].sync_command`
+
+The API assigns or auto-discovers the Agent for a `voip_webrtc_server`, queues a
+`VoipWebRtcAgentJob`, and the Agent executes only the configured sync command.
+The sync command is expected to be the runtime script from
+`mnscloud-kamailio-webrtc`, which fetches the edge config from the API, renders
+Nginx/Kamailio files, validates both services, and reloads them locally.

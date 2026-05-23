@@ -25,6 +25,7 @@ type AgentConfig = {
   nginxEdgeReloadCommand: string;
   certbotCommand: string;
   certbotDefaultEmail: string;
+  webrtcEdgeSyncCommand: string;
   asteriskCli: string;
   freeswitchCli: string;
   asteriskAmiHost: string;
@@ -46,6 +47,7 @@ type LeaseJob = {
     | "cyber_security"
     | "nginx_edge"
     | "certbot"
+    | "webrtc_edge"
     | string
     | null;
   action?: "sync" | "delete" | string | null;
@@ -294,6 +296,12 @@ async function loadConfig(): Promise<AgentConfig> {
       "certbot",
     ),
     certbotDefaultEmail: getConfigValue(parsed, "certbot", "default_email", ""),
+    webrtcEdgeSyncCommand: getConfigValue(
+      parsed,
+      "webrtc_edge",
+      "sync_command",
+      "/opt/mnscloud/kamailio-webrtc/scripts/update-kamailio-webrtc.sh",
+    ),
     asteriskCli: getConfigValue(parsed, "commands", "asterisk_cli", "asterisk"),
     freeswitchCli: getConfigValue(
       parsed,
@@ -1493,6 +1501,64 @@ async function executeCertbotJob(
       "CERTBOT_COMMAND_FAILED",
       error instanceof Error ? error.message : String(error),
       "certbot",
+    );
+  }
+}
+
+async function executeWebRtcEdgeJob(
+  job: LeaseJob,
+  config: AgentConfig,
+  agentUUID: string,
+  agentToken: string,
+) {
+  const command = String(
+    job.commandType ?? job.payload?.command ?? job.payload?.["command"] ?? "",
+  );
+  try {
+    assertCapability(config, "webrtc.kamailio.manage");
+    if (command !== "webrtc.edge.sync") {
+      await failJob(
+        config,
+        job.jobUUID,
+        agentUUID,
+        agentToken,
+        "WEBRTC_EDGE_COMMAND_NOT_IMPLEMENTED",
+        `${command || "unknown"} is not implemented by this agent version.`,
+        "webrtc_edge",
+      );
+      return;
+    }
+    const result = await runConfiguredShell(
+      config.webrtcEdgeSyncCommand,
+      Math.max(config.commandTimeoutMs, 180_000),
+    );
+    await jsonRequest(
+      config,
+      `/agent/jobs/${job.jobUUID}/complete`,
+      agentToken,
+      agentUUID,
+      {
+        jobType: "webrtc_edge",
+        result: {
+          command,
+          stdout: result.stdout,
+          stderr: result.stderr,
+          serverUUID: payloadString(job.payload, "serverUUID"),
+          domainUUID: payloadString(job.payload, "domainUUID"),
+          domain: payloadString(job.payload, "domain"),
+        },
+      },
+    );
+    log("info", "WebRTC edge job completed.", { jobUUID: job.jobUUID });
+  } catch (error) {
+    await failJob(
+      config,
+      job.jobUUID,
+      agentUUID,
+      agentToken,
+      "WEBRTC_EDGE_COMMAND_FAILED",
+      error instanceof Error ? error.message : String(error),
+      "webrtc_edge",
     );
   }
 }
@@ -2958,6 +3024,8 @@ async function pollJobs(
       await executeNginxEdgeJob(job, config, agentUUID, agentToken);
     } else if (job.jobType === "certbot") {
       await executeCertbotJob(job, config, agentUUID, agentToken);
+    } else if (job.jobType === "webrtc_edge") {
+      await executeWebRtcEdgeJob(job, config, agentUUID, agentToken);
     } else {
       await uploadJob(job, config, agentUUID, agentToken);
     }

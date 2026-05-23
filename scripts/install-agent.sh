@@ -202,6 +202,11 @@ detect_capability() {
   command -v "$binary" >/dev/null 2>&1 && printf "true" || printf "false"
 }
 
+detect_executable_file() {
+  local path="$1"
+  [[ -x "$path" ]] && printf "true" || printf "false"
+}
+
 write_agent_config() {
   local config_file="$1" agent_name="$2" hostname="$3" api_base="$4"
   write_file "$config_file" "# MNSCloud Agent configuration
@@ -243,6 +248,9 @@ reload_command = systemctl reload nginx
 command = certbot
 default_email =
 
+[webrtc_edge]
+sync_command = /opt/mnscloud/kamailio-webrtc/scripts/update-kamailio-webrtc.sh
+
 [capabilities]
 linux.status = true
 linux.package.install = true
@@ -255,6 +263,7 @@ security.crowdsec.manage = true
 security.logs.read = true
 voip.asterisk.manage = $(detect_capability asterisk)
 voip.freeswitch.manage = $(detect_capability fs_cli)
+webrtc.kamailio.manage = $(detect_executable_file /opt/mnscloud/kamailio-webrtc/scripts/update-kamailio-webrtc.sh)
 docker.manage = $(detect_capability docker)
 shell.exec = false
 
