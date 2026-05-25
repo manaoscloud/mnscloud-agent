@@ -74,6 +74,43 @@ automatically. If the enrollment targets an existing Agent record, the API
 response wins and the installer replaces the local UUID with that canonical
 Agent UUID.
 
+## Local Uninstall
+
+Agent lifecycle scripts are intentionally symmetric:
+
+- `scripts/install-agent.sh`
+- `scripts/update-agent.sh`
+- `scripts/uninstall-agent.sh`
+
+Windows uses the same lifecycle naming with PowerShell scripts:
+
+- `scripts/install-agent-windows.ps1`
+- `scripts/update-agent-windows.ps1`
+- `scripts/uninstall-agent-windows.ps1`
+
+The Linux uninstaller removes the local systemd service, runtime files,
+configuration, state, and logs:
+
+```text
+/etc/systemd/system/mnscloud-agent.service
+/opt/mnscloud/agent
+/etc/mnscloud/agent
+/var/lib/mnscloud/agent
+/var/log/mnscloud/agent
+```
+
+The repository checkout is preserved by default so an operator can reinstall or
+inspect scripts after cleanup. Passing `--remove-repository` also removes
+`/opt/mnscloud/mnscloud-agent`.
+
+The Windows uninstaller removes the `MNSCloudAgent` service,
+`C:\Program Files\MNSCloud\Agent`, and
+`C:\ProgramData\MNSCloud\Agent`, including the local UUID and runtime token.
+
+Local uninstall does not delete the Agent record in the MNSCloud API. Operators
+must delete or deactivate that record in the App when the identity should no
+longer be used.
+
 ## Configuration
 
 Canonical Linux local file:

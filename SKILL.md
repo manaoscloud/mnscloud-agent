@@ -7,9 +7,11 @@ Use this contract when changing the `agent/` module.
 - Runtime: `main.ts`
 - Installer: `scripts/install-agent.sh`
 - Update command: `scripts/update-agent.sh`
+- Uninstall command: `scripts/uninstall-agent.sh`
 - Generated systemd unit: `mnscloud-agent.service`
 - Windows installer: `scripts/install-agent-windows.ps1`
 - Windows update command: `scripts/update-agent-windows.ps1`
+- Windows uninstall command: `scripts/uninstall-agent-windows.ps1`
 - Generated Windows service: `MNSCloudAgent`
 - Documentation: `agent.md`
 - API runtime: `mnscloud-api/routes/agentRoute.ts`,
@@ -33,6 +35,12 @@ Use this contract when changing the `agent/` module.
 
 Never create technology-specific names, routes, modes, or installers. This
 module contract is always generic.
+
+Lifecycle script names must stay symmetric:
+
+- `install-agent`
+- `update-agent`
+- `uninstall-agent`
 
 ## Language Policy
 
@@ -93,6 +101,7 @@ identity.
 - Windows Cyber Security must use CrowdSec for Windows plus the CrowdSec Windows
   Firewall remediation component.
 - Validate `scripts/install-agent.sh` with `bash -n`.
+- Validate `scripts/uninstall-agent.sh` with `bash -n`.
 - Validate PowerShell installers with PowerShell parser checks when PowerShell
   is available.
 - Validate `main.ts` with `deno check`.

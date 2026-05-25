@@ -13,6 +13,8 @@ capabilities declared in `agent.conf`, API assignments, and typed jobs.
 - Project directory: `agent/`
 - Linux installer: `scripts/install-agent.sh`
 - Windows installer: `scripts/install-agent-windows.ps1`
+- Linux uninstaller: `scripts/uninstall-agent.sh`
+- Windows uninstaller: `scripts/uninstall-agent-windows.ps1`
 - Linux service: `mnscloud-agent.service`
 - Windows service: `MNSCloudAgent`
 - Linux configuration: `/etc/mnscloud/agent/agent.conf`
@@ -152,6 +154,48 @@ sudo systemctl status mnscloud-agent.service --no-pager
 The installer does not automatically pull code on every run. Updates are
 explicit so production servers do not execute new public code unless the
 operator intentionally requests it.
+
+## Uninstalling
+
+Use the explicit uninstall command before moving a host to a different Agent
+record, replacing a server, or wiping local Agent credentials:
+
+```bash
+cd /opt/mnscloud/mnscloud-agent
+sudo bash scripts/uninstall-agent.sh
+```
+
+The Linux uninstaller stops and disables `mnscloud-agent.service`, removes the
+systemd unit, reloads systemd, and deletes:
+
+```text
+/opt/mnscloud/agent
+/etc/mnscloud/agent
+/var/lib/mnscloud/agent
+/var/log/mnscloud/agent
+```
+
+It preserves the repository checkout at `/opt/mnscloud/mnscloud-agent` by
+default so the operator can reinstall or inspect the scripts. To also remove
+the checkout, run:
+
+```bash
+sudo bash scripts/uninstall-agent.sh --remove-repository
+```
+
+Windows uninstall:
+
+```powershell
+.\scripts\uninstall-agent-windows.ps1
+```
+
+The Windows uninstaller stops and deletes `MNSCloudAgent`, removes the installed
+runtime under `C:\Program Files\MNSCloud\Agent`, and removes local Agent
+configuration, UUID, and token files under `C:\ProgramData\MNSCloud\Agent`.
+
+Uninstalling a host does not delete the Agent record in MNSCloud. Delete or
+deactivate the record in the application when that identity should no longer be
+used.
 
 ## Security
 
