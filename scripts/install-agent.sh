@@ -312,14 +312,14 @@ WantedBy=multi-user.target
 }
 
 activate_enrollment() {
-  local api_base="$1" agent_uuid="$2" install_label="$3" hostname="$4" token_file="$5"
+  local api_base="$1" agent_uuid="$2" install_label="$3" hostname="$4" token_file="$5" uuid_file="$6"
   [[ -n "${ENROLLMENT_TOKEN}" ]] || return 0
   if $DRY_RUN; then
     log DRY-RUN "consume agent enrollment token at ${api_base}/api/v1/agent/enroll"
     return 0
   fi
 
-  local payload_file response_file agent_token
+  local payload_file response_file agent_token activated_agent_uuid
   payload_file="$(mktemp)"
   response_file="$(mktemp)"
   TOKEN="${ENROLLMENT_TOKEN}" AGENT_UUID="${agent_uuid}" INSTALL_LABEL="${install_label}" AGENT_HOSTNAME="${hostname}" \
@@ -351,8 +351,18 @@ DENO
     console.log(payload?.data?.agentToken ?? "");
 DENO
 )"
+  activated_agent_uuid="$(deno run --allow-read="${response_file}" - "${response_file}" <<'DENO'
+    const payload = JSON.parse(await Deno.readTextFile(Deno.args[0]));
+    console.log(payload?.data?.agentUUID ?? "");
+DENO
+)"
   rm -f "${response_file}"
   [[ -n "${agent_token}" ]] || fail "Enrollment response did not include an Agent runtime token."
+
+  if [[ -n "${activated_agent_uuid}" ]]; then
+    write_file "${uuid_file}" "${activated_agent_uuid}"
+    run "chmod 0600 '${uuid_file}'"
+  fi
 
   write_file "${token_file}" "${agent_token}"
   run "chmod 0600 '${token_file}'"
@@ -392,7 +402,10 @@ main() {
 
   write_agent_config "$config_file" "$install_label" "$hostname" "$api_base"
   write_service_file "$service_file" "$install_dir" "$config_file"
-  activate_enrollment "$api_base" "$agent_uuid" "$install_label" "$hostname" "${data_dir}/agent.token"
+  activate_enrollment "$api_base" "$agent_uuid" "$install_label" "$hostname" "${data_dir}/agent.token" "${data_dir}/agent.uuid"
+  if [[ -f "${data_dir}/agent.uuid" ]]; then
+    agent_uuid="$(tr -d '[:space:]' < "${data_dir}/agent.uuid")"
+  fi
 
   run "chmod 0755 '${install_dir}' '${config_dir}'"
   run "chmod 0700 '${data_dir}' '${logs_dir}'"

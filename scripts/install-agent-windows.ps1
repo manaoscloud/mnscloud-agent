@@ -116,10 +116,14 @@ function Enroll-Agent {
 
   $response = Invoke-RestMethod -Method Post -Uri $endpoint -ContentType "application/json" -Body $payload
   $runtimeToken = $response.data.agentToken
+  $activatedUuid = $response.data.agentUUID
   if (-not $runtimeToken) {
     throw "Enrollment response did not include an agent runtime token."
   }
 
+  if ($activatedUuid) {
+    Set-Content -Path $UuidFile -Value $activatedUuid -Encoding ASCII -NoNewline
+  }
   Set-Content -Path $TokenFile -Value $runtimeToken -Encoding ASCII -NoNewline
 }
 

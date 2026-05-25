@@ -14,7 +14,8 @@ capabilities, and API assignments.
 2. The installer creates or reuses the local `agent.uuid`.
 3. The installer can consume a short-lived MNSCloud enrollment token.
 4. The API validates the enrollment, creates or activates the Agent identity,
-   and returns the runtime token directly to the installer.
+   and returns the canonical Agent UUID and runtime token directly to the
+   installer.
 5. The Agent sends heartbeat requests to `POST /api/v1/agent/heartbeat`.
 6. Heartbeat synchronizes host-declared capabilities.
 7. The API returns jobs through `POST /api/v1/agent/jobs/lease` according to
@@ -35,12 +36,15 @@ POST /api/v1/agent/enroll
 ```
 
 If the enrollment is valid, the API returns the runtime token only to the
-server-side installer. The installer writes it to
-`/var/lib/mnscloud/agent/agent.token` and starts the service. Enrollment
-creation and consumption are recorded as tenant and global activity logs by the
-API.
+server-side installer. When the enrollment was generated from an existing
+offline Agent, the API also returns that existing Agent UUID; the installer
+writes the canonical UUID to `/var/lib/mnscloud/agent/agent.uuid`, writes the
+token to `/var/lib/mnscloud/agent/agent.token`, and starts the service.
+Enrollment creation and consumption are recorded as tenant and global activity
+logs by the API.
 
-The generated command will look similar to this, but do not copy this example literally:
+The generated command will look similar to this, but do not copy this example
+literally:
 
 ```bash
 sudo bash scripts/install-agent.sh \
@@ -55,16 +59,20 @@ Operational flow:
 3. Run that command on the target server.
 4. Confirm the Agent appears online in the App.
 
-The MNSCloud App builds `--api-base` from the current browser origin. In production this should be
-the same public origin that serves `/api/v1`. In local development, do not use a `localhost` command
-on a remote server unless that server can actually reach that address.
+The MNSCloud App builds `--api-base` from the current browser origin. In
+production this should be the same public origin that serves `/api/v1`. In local
+development, do not use a `localhost` command on a remote server unless that
+server can actually reach that address.
 
-The Agent name shown in the MNSCloud App is the canonical name stored in the enrollment record. The
-installer's local label is reported separately as `installationName` and should not overwrite the
-App-side Agent name.
+The Agent name shown in the MNSCloud App is the canonical name stored in the
+enrollment record. The installer's local label is reported separately as
+`installationName` and should not overwrite the App-side Agent name.
 
-Do not register the local UUID manually for new installs. The installer sends the UUID while
-consuming the enrollment, and the API links the Agent automatically.
+Do not register the local UUID manually for new installs. The installer sends
+the UUID while consuming the enrollment, and the API links the Agent
+automatically. If the enrollment targets an existing Agent record, the API
+response wins and the installer replaces the local UUID with that canonical
+Agent UUID.
 
 ## Configuration
 
@@ -274,14 +282,16 @@ With a compatible assignment and capability, the Agent can:
 - sync recording uploads;
 - remove local recordings after confirmed upload;
 - sync offline media files;
-- report live SIP registrations from FreeSWITCH heartbeats for dashboard/runtime status;
+- report live SIP registrations from FreeSWITCH heartbeats for dashboard/runtime
+  status;
 - run typed local commands allowed by jobs;
 - use local AMI/ESL when configured, or local CLI as fallback.
 
-FreeSWITCH registration status is collected with `fs_cli -x "show registrations as json"` and sent
-as `pabxRegistrations` in the standard heartbeat. The API owns matching those rows to tenant PABX
-extensions and deciding whether a registration is current; the Agent only reports what the local
-runtime exposes.
+FreeSWITCH registration status is collected with
+`fs_cli -x "show registrations as json"` and sent as `pabxRegistrations` in the
+standard heartbeat. The API owns matching those rows to tenant PABX extensions
+and deciding whether a registration is current; the Agent only reports what the
+local runtime exposes.
 
 ## Cyber Security
 

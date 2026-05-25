@@ -58,6 +58,9 @@ identity.
 - Communication is outbound-only over HTTPS.
 - This repository is public by design and consumes the MNSCloud API contract.
 - The installer does not define tenant, resource, or function ownership.
+- Enrollment generated from an existing Agent must preserve that Agent as the
+  canonical identity. The installer may send a local UUID, but it must persist
+  the Agent UUID returned by the API response.
 - The Agent declares local capabilities; the API decides delivery by capability
   and assignment.
 - The Agent token lives at `/var/lib/mnscloud/agent/agent.token`.
