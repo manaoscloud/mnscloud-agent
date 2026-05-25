@@ -138,8 +138,11 @@ Windows update:
 
 The update command syncs the repository, reinstalls service files, preserves the
 existing Agent UUID/token, reuses the current API base URL and local install
-label from `/etc/mnscloud/agent/agent.conf`, then restarts
-`mnscloud-agent.service`.
+label from `/etc/mnscloud/agent/agent.conf`, validates the existing Agent
+identity against the MNSCloud API, then restarts `mnscloud-agent.service`. If
+the Agent was deleted or its token is no longer valid in MNSCloud, update stops
+before reactivating the local service. In that case, uninstall locally and
+generate a new install command from the application.
 
 Manual equivalent:
 
@@ -154,6 +157,12 @@ sudo systemctl status mnscloud-agent.service --no-pager
 The installer does not automatically pull code on every run. Updates are
 explicit so production servers do not execute new public code unless the
 operator intentionally requests it.
+
+When `install-agent.sh` or `update-agent.sh` runs without a new enrollment
+token, it must validate the existing local UUID/token with
+`POST /api/v1/agent/heartbeat` before installing or starting the service. This
+prevents a host from silently reusing an Agent identity that was deleted in the
+control plane.
 
 ## Uninstalling
 

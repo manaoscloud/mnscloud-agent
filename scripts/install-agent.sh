@@ -369,6 +369,41 @@ DENO
   ok "Agent enrollment consumed and local token saved."
 }
 
+validate_existing_identity() {
+  local api_base="$1" uuid_file="$2" token_file="$3" hostname="$4"
+  [[ -z "${ENROLLMENT_TOKEN}" ]] || return 0
+
+  if $DRY_RUN; then
+    log DRY-RUN "validate existing Agent identity at ${api_base}/api/v1/agent/heartbeat"
+    return 0
+  fi
+
+  if [[ ! -s "${uuid_file}" || ! -s "${token_file}" ]]; then
+    fail "Existing Agent UUID/token not found. Generate a new install command from MNSCloud and pass --enrollment-token."
+  fi
+
+  local agent_uuid agent_token response_file http_code
+  agent_uuid="$(tr -d '[:space:]' < "${uuid_file}")"
+  agent_token="$(tr -d '[:space:]' < "${token_file}")"
+  response_file="$(mktemp)"
+  info "Validating existing Agent identity with MNSCloud API."
+  http_code="$(curl -sS -o "${response_file}" -w "%{http_code}" \
+    -X POST "${api_base}/api/v1/agent/heartbeat" \
+    -H "Content-Type: application/json" \
+    -H "X-MNSCloud-Agent-UUID: ${agent_uuid}" \
+    -H "Authorization: Bearer ${agent_token}" \
+    --data-binary "{\"hostname\":\"${hostname}\",\"version\":\"1.0.0\",\"installerValidation\":true}")"
+
+  if [[ "${http_code}" != "200" ]]; then
+    warn "Agent identity validation failed with HTTP ${http_code}: $(tr '\n' ' ' < "${response_file}" | head -c 300)"
+    rm -f "${response_file}"
+    fail "Existing Agent identity is not valid in MNSCloud. Run scripts/uninstall-agent.sh and generate a new install command."
+  fi
+
+  rm -f "${response_file}"
+  ok "Existing Agent identity validated by MNSCloud API."
+}
+
 main() {
   local api_base agent_uuid install_label hostname existing_api_base existing_install_label
   local install_dir="/opt/mnscloud/agent"
@@ -387,6 +422,7 @@ main() {
   existing_install_label="$(read_config_value "$config_file" "agent" "name")"
   api_base="$(normalize_url "${API_BASE:-$(prompt_value "MNSCloud API base URL" "${existing_api_base:-$DEFAULT_API_BASE}")}")"
   install_label="${INSTALL_LABEL:-$(prompt_value "Local install label" "${existing_install_label:-$hostname}")}"
+  validate_existing_identity "$api_base" "${data_dir}/agent.uuid" "${data_dir}/agent.token" "$hostname"
 
   info "Preparing native mnscloud-agent..."
   run "mkdir -p '${install_dir}' '${config_dir}' '${data_dir}' '${logs_dir}' /var/lib/mnscloud/pabx/media-files /etc/nginx/mnscloud/theme-domains /var/www/certbot"
@@ -416,7 +452,11 @@ main() {
 
   ok "mnscloud-agent installed as native systemd service."
   info "Agent UUID: ${agent_uuid}"
-  info "Agent enrolled and runtime token stored at ${data_dir}/agent.token."
+  if [[ -n "${ENROLLMENT_TOKEN}" ]]; then
+    info "Agent enrolled and runtime token stored at ${data_dir}/agent.token."
+  else
+    info "Existing Agent identity validated with runtime token at ${data_dir}/agent.token."
+  fi
 }
 
 main "$@"

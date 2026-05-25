@@ -74,6 +74,19 @@ automatically. If the enrollment targets an existing Agent record, the API
 response wins and the installer replaces the local UUID with that canonical
 Agent UUID.
 
+When the installer or updater runs without a new enrollment token, it is not
+allowed to trust local files alone. It must validate the existing
+`agent.uuid`/`agent.token` pair with:
+
+```text
+POST /api/v1/agent/heartbeat
+```
+
+If the API rejects the identity, installation or update must fail before
+starting the local service. This protects deleted or deactivated Agent
+identities from being silently revived by a server that still has old local
+state.
+
 ## Local Uninstall
 
 Agent lifecycle scripts are intentionally symmetric:

@@ -127,6 +127,43 @@ function Enroll-Agent {
   Set-Content -Path $TokenFile -Value $runtimeToken -Encoding ASCII -NoNewline
 }
 
+function Test-AgentIdentity {
+  if ($EnrollmentToken) {
+    return
+  }
+  if ($DryRun) {
+    Write-Step "DRY-RUN: identity validation request skipped"
+    return
+  }
+  if (!(Test-Path $UuidFile) -or !(Test-Path $TokenFile)) {
+    throw "Existing Agent UUID/token not found. Generate a new install command from MNSCloud and pass -EnrollmentToken."
+  }
+
+  $uuid = (Get-Content $UuidFile -Raw).Trim()
+  $runtimeToken = (Get-Content $TokenFile -Raw).Trim()
+  $endpoint = "$DefaultApiBase/api/v1/agent/heartbeat"
+  $payload = @{
+    hostname = $env:COMPUTERNAME
+    version = "1.0.0"
+    installerValidation = $true
+  } | ConvertTo-Json -Depth 5
+
+  Write-Step "Validating existing Agent identity with MNSCloud API."
+  try {
+    Invoke-RestMethod `
+      -Method Post `
+      -Uri $endpoint `
+      -ContentType "application/json" `
+      -Headers @{
+        "X-MNSCloud-Agent-UUID" = $uuid
+        "Authorization" = "Bearer $runtimeToken"
+      } `
+      -Body $payload | Out-Null
+  } catch {
+    throw "Existing Agent identity is not valid in MNSCloud. Run scripts\uninstall-agent-windows.ps1 and generate a new install command."
+  }
+}
+
 function Install-Service([string]$DenoPath) {
   $runContent = @"
 `$env:MNSCLOUD_AGENT_CONFIG = "$ConfigFile"
@@ -153,6 +190,10 @@ if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdent
   throw "Run this installer from an elevated PowerShell session."
 }
 
+if (-not $EnrollmentToken) {
+  Test-AgentIdentity
+}
+
 Write-Step "Preparing directories"
 Invoke-Step {
   New-Item -ItemType Directory -Force -Path $InstallDir, $ConfigDir, "$($env:ProgramData)\MNSCloud\Recordings", "$($env:ProgramData)\MNSCloud\MediaFiles" | Out-Null
@@ -174,9 +215,14 @@ if (!(Test-Path $UuidFile)) {
 
 Write-AgentConfig -DenoPath $DenoPath
 Enroll-Agent
+Test-AgentIdentity
 Install-Service -DenoPath $DenoPath
 
 $uuid = if (Test-Path $UuidFile) { (Get-Content $UuidFile -Raw).Trim() } else { "<dry-run>" }
 Write-Step "mnscloud-agent installed as Windows service."
 Write-Step "Agent UUID: $uuid"
-Write-Step "Agent enrolled and service started."
+if ($EnrollmentToken) {
+  Write-Step "Agent enrolled and service started."
+} else {
+  Write-Step "Existing Agent identity validated and service started."
+}

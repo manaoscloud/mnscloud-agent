@@ -69,6 +69,10 @@ identity.
 - Enrollment generated from an existing Agent must preserve that Agent as the
   canonical identity. The installer may send a local UUID, but it must persist
   the Agent UUID returned by the API response.
+- Installer/update runs without a new enrollment token must validate the
+  existing local `agent.uuid` and `agent.token` against the API before
+  installing or starting the service. Deleted or invalid Agent identities must
+  fail closed and require local uninstall plus a new generated install command.
 - The Agent declares local capabilities; the API decides delivery by capability
   and assignment.
 - The Agent token lives at `/var/lib/mnscloud/agent/agent.token`.
