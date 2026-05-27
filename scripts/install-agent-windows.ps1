@@ -20,6 +20,38 @@ function Write-Step([string]$Message) {
   Write-Host "[install-agent-windows] $Message"
 }
 
+function Get-AgentVersion {
+  $versionPath = Join-Path $PSScriptRoot "..\VERSION"
+  if (Test-Path $versionPath) {
+    return (Get-Content $versionPath -Raw).Trim()
+  }
+  return "1.0.0"
+}
+
+function Get-AgentBuildRef {
+  try {
+    $ref = git -C (Join-Path $PSScriptRoot "..") rev-parse --short=12 HEAD 2>$null
+    if ($ref) { return $ref.Trim() }
+  } catch {}
+  return "unknown"
+}
+
+function Write-AgentBuildMetadata {
+  $version = Get-AgentVersion
+  $buildRef = Get-AgentBuildRef
+  $buildDate = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+  Invoke-Step {
+    Set-Content -Path (Join-Path $InstallDir "VERSION") -Value $version -Encoding ASCII
+    @{
+      version = $version
+      buildRef = $buildRef
+      buildDate = $buildDate
+      updateChannel = "stable"
+      sourceRepo = "manaoscloud/mnscloud-agent"
+    } | ConvertTo-Json | Set-Content -Path (Join-Path $InstallDir "build.json") -Encoding UTF8
+  }
+}
+
 function Invoke-Step([scriptblock]$Block) {
   if ($DryRun) {
     Write-Step "DRY-RUN: $Block"
@@ -53,7 +85,8 @@ function Write-AgentConfig([string]$DenoPath) {
 name = $AgentInstallLabel
 hostname = $env:COMPUTERNAME
 api_base = $DefaultApiBase
-version = 1.0.0
+version = $(Get-AgentVersion)
+update_channel = stable
 poll_interval_ms = 15000
 heartbeat_interval_ms = 60000
 
@@ -144,7 +177,9 @@ function Test-AgentIdentity {
   $endpoint = "$DefaultApiBase/api/v1/agent/heartbeat"
   $payload = @{
     hostname = $env:COMPUTERNAME
-    version = "1.0.0"
+    version = Get-AgentVersion
+    buildRef = Get-AgentBuildRef
+    updateChannel = "stable"
     installerValidation = $true
   } | ConvertTo-Json -Depth 5
 
@@ -207,6 +242,7 @@ Invoke-Step {
   Copy-Item -Path "$PSScriptRoot\..\main.ts" -Destination "$InstallDir\main.ts" -Force
   Copy-Item -Path "$PSScriptRoot\..\deno.jsonc" -Destination "$InstallDir\deno.jsonc" -Force
 }
+Write-AgentBuildMetadata
 
 if (!(Test-Path $UuidFile)) {
   Write-Step "Creating agent UUID"

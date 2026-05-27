@@ -144,6 +144,11 @@ the Agent was deleted or its token is no longer valid in MNSCloud, update stops
 before reactivating the local service. In that case, uninstall locally and
 generate a new install command from the application.
 
+Installed runtimes include `/opt/mnscloud/agent/VERSION` and
+`/opt/mnscloud/agent/build.json`. Heartbeats report the installed version,
+build reference, build date, and update channel so the MNSCloud application can
+show whether each server is running the current Agent release.
+
 Manual equivalent:
 
 ```bash

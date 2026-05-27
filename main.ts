@@ -4,6 +4,9 @@ type AgentConfig = {
   name: string;
   hostname: string;
   version: string;
+  buildRef: string;
+  buildDate: string;
+  updateChannel: string;
   pollIntervalMs: number;
   heartbeatIntervalMs: number;
   agentUUIDFile: string;
@@ -167,6 +170,7 @@ function getBoolean(
 
 async function loadConfig(): Promise<AgentConfig> {
   const parsed = parseIni(await Deno.readTextFile(CONFIG_PATH));
+  const build = await loadBuildMetadata(parsed);
   const defaultStateDir = IS_WINDOWS
     ? `${PROGRAM_DATA}\\MNSCloud\\Agent`
     : "/var/lib/mnscloud/agent";
@@ -186,7 +190,10 @@ async function loadConfig(): Promise<AgentConfig> {
     ),
     name: getConfigValue(parsed, "agent", "name", "mnscloud-agent"),
     hostname: getConfigValue(parsed, "agent", "hostname", "mnscloud-agent"),
-    version: getConfigValue(parsed, "agent", "version", "0.1.0"),
+    version: build.version,
+    buildRef: build.buildRef,
+    buildDate: build.buildDate,
+    updateChannel: build.updateChannel,
     pollIntervalMs: getNumber(parsed, "agent", "poll_interval_ms", 15_000),
     heartbeatIntervalMs: getNumber(
       parsed,
@@ -358,6 +365,43 @@ async function loadConfig(): Promise<AgentConfig> {
     ),
     commandTimeoutMs: getNumber(parsed, "commands", "timeout_ms", 15_000),
   };
+}
+
+async function loadBuildMetadata(parsed: IniConfig) {
+  const cwd = Deno.cwd();
+  const buildJson = await optionalRead(
+    `${cwd}${IS_WINDOWS ? "\\" : "/"}build.json`,
+  );
+  let build: Record<string, unknown> = {};
+  if (buildJson) {
+    try {
+      const parsedBuild = JSON.parse(buildJson);
+      if (parsedBuild && typeof parsedBuild === "object") {
+        build = parsedBuild as Record<string, unknown>;
+      }
+    } catch {
+      build = {};
+    }
+  }
+  const versionFile = await optionalRead(
+    `${cwd}${IS_WINDOWS ? "\\" : "/"}VERSION`,
+  );
+  const version =
+    typeof build["version"] === "string" && build["version"].trim()
+      ? build["version"].trim()
+      : versionFile?.trim() ||
+        getConfigValue(parsed, "agent", "version", "0.1.0");
+  const buildRef = typeof build["buildRef"] === "string"
+    ? build["buildRef"].trim()
+    : "";
+  const buildDate = typeof build["buildDate"] === "string"
+    ? build["buildDate"].trim()
+    : "";
+  const updateChannel =
+    typeof build["updateChannel"] === "string" && build["updateChannel"].trim()
+      ? build["updateChannel"].trim()
+      : getConfigValue(parsed, "agent", "update_channel", "stable");
+  return { version, buildRef, buildDate, updateChannel };
 }
 
 function log(
@@ -603,6 +647,9 @@ async function heartbeat(
     name: config.name,
     hostname: config.hostname,
     version: config.version,
+    buildRef: config.buildRef,
+    buildDate: config.buildDate,
+    updateChannel: config.updateChannel,
     os: config.os,
     uptimeSeconds: Math.floor(performance.now() / 1000),
     recordingsRoots: config.recordingsRoots,

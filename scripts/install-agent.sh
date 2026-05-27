@@ -212,8 +212,40 @@ detect_executable_file() {
   [[ -x "$path" ]] && printf "true" || printf "false"
 }
 
+agent_version() {
+  if [[ -f "${AGENT_SOURCE_DIR}/VERSION" ]]; then
+    tr -d '[:space:]' < "${AGENT_SOURCE_DIR}/VERSION"
+  else
+    printf "1.0.0"
+  fi
+}
+
+agent_build_ref() {
+  git -C "${AGENT_SOURCE_DIR}" rev-parse --short=12 HEAD 2>/dev/null || printf "unknown"
+}
+
+write_agent_build_metadata() {
+  local install_dir="$1"
+  local version="$2"
+  local build_ref="$3"
+  local build_date
+  build_date="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  write_file "${install_dir}/VERSION" "${version}
+"
+  write_file "${install_dir}/build.json" "{
+  \"version\": \"${version}\",
+  \"buildRef\": \"${build_ref}\",
+  \"buildDate\": \"${build_date}\",
+  \"updateChannel\": \"stable\",
+  \"sourceRepo\": \"manaoscloud/mnscloud-agent\"
+}
+"
+}
+
 write_agent_config() {
   local config_file="$1" install_label="$2" hostname="$3" api_base="$4"
+  local version
+  version="$(agent_version)"
   write_file "$config_file" "# MNSCloud Agent configuration
 # Managed by agent/scripts/install-agent.sh
 
@@ -221,7 +253,8 @@ write_agent_config() {
 name = ${install_label}
 hostname = ${hostname}
 api_base = ${api_base}
-version = 1.0.0
+version = ${version}
+update_channel = stable
 poll_interval_ms = 15000
 heartbeat_interval_ms = 60000
 
@@ -382,9 +415,11 @@ validate_existing_identity() {
     fail "Existing Agent UUID/token not found. Generate a new install command from MNSCloud and pass --enrollment-token."
   fi
 
-  local agent_uuid agent_token response_file http_code
+  local agent_uuid agent_token response_file http_code version build_ref
   agent_uuid="$(tr -d '[:space:]' < "${uuid_file}")"
   agent_token="$(tr -d '[:space:]' < "${token_file}")"
+  version="$(agent_version)"
+  build_ref="$(agent_build_ref)"
   response_file="$(mktemp)"
   info "Validating existing Agent identity with MNSCloud API."
   http_code="$(curl -sS -o "${response_file}" -w "%{http_code}" \
@@ -392,7 +427,7 @@ validate_existing_identity() {
     -H "Content-Type: application/json" \
     -H "X-MNSCloud-Agent-UUID: ${agent_uuid}" \
     -H "Authorization: Bearer ${agent_token}" \
-    --data-binary "{\"hostname\":\"${hostname}\",\"version\":\"1.0.0\",\"installerValidation\":true}")"
+    --data-binary "{\"hostname\":\"${hostname}\",\"version\":\"${version}\",\"buildRef\":\"${build_ref}\",\"updateChannel\":\"stable\",\"installerValidation\":true}")"
 
   if [[ "${http_code}" != "200" ]]; then
     warn "Agent identity validation failed with HTTP ${http_code}: $(tr '\n' ' ' < "${response_file}" | head -c 300)"
@@ -445,12 +480,14 @@ sync_installed_capabilities() {
   payload_file="$(mktemp)"
   response_file="$(mktemp)"
 
-  HOSTNAME_VALUE="${hostname}" CAPABILITIES_JSON="${capabilities_json}" deno run \
-    --allow-env=HOSTNAME_VALUE,CAPABILITIES_JSON - <<'DENO' > "${payload_file}"
+  HOSTNAME_VALUE="${hostname}" CAPABILITIES_JSON="${capabilities_json}" AGENT_VERSION="$(agent_version)" AGENT_BUILD_REF="$(agent_build_ref)" deno run \
+    --allow-env=HOSTNAME_VALUE,CAPABILITIES_JSON,AGENT_VERSION,AGENT_BUILD_REF - <<'DENO' > "${payload_file}"
 const capabilities = JSON.parse(Deno.env.get("CAPABILITIES_JSON") ?? "[]");
 console.log(JSON.stringify({
   hostname: Deno.env.get("HOSTNAME_VALUE") ?? "",
-  version: "1.0.0",
+  version: Deno.env.get("AGENT_VERSION") ?? "1.0.0",
+  buildRef: Deno.env.get("AGENT_BUILD_REF") ?? "",
+  updateChannel: "stable",
   installerValidation: true,
   capabilities,
 }));
@@ -499,6 +536,7 @@ main() {
   run "mkdir -p '${install_dir}' '${config_dir}' '${data_dir}' '${logs_dir}' /var/lib/mnscloud/pabx/media-files /etc/nginx/mnscloud/theme-domains /var/www/certbot"
   run "cp '${AGENT_SOURCE_DIR}/main.ts' '${install_dir}/main.ts'"
   run "cp '${AGENT_SOURCE_DIR}/deno.jsonc' '${install_dir}/deno.jsonc'"
+  write_agent_build_metadata "$install_dir" "$(agent_version)" "$(agent_build_ref)"
 
   if [[ -f "${data_dir}/agent.uuid" ]]; then
     agent_uuid="$(tr -d '[:space:]' < "${data_dir}/agent.uuid")"
