@@ -1845,9 +1845,16 @@ async function writeCrowdSecProfileAcquisition(services: unknown[]) {
 
 function crowdSecCollectionInstallCommand(collection: string) {
   const quotedCollection = shellQuote(collection);
-  const verifyCollection =
-    `cscli collections list | grep -F ${quotedCollection} | grep -Eqi 'enabled|tainted'`;
-  return `${verifyCollection} || (cscli collections install ${quotedCollection} && ${verifyCollection})`;
+  return [
+    "set -eu",
+    "command -v jq >/dev/null 2>&1",
+    `cscli collections install ${quotedCollection} --force`,
+    `inspect="$(cscli collections inspect ${quotedCollection} -o json)"`,
+    `printf '%s\\n' "$inspect" | jq -r '.parsers[]?' | while IFS= read -r item; do if [ -n "$item" ]; then cscli parsers inspect "$item" -o json | jq -e '.installed == true and (.tainted | not)' >/dev/null 2>&1 || cscli parsers install "$item" --force; fi; done`,
+    `printf '%s\\n' "$inspect" | jq -r '.scenarios[]?' | while IFS= read -r item; do if [ -n "$item" ]; then cscli scenarios inspect "$item" -o json | jq -e '.installed == true and (.tainted | not)' >/dev/null 2>&1 || cscli scenarios install "$item" --force; fi; done`,
+    `cscli collections install ${quotedCollection} --force`,
+    `cscli collections inspect ${quotedCollection} -o json | jq -e '.installed == true and (.tainted | not)' >/dev/null`,
+  ].join("\n");
 }
 
 type LinuxPackageFamily = "debian" | "rhel" | "unsupported";
@@ -2385,8 +2392,8 @@ async function installCyberSecurityStack(
       await runStep(
         90,
         `Install CrowdSec collection ${collection}`,
-        `${crowdSecCollectionInstallCommand(collection)} || true`,
-        true,
+        crowdSecCollectionInstallCommand(collection),
+        false,
         60_000,
       ),
     );
