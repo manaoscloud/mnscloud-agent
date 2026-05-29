@@ -362,6 +362,19 @@ Implemented cyber security jobs:
   bouncer package. It also installs the default CrowdSec collections
   `crowdsecurity/linux` and `crowdsecurity/sshd`, unless a job payload supplies
   a different `collections` array.
+- `cyber.security.profile.apply`: installs the selected CrowdSec collections,
+  writes MNSCloud-managed log acquisition, validates local policy artifacts with
+  `crowdsec -t`, and reloads CrowdSec. The Linux agent translates profile
+  `mode` and `level` into local CrowdSec policy files instead of editing Hub
+  content directly:
+  - `mode=monitor` writes a selected-service profile with no decisions and
+    `on_success: break`.
+  - `mode=enforce` writes a selected-service ban profile using
+    `defaultDecisionDuration`.
+  - `level=strict` writes additional MNSCloud scenarios for Asterisk and
+    FreeSWITCH slow SIP enumeration/bruteforce detection.
+  - `basic`, `balanced`, and unsupported services rely on the official
+    CrowdSec Hub collections without extra local scenarios.
 
 The Linux install job is intentionally conservative. It does not flush existing
 firewall rules, does not open inbound ports, and configures the CrowdSec

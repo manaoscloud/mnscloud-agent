@@ -1846,6 +1846,261 @@ function stringArrayFromUnknown(value: unknown) {
     .filter((item) => item);
 }
 
+type CrowdSecPolicyArtifact = {
+  path: string;
+  content: string | null;
+};
+
+type CrowdSecPolicyService = {
+  slug: string;
+  name: string;
+};
+
+function crowdSecPolicyMode(value: unknown) {
+  return typeof value === "string" && value.trim().toLowerCase() === "enforce"
+    ? "enforce"
+    : "monitor";
+}
+
+function crowdSecPolicyLevel(value: unknown) {
+  const level = typeof value === "string" ? value.trim().toLowerCase() : "";
+  return ["basic", "balanced", "strict", "custom"].includes(level)
+    ? level
+    : "balanced";
+}
+
+function crowdSecDecisionDuration(value: unknown) {
+  const duration = typeof value === "string" ? value.trim() : "";
+  return /^[1-9][0-9]*(s|m|h)$/.test(duration) ? duration : "4h";
+}
+
+function crowdSecPolicyServices(services: unknown[]) {
+  return services.flatMap((service): CrowdSecPolicyService[] => {
+    if (!service || typeof service !== "object") return [];
+    const record = service as Record<string, unknown>;
+    const slug = typeof record["slug"] === "string"
+      ? record["slug"].trim().toLowerCase()
+      : "";
+    const nameValue = record["name"];
+    const name = typeof nameValue === "string" && nameValue.trim()
+      ? nameValue.trim()
+      : slug;
+    if (!slug || !/^[a-z0-9_-]+$/.test(slug)) return [];
+    return [{ slug, name }];
+  });
+}
+
+function crowdSecScenarioContainsFilter(services: CrowdSecPolicyService[]) {
+  const supported = services
+    .map((service) => service.slug)
+    .filter((slug) =>
+      ["asterisk", "freeswitch", "ssh", "nginx", "apache"].includes(slug)
+    );
+  const unique = [...new Set(supported)];
+  if (unique.length === 0) return "";
+  return unique.map((slug) => `Alert.GetScenario() contains "${slug}"`).join(
+    " || ",
+  );
+}
+
+function crowdSecLocalProfileContent(
+  services: CrowdSecPolicyService[],
+  mode: string,
+  duration: string,
+) {
+  const scenarioFilter = crowdSecScenarioContainsFilter(services);
+  if (!scenarioFilter) return null;
+  const filter =
+    `Alert.Remediation == true && Alert.GetScope() == "Ip" && (${scenarioFilter})`;
+  const lines = [
+    "# Managed by MNSCloud Agent. Do not edit manually.",
+    "name: mnscloud_selected_services_remediation",
+    "filters:",
+    ` - ${JSON.stringify(filter)}`,
+  ];
+  if (mode === "enforce") {
+    lines.push(
+      "decisions:",
+      " - type: ban",
+      `   duration: ${duration}`,
+    );
+  } else {
+    lines.push("decisions: []");
+  }
+  lines.push("on_success: break", "");
+  return lines.join("\n");
+}
+
+function crowdSecStrictScenarioContent(services: CrowdSecPolicyService[]) {
+  const slugs = new Set(services.map((service) => service.slug));
+  const documents: string[] = [];
+  if (slugs.has("freeswitch")) {
+    documents.push([
+      "type: leaky",
+      "name: mnscloud/freeswitch-user-enumeration-strict",
+      'description: "MNSCloud strict FreeSWITCH user enumeration detection"',
+      "filter: \"evt.Meta.service == 'freeswitch' && evt.Meta.sub_type == 'user_enumeration'\"",
+      'leakspeed: "1m"',
+      "capacity: 8",
+      "groupby: evt.Meta.source_ip",
+      'blackhole: "10m"',
+      "labels:",
+      "  service: freeswitch",
+      "  confidence: 3",
+      "  spoofable: 0",
+      "  classification:",
+      "    - attack.T1589",
+      '  behavior: "generic:bruteforce"',
+      '  label: "MNSCloud Strict FreeSWITCH User Enumeration"',
+      "  remediation: true",
+    ].join("\n"));
+    documents.push([
+      "type: leaky",
+      "name: mnscloud/freeswitch-auth-bruteforce-strict",
+      'description: "MNSCloud strict FreeSWITCH authentication bruteforce detection"',
+      "filter: \"evt.Meta.service == 'freeswitch' && evt.Meta.sub_type == 'auth_failure'\"",
+      'leakspeed: "1m"',
+      "capacity: 8",
+      "groupby: evt.Meta.source_ip",
+      'blackhole: "10m"',
+      "labels:",
+      "  service: freeswitch",
+      "  confidence: 3",
+      "  spoofable: 0",
+      "  classification:",
+      "    - attack.T1110",
+      '  behavior: "generic:bruteforce"',
+      '  label: "MNSCloud Strict FreeSWITCH Bruteforce"',
+      "  remediation: true",
+    ].join("\n"));
+  }
+  if (slugs.has("asterisk")) {
+    documents.push([
+      "type: leaky",
+      "name: mnscloud/asterisk-auth-bruteforce-strict",
+      'description: "MNSCloud strict Asterisk authentication bruteforce detection"',
+      "filter: \"evt.Meta.service == 'asterisk' && evt.Meta.log_type == 'asterisk_failed_auth'\"",
+      'leakspeed: "1m"',
+      "capacity: 5",
+      "groupby: evt.Meta.source_ip",
+      'blackhole: "10m"',
+      "labels:",
+      "  service: asterisk",
+      "  confidence: 3",
+      "  spoofable: 0",
+      "  classification:",
+      "    - attack.T1110",
+      '  behavior: "generic:bruteforce"',
+      '  label: "MNSCloud Strict Asterisk Bruteforce"',
+      "  remediation: true",
+    ].join("\n"));
+    documents.push([
+      "type: leaky",
+      "name: mnscloud/asterisk-user-enumeration-strict",
+      'description: "MNSCloud strict Asterisk user enumeration detection"',
+      "filter: \"evt.Meta.service == 'asterisk' && evt.Meta.log_type == 'asterisk_user_enum'\"",
+      'leakspeed: "1m"',
+      "capacity: 5",
+      "groupby: evt.Meta.source_ip",
+      'blackhole: "10m"',
+      "labels:",
+      "  service: asterisk",
+      "  confidence: 3",
+      "  spoofable: 0",
+      "  classification:",
+      "    - attack.T1589",
+      '  behavior: "generic:bruteforce"',
+      '  label: "MNSCloud Strict Asterisk User Enumeration"',
+      "  remediation: true",
+    ].join("\n"));
+  }
+  if (documents.length === 0) return null;
+  return [
+    "# Managed by MNSCloud Agent. Do not edit manually.",
+    documents.join("\n---\n"),
+    "",
+  ].join("\n");
+}
+
+function crowdSecPolicyArtifacts(
+  services: CrowdSecPolicyService[],
+  mode: string,
+  level: string,
+  duration: string,
+): CrowdSecPolicyArtifact[] {
+  return [
+    {
+      path: "/etc/crowdsec/profiles.yaml.local",
+      content: crowdSecLocalProfileContent(services, mode, duration),
+    },
+    {
+      path: "/etc/crowdsec/scenarios/mnscloud-profile.yaml",
+      content: level === "strict"
+        ? crowdSecStrictScenarioContent(services)
+        : null,
+    },
+  ];
+}
+
+async function readOptionalTextFile(path: string) {
+  try {
+    return await Deno.readTextFile(path);
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) return null;
+    throw error;
+  }
+}
+
+async function restoreCrowdSecPolicyArtifacts(
+  backups: Map<string, string | null>,
+) {
+  for (const [path, content] of backups) {
+    if (content === null) {
+      await Deno.remove(path).catch((error) => {
+        if (!(error instanceof Deno.errors.NotFound)) throw error;
+      });
+      continue;
+    }
+    await ensureParentDirectory(path);
+    await Deno.writeTextFile(path, content);
+    await Deno.chmod(path, 0o644).catch(() => undefined);
+  }
+}
+
+async function writeCrowdSecPolicyArtifacts(
+  artifacts: CrowdSecPolicyArtifact[],
+) {
+  const backups = new Map<string, string | null>();
+  for (const artifact of artifacts) {
+    backups.set(artifact.path, await readOptionalTextFile(artifact.path));
+  }
+  try {
+    for (const artifact of artifacts) {
+      if (artifact.content === null) {
+        await Deno.remove(artifact.path).catch((error) => {
+          if (!(error instanceof Deno.errors.NotFound)) throw error;
+        });
+        continue;
+      }
+      await ensureParentDirectory(artifact.path);
+      await Deno.writeTextFile(artifact.path, artifact.content);
+      await Deno.chmod(artifact.path, 0o644).catch(() => undefined);
+    }
+    const validation = await runLocalCommand("crowdsec", ["-t"], 45_000);
+    if (validation.code !== 0) {
+      throw new Error(
+        `CrowdSec policy validation failed: ${
+          validation.stderr || validation.stdout || "unknown error"
+        }`,
+      );
+    }
+  } catch (error) {
+    await restoreCrowdSecPolicyArtifacts(backups);
+    throw error;
+  }
+  return artifacts.map((artifact) => artifact.path);
+}
+
 function crowdSecAcquisitionType(slug: string) {
   const map: Record<string, string> = {
     apache: "apache2",
@@ -2750,9 +3005,18 @@ async function applyCyberSecurityProfile(
   const profileName = typeof payload?.["profileName"] === "string"
     ? payload["profileName"]
     : "Security profile";
+  const bouncerEnabled = payload?.["bouncerEnabled"] !== false;
+  const mode = bouncerEnabled
+    ? crowdSecPolicyMode(payload?.["mode"])
+    : "monitor";
+  const level = crowdSecPolicyLevel(payload?.["level"]);
+  const decisionDuration = crowdSecDecisionDuration(
+    payload?.["defaultDecisionDuration"],
+  );
   const services = Array.isArray(payload?.["services"])
     ? payload["services"]
     : [];
+  const policyServices = crowdSecPolicyServices(services);
   const collections = payloadStringArray(payload, "collections", []);
   const serviceLabels = services.map((service) => {
     if (!service || typeof service !== "object") return "";
@@ -2793,7 +3057,7 @@ async function applyCyberSecurityProfile(
     "Validate CrowdSec profile prerequisites",
     10,
     `Preparing to apply ${profileName}.`,
-    { services, collections },
+    { services, collections, mode, level, decisionDuration, bouncerEnabled },
   );
   const cscli = await commandAvailable("cscli");
   if (!cscli) {
@@ -2808,7 +3072,7 @@ async function applyCyberSecurityProfile(
     serviceLabels.length
       ? `Selected services: ${serviceLabels.join(", ")}.`
       : "No services selected in this profile.",
-    { services, collections },
+    { services, collections, mode, level, decisionDuration, bouncerEnabled },
   );
 
   await progress(
@@ -2826,6 +3090,22 @@ async function applyCyberSecurityProfile(
       }.`
       : "No log acquisition paths configured for selected services.",
     { acquisition },
+  );
+
+  await progress(
+    "Configure CrowdSec policy",
+    28,
+    `Applying ${mode} mode with ${level} level.`,
+    { mode, level, decisionDuration, bouncerEnabled, services: policyServices },
+  );
+  const policyArtifacts = await writeCrowdSecPolicyArtifacts(
+    crowdSecPolicyArtifacts(policyServices, mode, level, decisionDuration),
+  );
+  await progress(
+    "Configure CrowdSec policy",
+    28,
+    "CrowdSec policy artifacts validated.",
+    { mode, level, decisionDuration, bouncerEnabled, policyArtifacts },
   );
 
   steps.push(await ensureCrowdSecHubReady(Math.min(timeoutMs, 75_000)));
@@ -2852,16 +3132,16 @@ async function applyCyberSecurityProfile(
       installedCollections.push(collection);
       percent += Math.max(5, Math.floor(45 / Math.max(collections.length, 1)));
     }
-    steps.push(
-      await runStep(
-        90,
-        "Reload CrowdSec",
-        "timeout 45s systemctl reload crowdsec || timeout 75s systemctl restart crowdsec",
-        false,
-        90_000,
-      ),
-    );
   }
+  steps.push(
+    await runStep(
+      90,
+      "Reload CrowdSec",
+      "timeout 45s systemctl reload crowdsec || timeout 75s systemctl restart crowdsec",
+      false,
+      90_000,
+    ),
+  );
 
   await progress(
     "Collect protection status",
@@ -2877,9 +3157,13 @@ async function applyCyberSecurityProfile(
       ? "protected"
       : status.protectionStatus,
     profileName,
-    mode: payload?.["mode"] ?? "monitor",
+    mode,
+    level,
+    decisionDuration,
+    bouncerEnabled,
     services,
     installedCollections,
+    policyArtifacts,
     steps,
   };
 }
