@@ -11,18 +11,20 @@ if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdent
   throw "Run this updater from an elevated PowerShell session."
 }
 
+if (-not $Ref) {
+  throw "-Ref is required. Production Agent updates must use a release tag/ref."
+}
+
 if (Test-Path (Join-Path $RepoDir ".git")) {
   Push-Location $RepoDir
   try {
-    if ($Ref) {
-      git fetch --all --tags --prune
-      git -c advice.detachedHead=false checkout $Ref
-    } else {
-      git pull --ff-only
-    }
+    git fetch --all --tags --prune
+    git -c advice.detachedHead=false checkout $Ref
   } finally {
     Pop-Location
   }
+} else {
+  throw "Repository metadata not found; cannot check out $Ref."
 }
 
 & "$PSScriptRoot\install-agent-windows.ps1" -ApiBase $ApiBase -Name $Name

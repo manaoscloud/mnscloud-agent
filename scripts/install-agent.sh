@@ -316,8 +316,6 @@ write_agent_build_metadata() {
 
 write_agent_config() {
   local config_file="$1" install_label="$2" hostname="$3" api_base="$4"
-  local version
-  version="$(agent_version)"
   write_file "$config_file" "# MNSCloud Agent configuration
 # Managed by agent/scripts/install-agent.sh
 
@@ -325,8 +323,6 @@ write_agent_config() {
 name = ${install_label}
 hostname = ${hostname}
 api_base = ${api_base}
-version = ${version}
-update_channel = stable
 poll_interval_ms = 15000
 heartbeat_interval_ms = 60000
 cyber_security_sync_interval_ms = 60000

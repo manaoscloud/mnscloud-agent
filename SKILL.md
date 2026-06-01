@@ -98,7 +98,7 @@ identity.
 - The application/API should compare heartbeat `version` and `updateChannel`
   against the manifest channel and return the target `ref`.
 - `scripts/update-agent.sh --ref vX.Y.Z` is the production update command.
-- Omitted `--ref` is development-only and fast-forwards the current checkout.
+- Omitted `--ref` must fail closed; implicit branch updates are not supported.
 - Do not mark a new release as available until `main` and the matching Git tag
   have been pushed.
 - Prefer GitHub Releases for operator visibility after the tag is pushed.

@@ -85,8 +85,6 @@ function Write-AgentConfig([string]$DenoPath) {
 name = $AgentInstallLabel
 hostname = $env:COMPUTERNAME
 api_base = $DefaultApiBase
-version = $(Get-AgentVersion)
-update_channel = stable
 poll_interval_ms = 15000
 heartbeat_interval_ms = 60000
 cyber_security_sync_interval_ms = 60000

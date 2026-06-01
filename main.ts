@@ -171,7 +171,7 @@ function getBoolean(
 
 async function loadConfig(): Promise<AgentConfig> {
   const parsed = parseIni(await Deno.readTextFile(CONFIG_PATH));
-  const build = await loadBuildMetadata(parsed);
+  const build = await loadBuildMetadata();
   const defaultStateDir = IS_WINDOWS
     ? `${PROGRAM_DATA}\\MNSCloud\\Agent`
     : "/var/lib/mnscloud/agent";
@@ -374,7 +374,7 @@ async function loadConfig(): Promise<AgentConfig> {
   };
 }
 
-async function loadBuildMetadata(parsed: IniConfig) {
+async function loadBuildMetadata() {
   const cwd = Deno.cwd();
   const buildJson = await optionalRead(
     `${cwd}${IS_WINDOWS ? "\\" : "/"}build.json`,
@@ -396,8 +396,7 @@ async function loadBuildMetadata(parsed: IniConfig) {
   const version =
     typeof build["version"] === "string" && build["version"].trim()
       ? build["version"].trim()
-      : versionFile?.trim() ||
-        getConfigValue(parsed, "agent", "version", "0.1.0");
+      : versionFile?.trim() || "0.0.0";
   const buildRef = typeof build["buildRef"] === "string"
     ? build["buildRef"].trim()
     : "";
@@ -407,7 +406,7 @@ async function loadBuildMetadata(parsed: IniConfig) {
   const updateChannel =
     typeof build["updateChannel"] === "string" && build["updateChannel"].trim()
       ? build["updateChannel"].trim()
-      : getConfigValue(parsed, "agent", "update_channel", "stable");
+      : "stable";
   return { version, buildRef, buildDate, updateChannel };
 }
 

@@ -9,11 +9,10 @@ TARGET_REF=""
 
 usage() {
   cat <<'EOF'
-Usage: sudo bash scripts/update-agent.sh [--ref vX.Y.Z] [install-agent options]
+Usage: sudo bash scripts/update-agent.sh --ref vX.Y.Z [install-agent options]
 
-When --ref is provided, the updater checks out that explicit Git tag/ref before
-reinstalling the agent. Production updates should use the ref returned by the
-MNSCloud API from the release manifest, not an implicit branch.
+The updater requires an explicit Git tag/ref before reinstalling the agent.
+Use the ref returned by the MNSCloud API from the release manifest.
 EOF
 }
 
@@ -52,21 +51,17 @@ parse_update_args() {
 }
 
 sync_repository() {
+  [[ -n "$TARGET_REF" ]] || fail "--ref is required. Production Agent updates must use a release tag/ref."
+
   if [[ ! -d "${REPO_DIR}/.git" ]]; then
-    info "Repository metadata not found; skipping source sync."
-    return 0
+    fail "Repository metadata not found; cannot check out ${TARGET_REF}."
   fi
 
   cd "$REPO_DIR"
 
-  if [[ -n "$TARGET_REF" ]]; then
-    info "Fetching Git tags and checking out ${TARGET_REF}."
-    git fetch --all --tags --prune
-    git -c advice.detachedHead=false checkout "$TARGET_REF"
-  else
-    info "No --ref provided; updating the current checkout with git pull --ff-only."
-    git pull --ff-only
-  fi
+  info "Fetching Git tags and checking out ${TARGET_REF}."
+  git fetch --all --tags --prune
+  git -c advice.detachedHead=false checkout "$TARGET_REF"
 }
 
 main() {

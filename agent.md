@@ -145,8 +145,6 @@ Linux format:
 name = server-01-local-label
 hostname = server-01.local
 api_base = https://dev1.publichost.cloud
-version = 0.1.0
-update_channel = stable
 poll_interval_ms = 15000
 heartbeat_interval_ms = 60000
 cyber_security_sync_interval_ms = 60000

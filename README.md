@@ -134,13 +134,13 @@ newer homologated Agent version:
 
 ```bash
 cd /opt/mnscloud/mnscloud-agent
-sudo bash scripts/update-agent.sh --ref v1.0.3
+sudo bash scripts/update-agent.sh --ref vX.Y.Z
 ```
 
 Windows update:
 
 ```powershell
-.\scripts\update-agent-windows.ps1 -Ref "v1.0.3"
+.\scripts\update-agent-windows.ps1 -Ref "vX.Y.Z"
 ```
 
 The update command fetches tags, checks out the explicit ref, reinstalls service
@@ -151,9 +151,8 @@ existing Agent identity against the MNSCloud API, then restarts
 valid in MNSCloud, update stops before reactivating the local service. In that
 case, uninstall locally and generate a new install command from the application.
 
-If `--ref` is omitted, the updater only fast-forwards the current checkout. That
-mode is useful for development hosts but should not be used by production
-automation.
+The update command fails closed when the release ref is omitted. Production and
+automation must never update from an implicit branch checkout.
 
 Installed runtimes include `/opt/mnscloud/agent/VERSION` and
 `/opt/mnscloud/agent/build.json`. Heartbeats report the installed version,
@@ -178,7 +177,7 @@ The Agent heartbeat already reports:
 
 ```json
 {
-  "version": "1.0.3",
+  "version": "1.0.4",
   "buildRef": "abc123def456",
   "buildDate": "2026-05-31T19:36:01Z",
   "updateChannel": "stable"
@@ -191,11 +190,11 @@ Expected API-side response shape for update checks:
 {
   "upToDate": false,
   "currentVersion": "1.0.1",
-  "targetVersion": "1.0.3",
-  "targetRef": "v1.0.3",
+  "targetVersion": "1.0.4",
+  "targetRef": "v1.0.4",
   "channel": "stable",
   "autoUpdate": false,
-  "updateCommand": "sudo bash scripts/update-agent.sh --ref v1.0.3"
+  "updateCommand": "sudo bash scripts/update-agent.sh --ref v1.0.4"
 }
 ```
 
@@ -221,7 +220,7 @@ Manual equivalent:
 ```bash
 cd /opt/mnscloud/mnscloud-agent
 git fetch --all --tags --prune
-git checkout v1.0.3
+git checkout vX.Y.Z
 sudo bash scripts/install-agent.sh
 sudo systemctl restart mnscloud-agent.service
 sudo systemctl status mnscloud-agent.service --no-pager
