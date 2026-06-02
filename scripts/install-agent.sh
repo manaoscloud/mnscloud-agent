@@ -338,7 +338,7 @@ mounts =
 delete_after_upload = true
 
 [media_files]
-roots = /var/lib/mnscloud/pabx/media-files
+roots = /var/lib/mnscloud/files
 mounts =
 
 [nginx_edge]
@@ -606,7 +606,7 @@ main() {
   validate_existing_identity "$api_base" "${data_dir}/agent.uuid" "${data_dir}/agent.token" "$hostname"
 
   info "Preparing native mnscloud-agent..."
-  run "mkdir -p '${install_dir}' '${config_dir}' '${data_dir}' '${logs_dir}' /var/lib/mnscloud/pabx/media-files /etc/nginx/mnscloud/theme-domains /var/www/certbot"
+  run "mkdir -p '${install_dir}' '${config_dir}' '${data_dir}' '${logs_dir}' /var/lib/mnscloud/files /etc/nginx/mnscloud/theme-domains /var/www/certbot"
   run "cp '${AGENT_SOURCE_DIR}/main.ts' '${install_dir}/main.ts'"
   run "cp '${AGENT_SOURCE_DIR}/deno.jsonc' '${install_dir}/deno.jsonc'"
   write_agent_build_metadata "$install_dir" "$(agent_version)" "$(agent_build_ref)"

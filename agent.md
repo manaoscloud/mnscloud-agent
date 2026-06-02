@@ -190,7 +190,7 @@ mounts =
 delete_after_upload = true
 
 [media_files]
-roots = /var/lib/mnscloud/pabx/media-files
+roots = /var/lib/mnscloud/files
 mounts =
 
 [nginx_edge]

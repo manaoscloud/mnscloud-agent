@@ -188,7 +188,7 @@ async function loadConfig(): Promise<AgentConfig> {
     : "/var/lib/freeswitch/recordings,/var/spool/asterisk/monitor";
   const defaultMediaRoots = IS_WINDOWS
     ? `${PROGRAM_DATA}\\MNSCloud\\MediaFiles`
-    : "/var/lib/mnscloud/pabx/media-files";
+    : "/var/lib/mnscloud/files";
   return {
     os: AGENT_OS,
     apiBase: getConfigValue(
