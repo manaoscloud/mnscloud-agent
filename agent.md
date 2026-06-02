@@ -90,15 +90,16 @@ state.
 ## Remote Updates
 
 Remote updates are release-tag based. The control plane must never ask the
-Agent to update from an implicit branch. The API queues an `agent_update` job
-with a `targetRef` such as `v1.0.6`; the Agent validates the ref format and
-schedules `scripts/update-agent.sh --ref <targetRef>` outside the currently
-running process.
+Agent to update from an implicit branch. The API queues a `runtime_update` job
+with a `product`, capability, and `targetRef` such as `v1.0.6`; the Agent
+validates the ref format and runs only the local updater mapped to that
+declared product.
 
 Remote update support starts at Agent `1.0.6`. Hosts running an older Agent must
 be manually updated once before the App can queue remote updates for them. The
-remote job reports that the update was scheduled, while final success is
-confirmed by the next heartbeat reporting the target version and build ref.
+Agent self-updates are scheduled outside the currently running process, while
+API/App runtime updates are executed synchronously by the host Agent. Final
+state is confirmed by the next heartbeat or runtime validation.
 
 ## Local Uninstall
 
@@ -171,6 +172,9 @@ linux.status = true
 linux.package.install = true
 linux.service.manage = true
 linux.file.manage = true
+mnscloud.agent.update = true
+mnscloud.api.update = false
+mnscloud.app.update = false
 security.nftables.manage = true
 security.crowdsec.manage = true
 security.logs.read = true
@@ -309,6 +313,9 @@ Capabilities are stable, granular names. Examples:
 - `linux.package.install`
 - `linux.service.manage`
 - `linux.file.manage`
+- `mnscloud.agent.update`
+- `mnscloud.api.update`
+- `mnscloud.app.update`
 - `security.nftables.manage`
 - `security.crowdsec.manage`
 - `security.logs.read`

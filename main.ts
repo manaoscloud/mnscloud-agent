@@ -53,7 +53,7 @@ type LeaseJob = {
     | "nginx_edge"
     | "certbot"
     | "webrtc_edge"
-    | "agent_update"
+    | "runtime_update"
     | string
     | null;
   action?: "sync" | "delete" | string | null;
@@ -70,6 +70,8 @@ type LeaseJob = {
   targetVersion?: string | null;
   targetRef?: string | null;
   targetBuildRef?: string | null;
+  product?: string | null;
+  capability?: string | null;
   channel?: string | null;
 };
 
@@ -1788,10 +1790,52 @@ async function executeWebRtcEdgeJob(
   }
 }
 
-function assertSafeAgentUpdateRef(ref: string) {
+function assertSafeRuntimeUpdateRef(ref: string) {
   if (!/^v[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$/.test(ref)) {
-    throw new Error(`Invalid Agent update ref: ${ref || "empty"}`);
+    throw new Error(`Invalid runtime update ref: ${ref || "empty"}`);
   }
+}
+
+function runtimeUpdateTarget(product: string) {
+  const targets: Record<
+    string,
+    {
+      label: string;
+      capability: string;
+      repoDir?: string;
+      command?: (targetRef: string) => string[];
+    }
+  > = {
+    "mnscloud-agent": {
+      label: "Agent",
+      capability: "mnscloud.agent.update",
+    },
+    "mnscloud-api": {
+      label: "API",
+      capability: "mnscloud.api.update",
+      repoDir: "/opt/mnscloud/mnscloud-api",
+      command: (targetRef) => [
+        "bash",
+        "scripts/update-api.sh",
+        "--ref",
+        targetRef,
+        "--env",
+        "/etc/mnscloud/api.env",
+      ],
+    },
+    "mnscloud-app": {
+      label: "App",
+      capability: "mnscloud.app.update",
+      repoDir: "/opt/mnscloud/mnscloud-app",
+      command: (targetRef) => [
+        "bash",
+        "scripts/update-nginx-runtime.sh",
+        "--ref",
+        targetRef,
+      ],
+    },
+  };
+  return targets[product] ?? null;
 }
 
 async function scheduleLinuxAgentUpdate(
@@ -1840,35 +1884,70 @@ async function scheduleWindowsAgentUpdate(
   return await runPowerShell(script, Math.max(config.commandTimeoutMs, 15_000));
 }
 
-async function executeMonitoringAgentUpdateJob(
+async function executeRuntimeUpdateJob(
   job: LeaseJob,
   config: AgentConfig,
   agentUUID: string,
   agentToken: string,
 ) {
+  const product = String(
+    job.product ?? job.payload?.product ?? "mnscloud-agent",
+  );
+  const target = runtimeUpdateTarget(product);
   const targetRef = String(job.targetRef ?? job.payload?.targetRef ?? "");
   const targetVersion = String(
     job.targetVersion ?? job.payload?.targetVersion ?? "",
   );
   try {
-    assertSafeAgentUpdateRef(targetRef);
+    if (!target) {
+      throw new Error(`Unsupported runtime update product: ${product}.`);
+    }
+    if (!config.capabilities[target.capability]) {
+      throw new Error(`Agent capability is disabled: ${target.capability}.`);
+    }
+    assertSafeRuntimeUpdateRef(targetRef);
     if (targetVersion && targetRef !== `v${targetVersion}`) {
-      throw new Error("Agent update target version/ref mismatch.");
+      throw new Error("Runtime update target version/ref mismatch.");
     }
     await reportJobProgress(
       config,
       job.jobUUID,
       agentUUID,
       agentToken,
-      "scheduling",
-      40,
-      `Scheduling Agent update to ${targetRef}.`,
-      { jobType: "agent_update", targetRef, targetVersion },
+      product === "mnscloud-agent" ? "scheduling" : "running",
+      product === "mnscloud-agent" ? 40 : 20,
+      `${target.label} update to ${targetRef} started.`,
+      { jobType: "runtime_update", product, targetRef, targetVersion },
     );
 
-    const result = IS_WINDOWS
-      ? await scheduleWindowsAgentUpdate(config, targetRef)
-      : await scheduleLinuxAgentUpdate(config, job.jobUUID, targetRef);
+    let scheduled = false;
+    let result: { code: number; stdout: string; stderr: string };
+    if (product === "mnscloud-agent") {
+      scheduled = true;
+      result = IS_WINDOWS
+        ? await scheduleWindowsAgentUpdate(config, targetRef)
+        : await scheduleLinuxAgentUpdate(config, job.jobUUID, targetRef);
+    } else {
+      if (IS_WINDOWS) {
+        throw new Error(
+          `${target.label} runtime update is supported on Linux agents only.`,
+        );
+      }
+      if (!target.repoDir || !target.command) {
+        throw new Error(
+          `${target.label} runtime update command is not configured.`,
+        );
+      }
+      const command = `cd ${shellQuote(target.repoDir)} && ${
+        target.command(targetRef).map(shellQuote).join(" ")
+      }`;
+      result = await runLocalCommand(
+        "/bin/bash",
+        ["-lc", command],
+        Math.max(config.commandTimeoutMs, 600_000),
+      );
+    }
+
     if (result.code !== 0) {
       throw new Error(
         result.stderr || result.stdout || `Updater exited with ${result.code}.`,
@@ -1881,27 +1960,33 @@ async function executeMonitoringAgentUpdateJob(
       agentToken,
       agentUUID,
       {
-        jobType: "agent_update",
+        jobType: "runtime_update",
         result: {
+          product,
           targetRef,
           targetVersion,
           targetBuildRef: job.targetBuildRef ?? null,
-          scheduled: true,
+          scheduled,
           stdout: result.stdout,
           stderr: result.stderr,
         },
       },
     );
-    log("info", "Agent update scheduled.", { jobUUID: job.jobUUID, targetRef });
+    log("info", "Runtime update completed.", {
+      jobUUID: job.jobUUID,
+      product,
+      targetRef,
+      scheduled,
+    });
   } catch (error) {
     await failJob(
       config,
       job.jobUUID,
       agentUUID,
       agentToken,
-      "AGENT_UPDATE_SCHEDULE_FAILED",
+      "RUNTIME_UPDATE_FAILED",
       error instanceof Error ? error.message : String(error),
-      "agent_update",
+      "runtime_update",
     );
   }
 }
@@ -3706,8 +3791,8 @@ async function pollJobs(
       await executeCertbotJob(job, config, agentUUID, agentToken);
     } else if (job.jobType === "webrtc_edge") {
       await executeWebRtcEdgeJob(job, config, agentUUID, agentToken);
-    } else if (job.jobType === "agent_update") {
-      await executeMonitoringAgentUpdateJob(job, config, agentUUID, agentToken);
+    } else if (job.jobType === "runtime_update") {
+      await executeRuntimeUpdateJob(job, config, agentUUID, agentToken);
     } else {
       await uploadJob(job, config, agentUUID, agentToken);
     }

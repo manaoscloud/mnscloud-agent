@@ -112,6 +112,7 @@ windows.file.manage = true
 windows.eventlog.read = true
 windows.firewall.manage = true
 windows.defender.status = true
+mnscloud.agent.update = true
 security.crowdsec.manage = true
 security.windows.firewall.manage = true
 security.windows.eventlog.read = true
