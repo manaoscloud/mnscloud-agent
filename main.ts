@@ -75,6 +75,14 @@ type LeaseJob = {
   channel?: string | null;
 };
 
+type RuntimeVersionReport = {
+  product: string;
+  version: string;
+  buildRef: string;
+  buildDate: string;
+  updateChannel: string;
+};
+
 type PabxRegistrationReport = {
   engine: "freeswitch";
   username: string;
@@ -390,8 +398,7 @@ async function loadConfig(): Promise<AgentConfig> {
   };
 }
 
-async function loadBuildMetadata() {
-  const cwd = Deno.cwd();
+async function loadBuildMetadata(cwd = Deno.cwd()) {
   const buildJson = await optionalRead(
     `${cwd}${IS_WINDOWS ? "\\" : "/"}build.json`,
   );
@@ -424,6 +431,43 @@ async function loadBuildMetadata() {
       ? build["updateChannel"].trim()
       : "stable";
   return { version, buildRef, buildDate, updateChannel };
+}
+
+async function runtimeVersionReport(
+  product: string,
+  capability: string,
+  repoDir: string,
+  config: AgentConfig,
+) {
+  if (!config.capabilities[capability]) return null;
+  const build = await loadBuildMetadata(repoDir);
+  if (!build.version || build.version === "0.0.0") return null;
+  return {
+    product,
+    version: build.version,
+    buildRef: build.buildRef,
+    buildDate: build.buildDate,
+    updateChannel: build.updateChannel,
+  } satisfies RuntimeVersionReport;
+}
+
+async function collectRuntimeVersions(config: AgentConfig) {
+  if (config.os !== "linux") return [];
+  const reports = await Promise.all([
+    runtimeVersionReport(
+      "mnscloud-api",
+      "mnscloud.api.update",
+      "/opt/mnscloud/mnscloud-api",
+      config,
+    ),
+    runtimeVersionReport(
+      "mnscloud-app",
+      "mnscloud.app.update",
+      "/opt/mnscloud/mnscloud-app",
+      config,
+    ),
+  ]);
+  return reports.filter((item): item is RuntimeVersionReport => item !== null);
 }
 
 function log(
@@ -666,6 +710,7 @@ async function heartbeat(
   cyberSecurityStatus?: Record<string, unknown> | null,
 ) {
   const pabxRegistrations = await collectPabxRegistrations(config);
+  const runtimeVersions = await collectRuntimeVersions(config);
   await jsonRequest(config, "/agent/heartbeat", agentToken, agentUUID, {
     name: config.name,
     hostname: config.hostname,
@@ -679,6 +724,7 @@ async function heartbeat(
     recordingMounts: config.recordingMounts,
     mediaRoots: config.mediaRoots,
     mediaMounts: config.mediaMounts,
+    runtimeVersions,
     capabilities: config.capabilities,
     pabxRegistrations,
     cyberSecurityStatus: cyberSecurityStatus ?? undefined,

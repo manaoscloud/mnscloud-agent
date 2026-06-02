@@ -187,9 +187,22 @@ The Agent heartbeat already reports:
   "version": "1.0.4",
   "buildRef": "abc123def456",
   "buildDate": "2026-05-31T19:36:01Z",
-  "updateChannel": "stable"
+  "updateChannel": "stable",
+  "runtimeVersions": [
+    {
+      "product": "mnscloud-api",
+      "version": "1.3.9",
+      "buildRef": "2cf55f72d63d",
+      "buildDate": "2026-06-02T20:41:00Z",
+      "updateChannel": "stable"
+    }
+  ]
 }
 ```
+
+`runtimeVersions` is host inventory, not an update request. The API uses it to
+compare API/App installed versions against the latest published releases before
+showing an update action.
 
 Expected API-side response shape for update checks:
 

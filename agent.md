@@ -101,6 +101,12 @@ Agent self-updates are scheduled outside the currently running process, while
 API/App runtime updates are executed synchronously by the host Agent. Final
 state is confirmed by the next heartbeat or runtime validation.
 
+When the host declares `mnscloud.api.update` or `mnscloud.app.update`, the
+heartbeat also reports the installed local runtime version for that product.
+The API compares this host inventory against the published release manifest
+before exposing an update action in the App. A release alone is not enough to
+mark API/App as updateable.
+
 ## Local Uninstall
 
 Agent lifecycle scripts are intentionally symmetric:
