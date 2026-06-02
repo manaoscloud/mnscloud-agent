@@ -4,69 +4,33 @@ set -Eeuo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-usage() {
-  cat <<'EOF'
-Usage: scripts/release-agent.sh --version X.Y.Z [--channel stable|candidate]
-
-Maintainer helper for preparing a homologated mnscloud-agent release:
-  - updates VERSION
-  - updates releases/manifest.json channel metadata
-  - validates shell scripts and TypeScript
-  - commits the release metadata
-  - creates Git tag vX.Y.Z
-
-Push with:
-  git push origin main
-  git push origin vX.Y.Z
-  gh release create vX.Y.Z --title "mnscloud-agent vX.Y.Z" --notes-file RELEASE_NOTES.md
-EOF
+find_runtime_kit() {
+  local candidate
+  for candidate in \
+    "${MNSCLOUD_RUNTIME_KIT_DIR:-}" \
+    "${ROOT_DIR}/../mnscloud-runtime-kit" \
+    "/opt/mnscloud/runtime-kit" \
+    "/opt/mnscloud/repos/mnscloud-runtime-kit"; do
+    [[ -n "$candidate" && -r "${candidate}/lib/release.sh" ]] || continue
+    printf '%s\n' "$candidate"
+    return 0
+  done
+  return 1
 }
 
-VERSION_VALUE=""
-CHANNEL="stable"
-
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --version) VERSION_VALUE="${2:-}"; shift 2 ;;
-    --channel) CHANNEL="${2:-}"; shift 2 ;;
-    --help|-h) usage; exit 0 ;;
-    *) printf 'unknown argument: %s\n' "$1" >&2; usage; exit 1 ;;
-  esac
-done
-
-[[ "$VERSION_VALUE" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]] ||
-  { printf 'ERROR: --version must be semantic, got: %s\n' "$VERSION_VALUE" >&2; exit 1; }
-[[ "$CHANNEL" == "stable" || "$CHANNEL" == "candidate" ]] ||
-  { printf 'ERROR: unsupported channel: %s\n' "$CHANNEL" >&2; exit 1; }
-
 cd "$ROOT_DIR"
-[[ -z "$(git status --short)" ]] ||
-  { printf 'ERROR: working tree must be clean before preparing a release\n' >&2; exit 1; }
+RUNTIME_KIT_DIR="$(find_runtime_kit)" || {
+  printf '[mnscloud-agent] ERROR: mnscloud-runtime-kit lib/release.sh not found\n' >&2
+  exit 1
+}
 
-printf '%s\n' "$VERSION_VALUE" > VERSION
+# shellcheck source=/opt/mnscloud/runtime-kit/lib/release.sh
+source "${RUNTIME_KIT_DIR}/lib/release.sh"
 
-RELEASE_VERSION="$VERSION_VALUE" RELEASE_CHANNEL="$CHANNEL" deno run \
-  --allow-read=releases/manifest.json \
-  --allow-write=releases/manifest.json \
-  --allow-env=RELEASE_VERSION,RELEASE_CHANNEL \
-  - <<'DENO'
-const path = 'releases/manifest.json';
-const version = Deno.env.get('RELEASE_VERSION')!;
-const channel = Deno.env.get('RELEASE_CHANNEL')!;
-const manifest = JSON.parse(await Deno.readTextFile(path));
-manifest.channels[channel] = {
-  ...manifest.channels[channel],
-  version,
-  ref: `v${version}`,
-  releasedAt: new Date().toISOString(),
-};
-await Deno.writeTextFile(path, `${JSON.stringify(manifest, null, 2)}\n`);
-DENO
-
-bash -n scripts/*.sh
-deno check main.ts
-
-git add VERSION releases/manifest.json
-git commit -m "Release mnscloud-agent v${VERSION_VALUE}"
-git tag "v${VERSION_VALUE}"
-printf 'Prepared mnscloud-agent v%s on channel %s\n' "$VERSION_VALUE" "$CHANNEL"
+mrtk_release_prepare \
+  --product mnscloud-agent \
+  --repository manaoscloud/mnscloud-agent \
+  --minimum-version 1.0.0 \
+  --validate 'bash -n scripts/*.sh' \
+  --validate 'deno check main.ts' \
+  "$@"

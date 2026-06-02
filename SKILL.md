@@ -103,9 +103,12 @@ identity.
   `targetRef` and are supported only by Agent `1.0.6` or newer.
 - Agents older than `1.0.6` require one manual tagged update before remote
   updates can be offered in the App.
-- Do not mark a new release as available until `main` and the matching Git tag
-  have been pushed.
-- Prefer GitHub Releases for operator visibility after the tag is pushed.
+- Do not mark a new release as available until `main`, the matching Git tag, and
+  the GitHub Release have been pushed.
+- Use `scripts/release-agent.sh --version X.Y.Z --channel stable --publish` for
+  operator-visible releases.
+- Do not copy release logic into this repository; the release script must use
+  the shared `mnscloud-runtime-kit/lib/release.sh` helper.
 
 ## Checklist
 

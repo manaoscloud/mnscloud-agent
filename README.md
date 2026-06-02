@@ -211,16 +211,13 @@ Only maintainers should publish production Agent releases:
 
 ```bash
 cd /opt/mnscloud/mnscloud-agent
-scripts/release-agent.sh --version 1.0.4 --channel stable
-git push origin main
-git push origin v1.0.4
-gh release create v1.0.4 --title "mnscloud-agent v1.0.4" --generate-notes
+scripts/release-agent.sh --version 1.0.4 --channel stable --publish
 ```
 
 AI coding agents must follow the same flow: update code, validate, update
-`VERSION` and `releases/manifest.json`, commit, tag, push `main`, and push the
-tag. Do not tell the application that a version is available until the tag has
-been pushed.
+`VERSION` and `releases/manifest.json`, commit, tag, push `main`, push the tag,
+and create the GitHub Release. Do not tell the application that a version is
+available until the tag and GitHub Release have been pushed.
 
 Manual equivalent:
 
