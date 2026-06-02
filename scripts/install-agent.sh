@@ -293,7 +293,7 @@ agent_version() {
 }
 
 agent_build_ref() {
-  git -C "${AGENT_SOURCE_DIR}" rev-parse --short=12 HEAD 2>/dev/null || printf "unknown"
+  git -C "${AGENT_SOURCE_DIR}" rev-parse --short=12 'HEAD^{commit}' 2>/dev/null || printf "unknown"
 }
 
 write_agent_build_metadata() {
