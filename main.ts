@@ -2000,6 +2000,15 @@ async function executeRuntimeUpdateJob(
       );
     }
 
+    const installedRuntime = product !== "mnscloud-agent" && target.repoDir
+      ? await runtimeVersionReport(
+        product,
+        target.capability,
+        target.repoDir,
+        config,
+      )
+      : null;
+
     await jsonRequest(
       config,
       `/agent/jobs/${job.jobUUID}/complete`,
@@ -2012,12 +2021,16 @@ async function executeRuntimeUpdateJob(
           targetRef,
           targetVersion,
           targetBuildRef: job.targetBuildRef ?? null,
+          installedRuntime,
           scheduled,
           stdout: result.stdout,
           stderr: result.stderr,
         },
       },
     );
+    if (product !== "mnscloud-agent") {
+      await heartbeat(config, agentUUID, agentToken);
+    }
     log("info", "Runtime update completed.", {
       jobUUID: job.jobUUID,
       product,
