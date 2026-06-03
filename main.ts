@@ -2837,6 +2837,7 @@ async function configureCrowdSecFirewallBouncer(
 
 async function configureCrowdSecLocalApi(timeoutMs: number) {
   const configPath = "/etc/crowdsec/config.yaml";
+  const credentialsPath = "/etc/crowdsec/local_api_credentials.yaml";
   const configExists = await runLocalCommand("test", ["-f", configPath], 3000);
   if (configExists.code !== 0) {
     return {
@@ -2863,6 +2864,17 @@ async function configureCrowdSecLocalApi(timeoutMs: number) {
     }; else printf '\\napi:\\n  server:\\n    listen_uri: ${CROWDSEC_LOCAL_API_LISTEN_URI}\\n' >> ${
       shellQuote(configPath)
     }; fi`,
+    `if test -f ${shellQuote(credentialsPath)}; then cp -a ${
+      shellQuote(credentialsPath)
+    } ${
+      shellQuote(`${credentialsPath}.mnscloud.bak`)
+    } 2>/dev/null || true; if grep -Eq '^[[:space:]]*url:' ${
+      shellQuote(credentialsPath)
+    }; then sed -i 's#^\\([[:space:]]*url:[[:space:]]*\\).*#\\1${CROWDSEC_LOCAL_API_URL}#' ${
+      shellQuote(credentialsPath)
+    }; else printf '\\nurl: ${CROWDSEC_LOCAL_API_URL}\\n' >> ${
+      shellQuote(credentialsPath)
+    }; fi; fi`,
     `grep -Eq '^[[:space:]]*listen_uri:[[:space:]]*${escapedListenUri}[[:space:]]*$' ${
       shellQuote(configPath)
     }`,
