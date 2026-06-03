@@ -863,10 +863,11 @@ async function uploadJob(
     return;
   }
 
+  const uploadBody = new Uint8Array(file).buffer;
   const response = await fetch(job.uploadUrl, {
     method: job.uploadMethod || "PUT",
     headers: job.uploadHeaders ?? {},
-    body: file,
+    body: uploadBody,
   });
   if (!response.ok) {
     await failJob(
