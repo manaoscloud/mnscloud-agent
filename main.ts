@@ -106,6 +106,8 @@ const CONFIG_PATH = Deno.env.get("MNSCLOUD_AGENT_CONFIG") ??
   (IS_WINDOWS
     ? `${PROGRAM_DATA}\\MNSCloud\\Agent\\agent.conf`
     : "/etc/mnscloud/agent/agent.conf");
+const CROWDSEC_LOCAL_API_LISTEN_URI = "127.0.0.1:7422";
+const CROWDSEC_LOCAL_API_URL = `http://${CROWDSEC_LOCAL_API_LISTEN_URI}/`;
 
 function parseList(value: string) {
   return value.split(",").map((item) => item.trim()).filter(Boolean);
@@ -2743,6 +2745,7 @@ async function resolveCrowdSecFirewallBouncerPackage(
 async function configureCrowdSecFirewallBouncer(
   timeoutMs: number,
   mode: "iptables" | "nftables",
+  apiUrl = CROWDSEC_LOCAL_API_URL,
 ) {
   const configPath = "/etc/crowdsec/bouncers/crowdsec-firewall-bouncer.yaml";
   const configExists = await runLocalCommand("test", ["-f", configPath], 3000);
@@ -2814,11 +2817,9 @@ async function configureCrowdSecFirewallBouncer(
     } 2>/dev/null || true`,
     `if grep -q '^api_url:' ${
       shellQuote(configPath)
-    }; then sed -i 's#^api_url:.*#api_url: http://127.0.0.1:8080/#' ${
+    }; then sed -i 's#^api_url:.*#api_url: ${apiUrl}#' ${
       shellQuote(configPath)
-    }; else printf '\\napi_url: http://127.0.0.1:8080/\\n' >> ${
-      shellQuote(configPath)
-    }; fi`,
+    }; else printf '\\napi_url: ${apiUrl}\\n' >> ${shellQuote(configPath)}; fi`,
     apiKeyScript,
     `if grep -q '^mode:' ${
       shellQuote(configPath)
@@ -2831,6 +2832,46 @@ async function configureCrowdSecFirewallBouncer(
     "Configure CrowdSec firewall bouncer",
     script,
     Math.min(timeoutMs, 60_000),
+  );
+}
+
+async function configureCrowdSecLocalApi(timeoutMs: number) {
+  const configPath = "/etc/crowdsec/config.yaml";
+  const configExists = await runLocalCommand("test", ["-f", configPath], 3000);
+  if (configExists.code !== 0) {
+    return {
+      label: "Configure CrowdSec local API",
+      code: 0,
+      stdout:
+        "CrowdSec configuration file not found; package defaults will be used.",
+      stderr: "",
+    };
+  }
+
+  const escapedListenUri = CROWDSEC_LOCAL_API_LISTEN_URI.replaceAll(
+    ".",
+    "\\.",
+  );
+  const script = [
+    `cp -a ${shellQuote(configPath)} ${
+      shellQuote(`${configPath}.mnscloud.bak`)
+    } 2>/dev/null || true`,
+    `if grep -Eq '^[[:space:]]*listen_uri:' ${
+      shellQuote(configPath)
+    }; then sed -i 's#^\\([[:space:]]*listen_uri:[[:space:]]*\\).*#\\1${CROWDSEC_LOCAL_API_LISTEN_URI}#' ${
+      shellQuote(configPath)
+    }; else printf '\\napi:\\n  server:\\n    listen_uri: ${CROWDSEC_LOCAL_API_LISTEN_URI}\\n' >> ${
+      shellQuote(configPath)
+    }; fi`,
+    `grep -Eq '^[[:space:]]*listen_uri:[[:space:]]*${escapedListenUri}[[:space:]]*$' ${
+      shellQuote(configPath)
+    }`,
+  ].join(" && ");
+
+  return await runInstallStep(
+    "Configure CrowdSec local API",
+    script,
+    Math.min(timeoutMs, 30_000),
   );
 }
 
@@ -2996,6 +3037,14 @@ async function installCyberSecurityStack(
       90_000,
     ),
   );
+  await progress(
+    "Configure CrowdSec local API",
+    70,
+    `Configuring CrowdSec Local API on ${CROWDSEC_LOCAL_API_LISTEN_URI}.`,
+  );
+  steps.push(
+    await configureCrowdSecLocalApi(Math.min(timeoutMs, 30_000)),
+  );
   steps.push(
     await runStep(
       74,
@@ -3019,6 +3068,7 @@ async function installCyberSecurityStack(
     await configureCrowdSecFirewallBouncer(
       Math.min(timeoutMs, 60_000),
       bouncerMode,
+      CROWDSEC_LOCAL_API_URL,
     ),
   );
   steps.push(await ensureCrowdSecHubReady(Math.min(timeoutMs, 75_000)));

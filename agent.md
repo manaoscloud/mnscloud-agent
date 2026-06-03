@@ -385,7 +385,10 @@ Implemented cyber security jobs:
   bouncer package when available; RHEL-compatible systems use the official RPM
   bouncer package. It also installs the default CrowdSec collections
   `crowdsecurity/linux` and `crowdsecurity/sshd`, unless a job payload supplies
-  a different `collections` array.
+  a different `collections` array. The Linux installer configures the CrowdSec
+  Local API on `127.0.0.1:7422` and points the firewall bouncer to the same
+  loopback endpoint to avoid conflicts with application services that already
+  use port `8080`.
 - `cyber.security.profile.apply`: installs the selected CrowdSec collections,
   writes MNSCloud-managed log acquisition, validates local policy artifacts with
   `crowdsec -t`, and reloads CrowdSec. The Linux agent translates profile
