@@ -220,19 +220,18 @@ Expected API-side response shape for update checks:
 
 ## Maintainer Release Flow
 
-Only maintainers should publish production Agent releases:
+Production Agent releases are published by GitHub Actions. Maintainers and AI
+coding agents should update code, validate, commit, and push to `main`; the
+repository `Auto Release` workflow increments the patch version, updates
+`VERSION` and `releases/manifest.json`, creates the release commit, tags it, and
+publishes the GitHub Release.
 
-```bash
-cd /opt/mnscloud/mnscloud-agent
-scripts/release-agent.sh --version 1.0.4 --channel stable --publish
-```
+The release is operator-visible only after the matching Git tag and GitHub
+Release exist on GitHub. The local `scripts/release-agent.sh` script remains the
+canonical release engine used by Actions and should be run manually only as a
+break-glass maintainer operation.
 
-AI coding agents must follow the same flow: update code, validate, update
-`VERSION` and `releases/manifest.json`, commit, tag, push `main`, push the tag,
-and create the GitHub Release. Do not tell the application that a version is
-available until the tag and GitHub Release have been pushed.
-
-Manual equivalent:
+Manual tagged update equivalent:
 
 ```bash
 cd /opt/mnscloud/mnscloud-agent

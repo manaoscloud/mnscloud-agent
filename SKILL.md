@@ -104,10 +104,14 @@ identity.
   Agent `1.0.6` or newer.
 - Agents older than `1.0.6` require one manual tagged update before remote
   updates can be offered in the App.
-- Do not mark a new release as available until `main`, the matching Git tag, and
-  the GitHub Release have been pushed.
-- Use `scripts/release-agent.sh --version X.Y.Z --channel stable --publish` for
-  operator-visible releases.
+- Operator-visible releases are published by the repository `Auto Release`
+  GitHub Actions workflow after validated changes are committed and pushed to
+  `main`.
+- Do not mark a new release as available until the matching release commit, Git
+  tag, and GitHub Release exist on GitHub.
+- `scripts/release-agent.sh --version X.Y.Z --channel stable --publish` is the
+  canonical release engine used by Actions and is reserved for break-glass
+  maintainer use.
 - Do not copy release logic into this repository; the release script must use
   the shared `mnscloud-runtime-kit/lib/release.sh` helper.
 
