@@ -2759,58 +2759,27 @@ async function configureCrowdSecFirewallBouncer(
     };
   }
 
-  const hasApiKey = await runLocalCommand(
+  const hostSuffix = await commandText(
+    "hostname -s 2>/dev/null || hostname",
+    "host",
+  );
+  const keyResult = await runLocalCommand(
     "sh",
     [
       "-lc",
-      `grep -Eq '^api_key:[[:space:]]*[A-Za-z0-9_-]+' ${
-        shellQuote(configPath)
-      }`,
+      `cscli bouncers add ${
+        shellQuote(`mnscloud-firewall-bouncer-${hostSuffix}-$(date +%s)`)
+      } -o raw`,
     ],
-    3000,
+    timeoutMs,
   );
-  let apiKey = "";
-  if (hasApiKey.code !== 0) {
-    const keyResult = await runLocalCommand(
-      "sh",
-      [
-        "-lc",
-        "cscli bouncers add mnscloud-firewall-bouncer -o raw 2>/dev/null || true",
-      ],
-      timeoutMs,
+  const apiKey = keyResult.stdout.trim();
+  if (keyResult.code !== 0 || !apiKey) {
+    throw new Error(
+      keyResult.stderr || "Unable to create CrowdSec bouncer API key.",
     );
-    apiKey = keyResult.stdout.trim();
-    if (!apiKey) {
-      const hostSuffix = await commandText(
-        "hostname -s 2>/dev/null || hostname",
-        "host",
-      );
-      const fallback = await runLocalCommand(
-        "sh",
-        [
-          "-lc",
-          `cscli bouncers add ${
-            shellQuote(`mnscloud-firewall-bouncer-${hostSuffix}`)
-          } -o raw`,
-        ],
-        timeoutMs,
-      );
-      if (fallback.code !== 0 || !fallback.stdout.trim()) {
-        throw new Error(
-          fallback.stderr || "Unable to create CrowdSec bouncer API key.",
-        );
-      }
-      apiKey = fallback.stdout.trim();
-    }
   }
 
-  const apiKeyScript = apiKey
-    ? `if grep -q '^api_key:' ${
-      shellQuote(configPath)
-    }; then sed -i 's#^api_key:.*#api_key: ${apiKey}#' ${
-      shellQuote(configPath)
-    }; else printf '\\napi_key: ${apiKey}\\n' >> ${shellQuote(configPath)}; fi`
-    : ":";
   const script = [
     `cp -a ${shellQuote(configPath)} ${
       shellQuote(`${configPath}.mnscloud.bak`)
@@ -2820,7 +2789,11 @@ async function configureCrowdSecFirewallBouncer(
     }; then sed -i 's#^api_url:.*#api_url: ${apiUrl}#' ${
       shellQuote(configPath)
     }; else printf '\\napi_url: ${apiUrl}\\n' >> ${shellQuote(configPath)}; fi`,
-    apiKeyScript,
+    `if grep -q '^api_key:' ${
+      shellQuote(configPath)
+    }; then sed -i 's#^api_key:.*#api_key: ${apiKey}#' ${
+      shellQuote(configPath)
+    }; else printf '\\napi_key: ${apiKey}\\n' >> ${shellQuote(configPath)}; fi`,
     `if grep -q '^mode:' ${
       shellQuote(configPath)
     }; then sed -i 's#^mode:.*#mode: ${mode}#' ${
