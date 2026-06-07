@@ -2892,6 +2892,26 @@ function crowdSecLocalApiReadyCommand() {
   ].join(" ");
 }
 
+function restartCrowdSecCommand() {
+  return [
+    "if command -v crowdsec >/dev/null 2>&1; then",
+    "  if ! crowdsec -t >/tmp/mnscloud-crowdsec-test.log 2>&1; then",
+    "    if grep -q 'mnscloud-profile.yaml\\|/etc/crowdsec/acquis.d/mnscloud-profile.yaml' /tmp/mnscloud-crowdsec-test.log 2>/dev/null; then",
+    "      mv /etc/crowdsec/acquis.d/mnscloud-profile.yaml /etc/crowdsec/acquis.d/mnscloud-profile.yaml.disabled.$(date +%s) 2>/dev/null || true",
+    "      crowdsec -t >/tmp/mnscloud-crowdsec-test.log 2>&1",
+    "    else",
+    "      cat /tmp/mnscloud-crowdsec-test.log >&2",
+    "      exit 1",
+    "    fi",
+    "  fi",
+    "fi",
+    "systemctl reset-failed crowdsec || true",
+    "timeout 75s systemctl restart crowdsec || true",
+    "systemctl is-active --quiet crowdsec",
+    crowdSecLocalApiReadyCommand(),
+  ].join("\n");
+}
+
 async function installCyberSecurityStack(
   config: AgentConfig,
   payload: Record<string, unknown> | null | undefined,
@@ -3105,19 +3125,7 @@ async function installCyberSecurityStack(
     await runStep(
       95,
       "Restart CrowdSec",
-      [
-        "if command -v crowdsec >/dev/null 2>&1; then",
-        "  crowdsec -t >/tmp/mnscloud-crowdsec-test.log 2>&1 || {",
-        "    if grep -q 'mnscloud-profile.yaml\\|/etc/crowdsec/acquis.d/mnscloud-profile.yaml' /tmp/mnscloud-crowdsec-test.log 2>/dev/null; then",
-        "      mv /etc/crowdsec/acquis.d/mnscloud-profile.yaml /etc/crowdsec/acquis.d/mnscloud-profile.yaml.disabled.$(date +%s) 2>/dev/null || true;",
-        "    fi;",
-        "  };",
-        "fi;",
-        "systemctl reset-failed crowdsec || true",
-        "timeout 75s systemctl restart crowdsec",
-        "systemctl is-active crowdsec",
-        crowdSecLocalApiReadyCommand(),
-      ].join(" && "),
+      restartCrowdSecCommand(),
       false,
       90_000,
     ),
