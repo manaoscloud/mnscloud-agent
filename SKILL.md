@@ -102,6 +102,12 @@ identity.
 - Remote App/API/Agent updates must queue `runtime_update` jobs with an explicit
   `product`, product capability, and `targetRef`; they are supported only by
   Agent `1.0.6` or newer.
+- App/API updates are product rollout operations owned by the API/control plane.
+  Browser UI must request the runtime product fleet and queue the product rollout;
+  it must not infer cluster membership or expose App/API update actions as
+  ordinary per-row agent buttons. The rollout may create one or many
+  `runtime_update` jobs depending on the eligible online agents reported in
+  `MonitoringAgentRuntime`.
 - Agents older than `1.0.6` require one manual tagged update before remote
   updates can be offered in the App.
 - Operator-visible releases are published by the repository `Auto Release`
