@@ -2760,25 +2760,37 @@ async function configureCrowdSecFirewallBouncer(
     };
   }
 
-  const hostSuffix = await commandText(
+  const hostSuffix = (await commandText(
     "hostname -s 2>/dev/null || hostname",
     "host",
+  )).replace(/[^a-zA-Z0-9_.-]/g, "-") || "host";
+  let apiKey = await commandText(
+    `awk -F: '/^api_key:/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2; exit}' ${
+      shellQuote(configPath)
+    }`,
   );
-  const keyResult = await runLocalCommand(
-    "sh",
-    [
-      "-lc",
-      `cscli bouncers add ${
-        shellQuote(`mnscloud-firewall-bouncer-${hostSuffix}-$(date +%s)`)
-      } -o raw`,
-    ],
-    timeoutMs,
-  );
-  const apiKey = keyResult.stdout.trim();
-  if (keyResult.code !== 0 || !apiKey) {
-    throw new Error(
-      keyResult.stderr || "Unable to create CrowdSec bouncer API key.",
+  if (!apiKey) {
+    const staleLiteralName =
+      `mnscloud-firewall-bouncer-${hostSuffix}-$(date +%s)`;
+    const bouncerName = `mnscloud-firewall-bouncer-${hostSuffix}-${Date.now()}`;
+    const keyResult = await runLocalCommand(
+      "sh",
+      [
+        "-lc",
+        `cscli bouncers delete ${
+          shellQuote(staleLiteralName)
+        } >/dev/null 2>&1 || true; cscli bouncers add ${
+          shellQuote(bouncerName)
+        } -o raw`,
+      ],
+      timeoutMs,
     );
+    apiKey = keyResult.stdout.trim();
+    if (keyResult.code !== 0 || !apiKey) {
+      throw new Error(
+        keyResult.stderr || "Unable to create CrowdSec bouncer API key.",
+      );
+    }
   }
 
   const script = [
