@@ -2764,14 +2764,20 @@ async function configureCrowdSecFirewallBouncer(
     "hostname -s 2>/dev/null || hostname",
     "host",
   )).replace(/[^a-zA-Z0-9_.-]/g, "-") || "host";
+  const staleLiteralName =
+    `mnscloud-firewall-bouncer-${hostSuffix}-$(date +%s)`;
+  const staleBouncer = await runLocalCommand("sh", [
+    "-lc",
+    `cscli bouncers list 2>/dev/null | grep -Fq ${
+      shellQuote(staleLiteralName)
+    }`,
+  ], Math.min(timeoutMs, 10_000));
   let apiKey = await commandText(
     `awk -F: '/^api_key:/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2; exit}' ${
       shellQuote(configPath)
     }`,
   );
-  if (!apiKey) {
-    const staleLiteralName =
-      `mnscloud-firewall-bouncer-${hostSuffix}-$(date +%s)`;
+  if (!apiKey || staleBouncer.code === 0) {
     const bouncerName = `mnscloud-firewall-bouncer-${hostSuffix}-${Date.now()}`;
     const keyResult = await runLocalCommand(
       "sh",
@@ -2871,6 +2877,19 @@ async function configureCrowdSecLocalApi(timeoutMs: number) {
     script,
     Math.min(timeoutMs, 30_000),
   );
+}
+
+function crowdSecLocalApiReadyCommand() {
+  const port = CROWDSEC_LOCAL_API_LISTEN_URI.split(":").at(-1) ?? "7422";
+  return [
+    `for i in $(seq 1 30); do`,
+    `  if ss -lntp 2>/dev/null | grep -Fq '${CROWDSEC_LOCAL_API_LISTEN_URI}'; then exit 0; fi;`,
+    `  sleep 1;`,
+    `done;`,
+    `echo 'CrowdSec local API did not start on ${CROWDSEC_LOCAL_API_LISTEN_URI}.' >&2;`,
+    `ss -lntp 2>/dev/null | grep -E ':(${port}|8080)' >&2 || true;`,
+    `exit 1`,
+  ].join(" ");
 }
 
 async function installCyberSecurityStack(
@@ -3050,8 +3069,9 @@ async function installCyberSecurityStack(
       [
         "systemctl enable crowdsec",
         "systemctl reset-failed crowdsec || true",
-        "timeout 75s systemctl start crowdsec",
+        "timeout 75s systemctl restart crowdsec",
         "systemctl is-active crowdsec",
+        crowdSecLocalApiReadyCommand(),
       ].join(" && "),
       false,
       90_000,
@@ -3096,6 +3116,7 @@ async function installCyberSecurityStack(
         "systemctl reset-failed crowdsec || true",
         "timeout 75s systemctl restart crowdsec",
         "systemctl is-active crowdsec",
+        crowdSecLocalApiReadyCommand(),
       ].join(" "),
       false,
       90_000,
