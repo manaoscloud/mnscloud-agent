@@ -3117,7 +3117,7 @@ async function installCyberSecurityStack(
         "timeout 75s systemctl restart crowdsec",
         "systemctl is-active crowdsec",
         crowdSecLocalApiReadyCommand(),
-      ].join(" "),
+      ].join(" && "),
       false,
       90_000,
     ),
