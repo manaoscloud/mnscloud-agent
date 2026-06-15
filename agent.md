@@ -494,3 +494,8 @@ The API assigns or auto-discovers the Agent for a `voip_webrtc_server`, queues a
 The sync command is expected to be the runtime script from
 `mnscloud-kamailio-webrtc`, which fetches the edge config from the API, renders
 Nginx/Kamailio files, validates both services, and reloads them locally.
+
+WebRTC jobs are not Nginx edge jobs. The generic `nginx-edge.manage`
+capability owns App/API/theme-domain HTTP edge work only. SIP/WSS, RTP/SRTP,
+TURN/STUN, SFU/video media, rtpengine control, and PABX exposure must use
+WebRTC/media-specific capabilities and dedicated realtime modules.

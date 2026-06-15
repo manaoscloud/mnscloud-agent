@@ -133,6 +133,9 @@ identity.
 - Keep WebRTC edge functionality capability-based with `webrtc.kamailio.manage`;
   the Agent may run only the configured local sync command for
   `webrtc.edge.sync` jobs.
+- Keep realtime/media responsibilities out of the generic Nginx edge
+  capability. SIP/WSS, RTP/SRTP, TURN/STUN, SFU/video media, rtpengine control,
+  and PABX exposure require WebRTC/media-specific capabilities and typed jobs.
 - Keep Linux and Windows capabilities separate. Linux jobs must not assume
   Windows paths/services, and Windows jobs must not assume systemd, nftables,
   `/etc`, `/var`, or POSIX shells.

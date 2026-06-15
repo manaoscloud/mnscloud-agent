@@ -312,6 +312,10 @@ used.
 - WebRTC domain provisioning is delivered as a typed `webrtc.edge.sync` job. The
   Agent runs only the configured local sync command, never an arbitrary command
   from the API payload.
+- WebRTC realtime duties stay capability-scoped to WebRTC edge hosts. The Agent
+  must not deliver SIP/WSS, RTP/SRTP, TURN/STUN, SFU/video media, rtpengine
+  control, or PABX exposure jobs to the generic Nginx HTTP edge unless a future
+  dedicated realtime capability explicitly defines that contract.
 - Windows cyber security uses Windows-specific capabilities and jobs. It does
   not receive Linux-only nftables/systemd jobs.
 - Permanent storage credentials stay only in the API.
