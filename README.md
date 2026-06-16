@@ -307,6 +307,8 @@ used.
   `nginx-edge.manage` and `certbot.manage` capabilities.
 - WebRTC edge sync can be enabled on `mnscloud-kamailio-webrtc` hosts through
   the `webrtc.kamailio.manage` capability.
+- TURN/STUN edge management can be enabled on `mnscloud-turn` hosts through
+  the `webrtc.turn.manage` capability.
 - Theme domain web and certificate actions are delivered to the edge host as
   Agent Runtime jobs, not generic worker containers.
 - WebRTC domain provisioning is delivered as a typed `webrtc.edge.sync` job. The

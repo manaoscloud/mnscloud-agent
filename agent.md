@@ -187,6 +187,7 @@ security.logs.read = true
 voip.asterisk.manage = false
 voip.freeswitch.manage = false
 webrtc.kamailio.manage = false
+webrtc.turn.manage = false
 docker.manage = false
 shell.exec = false
 
@@ -499,3 +500,7 @@ WebRTC jobs are not Nginx edge jobs. The generic `nginx-edge.manage`
 capability owns App/API/theme-domain HTTP edge work only. SIP/WSS, RTP/SRTP,
 TURN/STUN, SFU/video media, rtpengine control, and PABX exposure must use
 WebRTC/media-specific capabilities and dedicated realtime modules.
+
+TURN/STUN hosts declare `webrtc.turn.manage` after installing `mnscloud-turn`.
+TURN jobs must stay typed and API/DB-owned before the Agent executes local
+runtime sync.

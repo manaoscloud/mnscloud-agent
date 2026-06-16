@@ -133,6 +133,9 @@ identity.
 - Keep WebRTC edge functionality capability-based with `webrtc.kamailio.manage`;
   the Agent may run only the configured local sync command for
   `webrtc.edge.sync` jobs.
+- Keep TURN/STUN edge functionality capability-based with `webrtc.turn.manage`;
+  the Agent may run only typed TURN jobs once the API/control plane owns the
+  corresponding contract.
 - Keep realtime/media responsibilities out of the generic Nginx edge
   capability. SIP/WSS, RTP/SRTP, TURN/STUN, SFU/video media, rtpengine control,
   and PABX exposure require WebRTC/media-specific capabilities and typed jobs.

@@ -359,6 +359,9 @@ default_email =
 [webrtc_edge]
 sync_command = /opt/mnscloud/kamailio-webrtc/scripts/update-kamailio-webrtc.sh
 
+[turn_edge]
+sync_command = /opt/mnscloud/turn/scripts/update-turn.sh
+
 [capabilities]
 linux.status = true
 linux.package.install = true
@@ -375,6 +378,7 @@ security.logs.read = true
 voip.asterisk.manage = $(detect_capability asterisk)
 voip.freeswitch.manage = $(detect_capability fs_cli)
 webrtc.kamailio.manage = $(detect_executable_file /opt/mnscloud/kamailio-webrtc/scripts/update-kamailio-webrtc.sh)
+webrtc.turn.manage = $(detect_executable_file /opt/mnscloud/turn/scripts/update-turn.sh)
 docker.manage = $(detect_capability docker)
 shell.exec = false
 
