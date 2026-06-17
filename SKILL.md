@@ -59,9 +59,9 @@ There is a single Agent runtime. Do not create parallel execution modes in the
 product. Specific resources are represented by:
 
 - `capabilities`: example `security.crowdsec.manage`, `voip.asterisk.manage`
-- `assignments`: example `voip_pabx_server`, `voip_webrtc_server`
+- `assignments`: example `voip_pabx_server`, `realtime_webrtc_server`
 - `jobs`: example `cyber_security`, `recording_upload`, `pabx_command`,
-  `webrtc_edge`
+  `realtime_webrtc_edge`
 
 Do not add direct resource, mode, or privilege coupling to the Agent's primary
 identity.
@@ -130,10 +130,10 @@ identity.
   not create a separate edge-specific agent runtime.
 - Keep Certbot functionality capability-based with `certbot.manage`; private
   keys remain local to the edge host.
-- Keep WebRTC edge functionality capability-based with `webrtc.kamailio.manage`;
+- Keep WebRTC edge functionality capability-based with `realtime.webrtc.manage`;
   the Agent may run only the configured local sync command for
-  `webrtc.edge.sync` jobs.
-- Keep TURN/STUN edge functionality capability-based with `webrtc.turn.manage`;
+  `realtime.webrtc.sync` jobs.
+- Keep TURN/STUN edge functionality capability-based with `realtime.turn.manage`;
   the Agent may run only typed TURN jobs once the API/control plane owns the
   corresponding contract.
 - Keep realtime/media responsibilities out of the generic Nginx edge

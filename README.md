@@ -306,12 +306,12 @@ used.
 - Nginx edge and Certbot can be enabled on the public edge host through
   `nginx-edge.manage` and `certbot.manage` capabilities.
 - WebRTC edge sync can be enabled on `mnscloud-kamailio-webrtc` hosts through
-  the `webrtc.kamailio.manage` capability.
+  the `realtime.webrtc.manage` capability.
 - TURN/STUN edge management can be enabled on `mnscloud-turn` hosts through
-  the `webrtc.turn.manage` capability.
+  the `realtime.turn.manage` capability.
 - Theme domain web and certificate actions are delivered to the edge host as
   Agent Runtime jobs, not generic worker containers.
-- WebRTC domain provisioning is delivered as a typed `webrtc.edge.sync` job. The
+- WebRTC domain provisioning is delivered as a typed `realtime.webrtc.sync` job. The
   Agent runs only the configured local sync command, never an arbitrary command
   from the API payload.
 - WebRTC realtime duties stay capability-scoped to WebRTC edge hosts. The Agent

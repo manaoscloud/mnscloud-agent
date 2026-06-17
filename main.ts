@@ -52,7 +52,7 @@ type LeaseJob = {
     | "cyber_security"
     | "nginx_edge"
     | "certbot"
-    | "webrtc_edge"
+    | "realtime_webrtc_edge"
     | "runtime_update"
     | string
     | null;
@@ -348,7 +348,7 @@ async function loadConfig(): Promise<AgentConfig> {
     certbotDefaultEmail: getConfigValue(parsed, "certbot", "default_email", ""),
     webrtcEdgeSyncCommand: getConfigValue(
       parsed,
-      "webrtc_edge",
+      "realtime_webrtc_edge",
       "sync_command",
       "/opt/mnscloud/kamailio-webrtc/scripts/update-kamailio-webrtc.sh",
     ),
@@ -1791,8 +1791,8 @@ async function executeWebRtcEdgeJob(
     job.commandType ?? job.payload?.command ?? job.payload?.["command"] ?? "",
   );
   try {
-    assertCapability(config, "webrtc.kamailio.manage");
-    if (command !== "webrtc.edge.sync") {
+    assertCapability(config, "realtime.webrtc.manage");
+    if (command !== "realtime.webrtc.sync") {
       await failJob(
         config,
         job.jobUUID,
@@ -1800,7 +1800,7 @@ async function executeWebRtcEdgeJob(
         agentToken,
         "WEBRTC_EDGE_COMMAND_NOT_IMPLEMENTED",
         `${command || "unknown"} is not implemented by this agent version.`,
-        "webrtc_edge",
+        "realtime_webrtc_edge",
       );
       return;
     }
@@ -1814,7 +1814,7 @@ async function executeWebRtcEdgeJob(
       agentToken,
       agentUUID,
       {
-        jobType: "webrtc_edge",
+        jobType: "realtime_webrtc_edge",
         result: {
           command,
           stdout: result.stdout,
@@ -1834,7 +1834,7 @@ async function executeWebRtcEdgeJob(
       agentToken,
       "WEBRTC_EDGE_COMMAND_FAILED",
       error instanceof Error ? error.message : String(error),
-      "webrtc_edge",
+      "realtime_webrtc_edge",
     );
   }
 }
@@ -3925,7 +3925,7 @@ async function pollJobs(
       await executeNginxEdgeJob(job, config, agentUUID, agentToken);
     } else if (job.jobType === "certbot") {
       await executeCertbotJob(job, config, agentUUID, agentToken);
-    } else if (job.jobType === "webrtc_edge") {
+    } else if (job.jobType === "realtime_webrtc_edge") {
       await executeWebRtcEdgeJob(job, config, agentUUID, agentToken);
     } else if (job.jobType === "runtime_update") {
       await executeRuntimeUpdateJob(job, config, agentUUID, agentToken);

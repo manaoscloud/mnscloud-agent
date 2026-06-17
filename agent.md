@@ -186,8 +186,8 @@ security.crowdsec.manage = true
 security.logs.read = true
 voip.asterisk.manage = false
 voip.freeswitch.manage = false
-webrtc.kamailio.manage = false
-webrtc.turn.manage = false
+realtime.webrtc.manage = false
+realtime.turn.manage = false
 docker.manage = false
 shell.exec = false
 
@@ -215,7 +215,7 @@ reload_command = systemctl reload nginx
 command = certbot
 default_email =
 
-[webrtc_edge]
+[realtime_webrtc_edge]
 sync_command = /opt/mnscloud/kamailio-webrtc/scripts/update-kamailio-webrtc.sh
 
 [commands]
@@ -485,13 +485,13 @@ For HTTP-01 validation, the Nginx edge host must serve
 WebRTC edge provisioning uses a dedicated job contract instead of the generic
 Nginx edge domain commands.
 
-- Capability: `webrtc.kamailio.manage`
-- Job type: `webrtc_edge`
-- Command: `webrtc.edge.sync`
-- Local command: `[webrtc_edge].sync_command`
+- Capability: `realtime.webrtc.manage`
+- Job type: `realtime_webrtc_edge`
+- Command: `realtime.webrtc.sync`
+- Local command: `[realtime_webrtc_edge].sync_command`
 
-The API assigns or auto-discovers the Agent for a `voip_webrtc_server`, queues a
-`VoipWebRtcAgentJob`, and the Agent executes only the configured sync command.
+The API assigns or auto-discovers the Agent for a `realtime_webrtc_server`, queues a
+`RealtimeWebRtcAgentJob`, and the Agent executes only the configured sync command.
 The sync command is expected to be the runtime script from
 `mnscloud-kamailio-webrtc`, which fetches the edge config from the API, renders
 Nginx/Kamailio files, validates both services, and reloads them locally.
@@ -501,6 +501,6 @@ capability owns App/API/theme-domain HTTP edge work only. SIP/WSS, RTP/SRTP,
 TURN/STUN, SFU/video media, rtpengine control, and PABX exposure must use
 WebRTC/media-specific capabilities and dedicated realtime modules.
 
-TURN/STUN hosts declare `webrtc.turn.manage` after installing `mnscloud-turn`.
+TURN/STUN hosts declare `realtime.turn.manage` after installing `mnscloud-turn`.
 TURN jobs must stay typed and API/DB-owned before the Agent executes local
 runtime sync.
