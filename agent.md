@@ -262,7 +262,7 @@ Canonical model:
 - `MonitoringAgentCapability`: capabilities declared by the Agent, such as
   `linux.status`, `security.crowdsec.manage`, and `voip.asterisk.manage`.
 - `MonitoringAgentAssignment`: resources assigned to the Agent, such as
-  `voip_pabx_server` or future cyber security resources.
+  `voip.pabx.server` or future cyber security resources.
 
 Do not add type, mode, privilege, or resource columns directly to
 `MonitoringAgent`. Relationships must stay capability-based and
@@ -348,7 +348,7 @@ together with assignments to decide which jobs may be delivered.
 
 ## PABX
 
-For PABX, the assignment remains `voip_pabx_server`, but the capability is
+For PABX, the assignment remains `voip.pabx.server`, but the capability is
 engine-specific:
 
 - Asterisk: `voip.asterisk.manage`
@@ -490,7 +490,7 @@ Nginx edge domain commands.
 - Command: `realtime.webrtc.sync`
 - Local command: `[realtime_webrtc_edge].sync_command`
 
-The API assigns or auto-discovers the Agent for a `realtime_webrtc_server`, queues a
+The API assigns or auto-discovers the Agent for a `realtime.webrtc.server`, queues a
 `RealtimeWebRtcAgentJob`, and the Agent executes only the configured sync command.
 The sync command is expected to be the runtime script from
 `mnscloud-kamailio-webrtc`, which fetches the edge config from the API, renders

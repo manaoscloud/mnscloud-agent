@@ -59,7 +59,7 @@ There is a single Agent runtime. Do not create parallel execution modes in the
 product. Specific resources are represented by:
 
 - `capabilities`: example `security.crowdsec.manage`, `voip.asterisk.manage`
-- `assignments`: example `voip_pabx_server`, `realtime_webrtc_server`
+- `assignments`: example `voip.pabx.server`, `realtime.webrtc.server`
 - `jobs`: example `cyber_security`, `recording_upload`, `pabx_command`,
   `realtime_webrtc_edge`
 
