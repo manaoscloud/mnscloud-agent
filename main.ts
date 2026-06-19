@@ -31,6 +31,7 @@ type AgentConfig = {
   certbotCommand: string;
   certbotDefaultEmail: string;
   webrtcEdgeSyncCommand: string;
+  turnEdgeSyncCommand: string;
   asteriskCli: string;
   freeswitchCli: string;
   asteriskAmiHost: string;
@@ -151,6 +152,27 @@ function capabilitiesFromConfig(config: IniConfig) {
     capabilities[key] = getBoolean(config, "capabilities", key, false);
   }
   return capabilities;
+}
+
+async function isExecutableFile(path: string) {
+  const value = path.trim();
+  if (!value) return false;
+  try {
+    const stat = await Deno.stat(value);
+    if (!stat.isFile) return false;
+    return stat.mode === null || (stat.mode & 0o111) !== 0;
+  } catch {
+    return false;
+  }
+}
+
+async function applyRuntimeCapabilities(config: AgentConfig) {
+  config.capabilities["realtime.webrtc.manage"] = await isExecutableFile(
+    config.webrtcEdgeSyncCommand,
+  );
+  config.capabilities["realtime.turn.manage"] = await isExecutableFile(
+    config.turnEdgeSyncCommand,
+  );
 }
 
 function getConfigValue(
@@ -351,6 +373,12 @@ async function loadConfig(): Promise<AgentConfig> {
       "realtime_webrtc_edge",
       "sync_command",
       "/opt/mnscloud/kamailio-webrtc/scripts/update-kamailio-webrtc.sh",
+    ),
+    turnEdgeSyncCommand: getConfigValue(
+      parsed,
+      "turn_edge",
+      "sync_command",
+      "/opt/mnscloud/turn/scripts/update-turn.sh",
     ),
     asteriskCli: getConfigValue(parsed, "commands", "asterisk_cli", "asterisk"),
     freeswitchCli: getConfigValue(
@@ -3937,6 +3965,7 @@ async function pollJobs(
 
 async function main() {
   const config = await loadConfig();
+  await applyRuntimeCapabilities(config);
   const agentUUID = await readText(config.agentUUIDFile);
   log("info", "Agent started.", {
     config: CONFIG_PATH,
@@ -3961,6 +3990,7 @@ async function main() {
       }
 
       const now = Date.now();
+      await applyRuntimeCapabilities(config);
       if (now - lastHeartbeat >= config.heartbeatIntervalMs) {
         let cyberSecurityStatus: Record<string, unknown> | null = null;
         if (

@@ -89,11 +89,10 @@ state.
 
 ## Remote Updates
 
-Remote updates are release-tag based. The control plane must never ask the
-Agent to update from an implicit branch. The API queues a `runtime_update` job
-with a `product`, capability, and `targetRef` such as `v1.0.6`; the Agent
-validates the ref format and runs only the local updater mapped to that
-declared product.
+Remote updates are release-tag based. The control plane must never ask the Agent
+to update from an implicit branch. The API queues a `runtime_update` job with a
+`product`, capability, and `targetRef` such as `v1.0.6`; the Agent validates the
+ref format and runs only the local updater mapped to that declared product.
 
 Remote update support starts at Agent `1.0.6`. Hosts running an older Agent must
 be manually updated once before the App can queue remote updates for them. The
@@ -102,10 +101,10 @@ API/App runtime updates are executed synchronously by the host Agent. Final
 state is confirmed by the next heartbeat or runtime validation.
 
 When the host declares `mnscloud.api.update` or `mnscloud.app.update`, the
-heartbeat also reports the installed local runtime version for that product.
-The API compares this host inventory against the published release manifest
-before exposing an update action in the App. A release alone is not enough to
-mark API/App as updateable.
+heartbeat also reports the installed local runtime version for that product. The
+API compares this host inventory against the published release manifest before
+exposing an update action in the App. A release alone is not enough to mark
+API/App as updateable.
 
 ## Local Uninstall
 
@@ -392,17 +391,17 @@ Implemented cyber security jobs:
   application services that already use port `8080`.
 - `cyber.security.profile.apply`: installs the selected CrowdSec collections,
   writes MNSCloud-managed log acquisition, validates local policy artifacts with
-  `crowdsec -t`, and reloads CrowdSec. The Linux agent translates profile
-  `mode` and `level` into local CrowdSec policy files instead of editing Hub
-  content directly:
+  `crowdsec -t`, and reloads CrowdSec. The Linux agent translates profile `mode`
+  and `level` into local CrowdSec policy files instead of editing Hub content
+  directly:
   - `mode=monitor` writes a selected-service profile with no decisions and
     `on_success: break`.
   - `mode=enforce` writes a selected-service ban profile using
     `defaultDecisionDuration`.
   - `level=strict` writes additional MNSCloud scenarios for Asterisk and
     FreeSWITCH slow SIP enumeration/bruteforce detection.
-  - `basic`, `balanced`, and unsupported services rely on the official
-    CrowdSec Hub collections without extra local scenarios.
+  - `basic`, `balanced`, and unsupported services rely on the official CrowdSec
+    Hub collections without extra local scenarios.
 
 The Linux install job is intentionally conservative. It does not flush existing
 firewall rules, does not open inbound ports, and configures the CrowdSec
@@ -490,17 +489,23 @@ Nginx edge domain commands.
 - Command: `realtime.webrtc.sync`
 - Local command: `[realtime_webrtc_edge].sync_command`
 
-The API assigns or auto-discovers the Agent for a `realtime.webrtc.server`, queues a
-`RealtimeWebRtcAgentJob`, and the Agent executes only the configured sync command.
-The sync command is expected to be the runtime script from
+The Agent derives the effective `realtime.webrtc.manage` capability from the
+configured sync command being present and executable. This check runs on startup
+and before each heartbeat/job polling loop, so a host that installs or removes
+the WebRTC runtime publishes its current capability without relying on stale
+static config.
+
+The API assigns or auto-discovers the Agent for a `realtime.webrtc.server`,
+queues a `RealtimeWebRtcAgentJob`, and the Agent executes only the configured
+sync command. The sync command is expected to be the runtime script from
 `mnscloud-kamailio-webrtc`, which fetches the edge config from the API, renders
 Nginx/Kamailio files, validates both services, and reloads them locally.
 
-WebRTC jobs are not Nginx edge jobs. The generic `nginx-edge.manage`
-capability owns App/API/theme-domain HTTP edge work only. SIP/WSS, RTP/SRTP,
-TURN/STUN, SFU/video media, rtpengine control, and PABX exposure must use
+WebRTC jobs are not Nginx edge jobs. The generic `nginx-edge.manage` capability
+owns App/API/theme-domain HTTP edge work only. SIP/WSS, RTP/SRTP, TURN/STUN,
+SFU/video media, rtpengine control, and PABX exposure must use
 WebRTC/media-specific capabilities and dedicated realtime modules.
 
-TURN/STUN hosts declare `realtime.turn.manage` after installing `mnscloud-turn`.
-TURN jobs must stay typed and API/DB-owned before the Agent executes local
-runtime sync.
+TURN/STUN hosts expose `realtime.turn.manage` when `[turn_edge].sync_command`
+points to an executable `mnscloud-turn` runtime script. TURN jobs must stay
+typed and API/DB-owned before the Agent executes local runtime sync.

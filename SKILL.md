@@ -103,9 +103,9 @@ identity.
   `product`, product capability, and `targetRef`; they are supported only by
   Agent `1.0.6` or newer.
 - App/API updates are product rollout operations owned by the API/control plane.
-  Browser UI must request the runtime product fleet and queue the product rollout;
-  it must not infer cluster membership or expose App/API update actions as
-  ordinary per-row agent buttons. The rollout may create one or many
+  Browser UI must request the runtime product fleet and queue the product
+  rollout; it must not infer cluster membership or expose App/API update actions
+  as ordinary per-row agent buttons. The rollout may create one or many
   `runtime_update` jobs depending on the eligible online agents reported in
   `MonitoringAgentRuntime`.
 - Agents older than `1.0.6` require one manual tagged update before remote
@@ -132,13 +132,17 @@ identity.
   keys remain local to the edge host.
 - Keep WebRTC edge functionality capability-based with `realtime.webrtc.manage`;
   the Agent may run only the configured local sync command for
-  `realtime.webrtc.sync` jobs.
-- Keep TURN/STUN edge functionality capability-based with `realtime.turn.manage`;
-  the Agent may run only typed TURN jobs once the API/control plane owns the
-  corresponding contract.
-- Keep realtime/media responsibilities out of the generic Nginx edge
-  capability. SIP/WSS, RTP/SRTP, TURN/STUN, SFU/video media, rtpengine control,
-  and PABX exposure require WebRTC/media-specific capabilities and typed jobs.
+  `realtime.webrtc.sync` jobs. The effective capability must be derived from
+  `[realtime_webrtc_edge].sync_command` being executable, not from stale static
+  state.
+- Keep TURN/STUN edge functionality capability-based with
+  `realtime.turn.manage`; the Agent may run only typed TURN jobs once the
+  API/control plane owns the corresponding contract. The effective capability
+  must be derived from `[turn_edge].sync_command` being executable, not from
+  stale static state.
+- Keep realtime/media responsibilities out of the generic Nginx edge capability.
+  SIP/WSS, RTP/SRTP, TURN/STUN, SFU/video media, rtpengine control, and PABX
+  exposure require WebRTC/media-specific capabilities and typed jobs.
 - Keep Linux and Windows capabilities separate. Linux jobs must not assume
   Windows paths/services, and Windows jobs must not assume systemd, nftables,
   `/etc`, `/var`, or POSIX shells.

@@ -162,13 +162,14 @@ supported only by Agent `1.0.6` or newer; older Agents must be manually updated
 once with `scripts/update-agent.sh --ref v1.0.6`.
 
 Installed runtimes include `/opt/mnscloud/agent/VERSION` and
-`/opt/mnscloud/agent/build.json`. Heartbeats report the installed version,
-build reference, build date, and update channel so the MNSCloud application can
-show whether each server is running the current Agent release.
+`/opt/mnscloud/agent/build.json`. Heartbeats report the installed version, build
+reference, build date, and update channel so the MNSCloud application can show
+whether each server is running the current Agent release.
 
 ## Release Discovery Contract
 
-Canonical release metadata lives in [`releases/manifest.json`](./releases/manifest.json).
+Canonical release metadata lives in
+[`releases/manifest.json`](./releases/manifest.json).
 
 The MNSCloud API/application must use this contract:
 
@@ -273,8 +274,8 @@ systemd unit, reloads systemd, and deletes:
 ```
 
 It preserves the repository checkout at `/opt/mnscloud/mnscloud-agent` by
-default so the operator can reinstall or inspect the scripts. To also remove
-the checkout, run:
+default so the operator can reinstall or inspect the scripts. To also remove the
+checkout, run:
 
 ```bash
 sudo bash scripts/uninstall-agent.sh --remove-repository
@@ -299,21 +300,26 @@ used.
 - Communication is always outbound to the API.
 - There is one Agent runtime; limits are enforced through OS permissions,
   capabilities, assignments, and jobs.
-- Capabilities are declared by the host and synchronized on heartbeat.
+- Capabilities are declared by the host and synchronized on heartbeat. Realtime
+  runtime capabilities are also derived from the configured local sync commands
+  when the Agent starts and before each heartbeat, so WebRTC/TURN hosts publish
+  the effective capability only when the local runtime command exists and is
+  executable.
 - FreeSWITCH hosts with `voip.freeswitch.manage` report live SIP registrations
   in heartbeat payloads so dashboards count registered extensions, not merely
   configured extensions.
 - Nginx edge and Certbot can be enabled on the public edge host through
   `nginx-edge.manage` and `certbot.manage` capabilities.
-- WebRTC edge sync can be enabled on `mnscloud-kamailio-webrtc` hosts through
-  the `realtime.webrtc.manage` capability.
-- TURN/STUN edge management can be enabled on `mnscloud-turn` hosts through
-  the `realtime.turn.manage` capability.
+- WebRTC edge sync is enabled on `mnscloud-kamailio-webrtc` hosts when
+  `[realtime_webrtc_edge].sync_command` points to an executable local runtime
+  script.
+- TURN/STUN edge management is enabled on `mnscloud-turn` hosts when
+  `[turn_edge].sync_command` points to an executable local runtime script.
 - Theme domain web and certificate actions are delivered to the edge host as
   Agent Runtime jobs, not generic worker containers.
-- WebRTC domain provisioning is delivered as a typed `realtime.webrtc.sync` job. The
-  Agent runs only the configured local sync command, never an arbitrary command
-  from the API payload.
+- WebRTC domain provisioning is delivered as a typed `realtime.webrtc.sync` job.
+  The Agent runs only the configured local sync command, never an arbitrary
+  command from the API payload.
 - WebRTC realtime duties stay capability-scoped to WebRTC edge hosts. The Agent
   must not deliver SIP/WSS, RTP/SRTP, TURN/STUN, SFU/video media, rtpengine
   control, or PABX exposure jobs to the generic Nginx HTTP edge unless a future
