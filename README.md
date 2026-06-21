@@ -134,13 +134,20 @@ newer homologated Agent version:
 
 ```bash
 cd /opt/mnscloud/mnscloud-agent
-sudo bash scripts/update-agent.sh --ref vX.Y.Z
+sudo bash scripts/update-latest-agent.sh
+```
+
+Inspect the latest approved update command without applying it:
+
+```bash
+cd /opt/mnscloud/mnscloud-agent
+sudo bash scripts/update-latest-agent.sh --print-command
 ```
 
 Windows update:
 
 ```powershell
-.\scripts\update-agent-windows.ps1 -Ref "vX.Y.Z"
+.\scripts\update-agent-windows.ps1 -Ref "<release-tag>"
 ```
 
 The update command fetches tags, checks out the explicit ref, reinstalls service
@@ -158,8 +165,8 @@ Remote updates from the MNSCloud App use explicit release refs. The API queues a
 `runtime_update` job with `product`, capability, and `targetRef`. Agent
 self-updates are scheduled outside the running service process; API/App runtime
 updates run through their local release update scripts. Remote updates are
-supported only by Agent `1.0.6` or newer; older Agents must be manually updated
-once with `scripts/update-agent.sh --ref v1.0.6`.
+supported only by Agents that declare `mnscloud.agent.update`. Older Agents must be manually
+updated once with an explicit approved release ref.
 
 Installed runtimes include `/opt/mnscloud/agent/VERSION` and
 `/opt/mnscloud/agent/build.json`. Heartbeats report the installed version, build
@@ -211,11 +218,11 @@ Expected API-side response shape for update checks:
 {
   "upToDate": false,
   "currentVersion": "1.0.1",
-  "targetVersion": "1.0.4",
-  "targetRef": "v1.0.4",
+  "targetVersion": "<latest-version>",
+  "targetRef": "<latest-release-ref>",
   "channel": "stable",
   "autoUpdate": false,
-  "updateCommand": "sudo bash scripts/update-agent.sh --ref v1.0.4"
+  "updateCommand": "sudo bash scripts/update-agent.sh --ref <latest-release-ref>"
 }
 ```
 
@@ -232,12 +239,12 @@ Release exist on GitHub. The local `scripts/release-agent.sh` script remains the
 canonical release engine used by Actions and should be run manually only as a
 break-glass maintainer operation.
 
-Manual tagged update equivalent:
+Manual tagged update equivalent when the release helper is unavailable:
 
-```bash
+```text
 cd /opt/mnscloud/mnscloud-agent
 git fetch --all --tags --prune
-git checkout vX.Y.Z
+git checkout <release-tag>
 sudo bash scripts/install-agent.sh
 sudo systemctl restart mnscloud-agent.service
 sudo systemctl status mnscloud-agent.service --no-pager
