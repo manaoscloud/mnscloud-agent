@@ -10,13 +10,15 @@ PRINT_COMMAND=0
 usage() {
   cat <<'EOF'
 Usage:
-  sudo bash scripts/update-latest-agent.sh [--api-base <https://edge.example.com>] [--channel stable] [--config /etc/mnscloud/agent/agent.conf] [--print-command]
+  sudo bash scripts/update-latest-agent.sh [--api-base https://dev.publichost.cloud] [--channel stable] [--config /etc/mnscloud/agent/agent.conf] [--print-command]
 
 This helper resolves the latest approved mnscloud-agent release from the MNSCloud API registry,
 then calls update-agent.sh with the required release ref.
 
 If --api-base is omitted, the helper reads [agent] api_base from the existing agent.conf.
 Use --print-command to inspect the resolved update command without applying it.
+For other environments, replace only the --api-base value with that environment's public edge base
+URL.
 EOF
 }
 
