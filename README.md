@@ -131,7 +131,9 @@ reported by the Agent heartbeat, and send/update using the manifest `ref`.
 
 Use the latest-release helper when this repository has a newer homologated Agent version. The
 helper resolves the approved release ref from the MNSCloud API release registry and then delegates
-to the explicit tagged updater:
+to the explicit tagged updater. The command is copy/paste ready; it reads the existing Agent
+configuration when present and falls back to the development edge release registry when the
+configuration is not available:
 
 ```bash
 cd /opt/mnscloud/mnscloud-agent

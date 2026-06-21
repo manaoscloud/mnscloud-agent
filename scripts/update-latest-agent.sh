@@ -4,21 +4,27 @@ set -Eeuo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONFIG_FILE="/etc/mnscloud/agent/agent.conf"
 CHANNEL="stable"
+DEFAULT_API_BASE="https://dev.publichost.cloud/api/v1"
 API_BASE="${MNSCLOUD_RELEASE_API_BASE_URL:-${MNSCLOUD_API_BASE_URL:-${API_BASE_URL:-}}}"
 PRINT_COMMAND=0
 
 usage() {
   cat <<'EOF'
 Usage:
-  sudo bash scripts/update-latest-agent.sh [--api-base https://dev.publichost.cloud] [--channel stable] [--config /etc/mnscloud/agent/agent.conf] [--print-command]
+  sudo bash scripts/update-latest-agent.sh [--channel stable] [--config /etc/mnscloud/agent/agent.conf] [--print-command]
 
 This helper resolves the latest approved mnscloud-agent release from the MNSCloud API registry,
 then calls update-agent.sh with the required release ref.
 
-If --api-base is omitted, the helper reads [agent] api_base from the existing agent.conf.
 Use --print-command to inspect the resolved update command without applying it.
-For other environments, replace only the --api-base value with that environment's public edge base
-URL.
+
+The release registry base is resolved in this order:
+  1. MNSCLOUD_RELEASE_API_BASE_URL, MNSCLOUD_API_BASE_URL, or API_BASE_URL
+  2. [agent] api_base from the existing agent.conf
+  3. development edge registry: https://dev.publichost.cloud/api/v1
+
+Advanced override:
+  --api-base https://dev.publichost.cloud/api/v1
 EOF
 }
 
@@ -56,11 +62,7 @@ if [[ -z "$API_BASE" ]]; then
   API_BASE="$(read_agent_api_base "$CONFIG_FILE")"
 fi
 
-if [[ -z "$API_BASE" ]]; then
-  printf '[mnscloud-agent] ERROR: --api-base is required when agent.conf does not provide api_base.\n' >&2
-  usage >&2
-  exit 1
-fi
+API_BASE="${API_BASE:-$DEFAULT_API_BASE}"
 
 API_BASE="${API_BASE%/}"
 if [[ "$API_BASE" != */api/v1 ]]; then
