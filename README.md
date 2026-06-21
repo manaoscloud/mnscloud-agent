@@ -129,8 +129,9 @@ target. The MNSCloud API/application should read `releases/manifest.json`,
 select the operator-approved channel, compare that channel with the version
 reported by the Agent heartbeat, and send/update using the manifest `ref`.
 
-Use the explicit update command with a release ref when this repository has a
-newer homologated Agent version:
+Use the latest-release helper when this repository has a newer homologated Agent version. The
+helper resolves the approved release ref from the MNSCloud API release registry and then delegates
+to the explicit tagged updater:
 
 ```bash
 cd /opt/mnscloud/mnscloud-agent
@@ -239,7 +240,8 @@ Release exist on GitHub. The local `scripts/release-agent.sh` script remains the
 canonical release engine used by Actions and should be run manually only as a
 break-glass maintainer operation.
 
-Manual tagged update equivalent when the release helper is unavailable:
+Manual tagged update equivalent when the release helper is unavailable. Do not execute the
+placeholder literally; replace `<release-tag>` with a real approved tag:
 
 ```text
 cd /opt/mnscloud/mnscloud-agent
