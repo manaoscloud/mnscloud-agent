@@ -1919,9 +1919,7 @@ function runtimeUpdateTarget(product: string) {
         const artifactName = String(
           job.targetArtifactName ?? job.payload?.targetArtifactName ?? "",
         );
-        const command = [
-          "bash",
-          "scripts/update-nginx-runtime.sh",
+        const updateArgs = [
           "--ref",
           targetRef,
           "--artifact-url",
@@ -1929,8 +1927,15 @@ function runtimeUpdateTarget(product: string) {
           "--artifact-sha256",
           artifactSha256,
         ];
-        if (artifactName) command.push("--artifact-name", artifactName);
-        return command;
+        if (artifactName) updateArgs.push("--artifact-name", artifactName);
+        const command = [
+          "git fetch --tags --prune origin",
+          `git checkout ${shellQuote(targetRef)}`,
+          `bash scripts/update-nginx-runtime.sh ${
+            updateArgs.map(shellQuote).join(" ")
+          }`,
+        ].join(" && ");
+        return ["bash", "-lc", command];
       },
     },
   };
