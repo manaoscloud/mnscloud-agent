@@ -71,6 +71,11 @@ type LeaseJob = {
   targetVersion?: string | null;
   targetRef?: string | null;
   targetBuildRef?: string | null;
+  targetArtifactName?: string | null;
+  targetArtifactUrl?: string | null;
+  targetArtifactSha256?: string | null;
+  targetArtifactSizeBytes?: number | string | null;
+  targetArtifactContentType?: string | null;
   product?: string | null;
   capability?: string | null;
   channel?: string | null;
@@ -1880,7 +1885,7 @@ function runtimeUpdateTarget(product: string) {
       label: string;
       capability: string;
       repoDir?: string;
-      command?: (targetRef: string) => string[];
+      command?: (targetRef: string, job: LeaseJob) => string[];
     }
   > = {
     "mnscloud-agent": {
@@ -1904,12 +1909,29 @@ function runtimeUpdateTarget(product: string) {
       label: "App",
       capability: "mnscloud.app.update",
       repoDir: "/opt/mnscloud/mnscloud-app",
-      command: (targetRef) => [
-        "bash",
-        "scripts/update-nginx-runtime.sh",
-        "--ref",
-        targetRef,
-      ],
+      command: (targetRef, job) => {
+        const artifactUrl = String(
+          job.targetArtifactUrl ?? job.payload?.targetArtifactUrl ?? "",
+        );
+        const artifactSha256 = String(
+          job.targetArtifactSha256 ?? job.payload?.targetArtifactSha256 ?? "",
+        );
+        const artifactName = String(
+          job.targetArtifactName ?? job.payload?.targetArtifactName ?? "",
+        );
+        const command = [
+          "bash",
+          "scripts/update-nginx-runtime.sh",
+          "--ref",
+          targetRef,
+          "--artifact-url",
+          artifactUrl,
+          "--artifact-sha256",
+          artifactSha256,
+        ];
+        if (artifactName) command.push("--artifact-name", artifactName);
+        return command;
+      },
     },
   };
   return targets[product] ?? null;
@@ -2016,7 +2038,7 @@ async function executeRuntimeUpdateJob(
         );
       }
       const command = `cd ${shellQuote(target.repoDir)} && ${
-        target.command(targetRef).map(shellQuote).join(" ")
+        target.command(targetRef, job).map(shellQuote).join(" ")
       }`;
       result = await runLocalCommand(
         "/bin/bash",
