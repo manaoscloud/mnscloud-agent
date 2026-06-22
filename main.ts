@@ -32,6 +32,7 @@ type AgentConfig = {
   certbotDefaultEmail: string;
   webrtcEdgeSyncCommand: string;
   turnEdgeSyncCommand: string;
+  mediaEdgeSyncCommand: string;
   asteriskCli: string;
   freeswitchCli: string;
   asteriskAmiHost: string;
@@ -183,6 +184,9 @@ async function applyRuntimeCapabilities(config: AgentConfig) {
   );
   config.capabilities["realtime.turn.manage"] = await isExecutableFile(
     config.turnEdgeSyncCommand,
+  );
+  config.capabilities["realtime.media.manage"] = await isExecutableFile(
+    config.mediaEdgeSyncCommand,
   );
   config.capabilities["voip.asterisk.manage"] =
     (await commandAvailable(config.asteriskCli)) !== null;
@@ -394,6 +398,12 @@ async function loadConfig(): Promise<AgentConfig> {
       "turn_edge",
       "sync_command",
       "/opt/mnscloud/turn/scripts/update-turn.sh",
+    ),
+    mediaEdgeSyncCommand: getConfigValue(
+      parsed,
+      "realtime_media_edge",
+      "sync_command",
+      "/opt/mnscloud/media/scripts/update-media.sh",
     ),
     asteriskCli: getConfigValue(parsed, "commands", "asterisk_cli", "asterisk"),
     freeswitchCli: getConfigValue(

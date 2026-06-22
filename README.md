@@ -342,6 +342,9 @@ used.
   script.
 - TURN/STUN edge management is enabled on `mnscloud-turn` hosts when
   `[turn_edge].sync_command` points to an executable local runtime script.
+- Realtime media edge management is enabled on `mnscloud-media` hosts when
+  `[realtime_media_edge].sync_command` points to an executable local runtime
+  script.
 - Theme domain web and certificate actions are delivered to the edge host as
   Agent Runtime jobs, not generic worker containers.
 - WebRTC domain provisioning is delivered as a typed `realtime.webrtc.sync` job.

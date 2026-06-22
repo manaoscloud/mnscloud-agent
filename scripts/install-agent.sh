@@ -362,6 +362,9 @@ sync_command = /opt/mnscloud/kamailio-webrtc/scripts/update-kamailio-webrtc.sh
 [turn_edge]
 sync_command = /opt/mnscloud/turn/scripts/update-turn.sh
 
+[realtime_media_edge]
+sync_command = /opt/mnscloud/media/scripts/update-media.sh
+
 [capabilities]
 linux.status = true
 linux.package.install = true
@@ -379,6 +382,7 @@ voip.asterisk.manage = $(detect_capability asterisk)
 voip.freeswitch.manage = $(detect_capability fs_cli)
 realtime.webrtc.manage = $(detect_executable_file /opt/mnscloud/kamailio-webrtc/scripts/update-kamailio-webrtc.sh)
 realtime.turn.manage = $(detect_executable_file /opt/mnscloud/turn/scripts/update-turn.sh)
+realtime.media.manage = $(detect_executable_file /opt/mnscloud/media/scripts/update-media.sh)
 docker.manage = $(detect_capability docker)
 shell.exec = false
 

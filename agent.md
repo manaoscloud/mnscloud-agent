@@ -198,6 +198,7 @@ voip.asterisk.manage = false
 voip.freeswitch.manage = false
 realtime.webrtc.manage = false
 realtime.turn.manage = false
+realtime.media.manage = false
 docker.manage = false
 shell.exec = false
 
@@ -227,6 +228,12 @@ default_email =
 
 [realtime_webrtc_edge]
 sync_command = /opt/mnscloud/kamailio-webrtc/scripts/update-kamailio-webrtc.sh
+
+[turn_edge]
+sync_command = /opt/mnscloud/turn/scripts/update-turn.sh
+
+[realtime_media_edge]
+sync_command = /opt/mnscloud/media/scripts/update-media.sh
 
 [commands]
 asterisk_cli = asterisk
@@ -520,3 +527,8 @@ WebRTC/media-specific capabilities and dedicated realtime modules.
 TURN/STUN hosts expose `realtime.turn.manage` when `[turn_edge].sync_command`
 points to an executable `mnscloud-turn` runtime script. TURN jobs must stay
 typed and API/DB-owned before the Agent executes local runtime sync.
+
+Dedicated RTP/media hosts expose `realtime.media.manage` when
+`[realtime_media_edge].sync_command` points to an executable `mnscloud-media`
+runtime script. Media jobs must stay typed and API/DB-owned before the Agent
+executes local rtpengine runtime sync.
