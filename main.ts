@@ -172,6 +172,12 @@ async function isExecutableFile(path: string) {
 }
 
 async function applyRuntimeCapabilities(config: AgentConfig) {
+  config.capabilities["mnscloud.api.update"] = await isExecutableFile(
+    "/opt/mnscloud/mnscloud-api/scripts/update-api.sh",
+  );
+  config.capabilities["mnscloud.app.update"] = await isExecutableFile(
+    "/opt/mnscloud/mnscloud-app/scripts/update-nginx-runtime.sh",
+  );
   config.capabilities["realtime.webrtc.manage"] = await isExecutableFile(
     config.webrtcEdgeSyncCommand,
   );

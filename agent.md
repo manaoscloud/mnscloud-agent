@@ -100,11 +100,13 @@ Agent self-updates are scheduled outside the currently running process, while
 API/App runtime updates are executed synchronously by the host Agent. Final
 state is confirmed by the next heartbeat or runtime validation.
 
-When the host declares `mnscloud.api.update` or `mnscloud.app.update`, the
-heartbeat also reports the installed local runtime version for that product. The
-API compares this host inventory against the published release manifest before
-exposing an update action in the App. A release alone is not enough to mark
-API/App as updateable.
+The Agent derives `mnscloud.api.update` and `mnscloud.app.update` before each
+heartbeat from executable local update scripts under
+`/opt/mnscloud/mnscloud-api` and `/opt/mnscloud/mnscloud-app`. When either
+capability is active, the heartbeat also reports the installed local runtime
+version for that product. The API compares this host inventory against the
+published release manifest before exposing an update action in the App. A
+release alone is not enough to mark API/App as updateable.
 
 ## Local Uninstall
 
@@ -489,10 +491,10 @@ Nginx edge domain commands.
 - Command: `realtime.webrtc.sync`
 - Local command: `[realtime_webrtc_edge].sync_command`
 
-The Agent derives the effective `realtime.webrtc.manage` capability from the
-configured sync command being present and executable. This check runs on startup
-and before each heartbeat/job polling loop, so a host that installs or removes
-the WebRTC runtime publishes its current capability without relying on stale
+The Agent derives API/App update capabilities and realtime runtime capabilities
+from the matching local command being present and executable. This check runs on
+startup and before each heartbeat/job polling loop, so a host that installs or
+removes a runtime publishes its current capability without relying on stale
 static config.
 
 The API assigns or auto-discovers the Agent for a `realtime.webrtc.server`,

@@ -129,11 +129,12 @@ target. The MNSCloud API/application should read `releases/manifest.json`,
 select the operator-approved channel, compare that channel with the version
 reported by the Agent heartbeat, and send/update using the manifest `ref`.
 
-Use the latest-release helper when this repository has a newer homologated Agent version. The
-helper resolves the approved release ref from the MNSCloud API release registry and then delegates
-to the explicit tagged updater. The command is copy/paste ready; it reads the existing Agent
-configuration when present and falls back to the development edge release registry when the
-configuration is not available:
+Use the latest-release helper when this repository has a newer homologated Agent
+version. The helper resolves the approved release ref from the MNSCloud API
+release registry and then delegates to the explicit tagged updater. The command
+is copy/paste ready; it reads the existing Agent configuration when present and
+falls back to the development edge release registry when the configuration is
+not available:
 
 ```bash
 cd /opt/mnscloud/mnscloud-agent
@@ -168,8 +169,8 @@ Remote updates from the MNSCloud App use explicit release refs. The API queues a
 `runtime_update` job with `product`, capability, and `targetRef`. Agent
 self-updates are scheduled outside the running service process; API/App runtime
 updates run through their local release update scripts. Remote updates are
-supported only by Agents that declare `mnscloud.agent.update`. Older Agents must be manually
-updated once with an explicit approved release ref.
+supported only by Agents that declare `mnscloud.agent.update`. Older Agents must
+be manually updated once with an explicit approved release ref.
 
 Installed runtimes include `/opt/mnscloud/agent/VERSION` and
 `/opt/mnscloud/agent/build.json`. Heartbeats report the installed version, build
@@ -213,7 +214,11 @@ The Agent heartbeat already reports:
 
 `runtimeVersions` is host inventory, not an update request. The API uses it to
 compare API/App installed versions against the latest published releases before
-showing an update action.
+showing an update action. API/App update capabilities are derived before each
+heartbeat from executable local update scripts under
+`/opt/mnscloud/mnscloud-api` and `/opt/mnscloud/mnscloud-app`, so hosts that
+install those runtimes after the Agent automatically publish the current
+inventory.
 
 Expected API-side response shape for update checks:
 
@@ -242,8 +247,9 @@ Release exist on GitHub. The local `scripts/release-agent.sh` script remains the
 canonical release engine used by Actions and should be run manually only as a
 break-glass maintainer operation.
 
-Manual tagged update equivalent when the release helper is unavailable. Do not execute the
-placeholder literally; replace `<release-tag>` with a real approved tag:
+Manual tagged update equivalent when the release helper is unavailable. Do not
+execute the placeholder literally; replace `<release-tag>` with a real approved
+tag:
 
 ```text
 cd /opt/mnscloud/mnscloud-agent
@@ -311,10 +317,10 @@ used.
 - Communication is always outbound to the API.
 - There is one Agent runtime; limits are enforced through OS permissions,
   capabilities, assignments, and jobs.
-- Capabilities are declared by the host and synchronized on heartbeat. Realtime
-  runtime capabilities are also derived from the configured local sync commands
-  when the Agent starts and before each heartbeat, so WebRTC/TURN hosts publish
-  the effective capability only when the local runtime command exists and is
+- Capabilities are declared by the host and synchronized on heartbeat. API/App
+  update capabilities and realtime runtime capabilities are also derived from
+  executable local runtime commands before each heartbeat, so hosts publish the
+  effective capability only when the local runtime command exists and is
   executable.
 - FreeSWITCH hosts with `voip.freeswitch.manage` report live SIP registrations
   in heartbeat payloads so dashboards count registered extensions, not merely
