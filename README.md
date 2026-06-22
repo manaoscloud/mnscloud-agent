@@ -87,9 +87,13 @@ only once.
 
 The installer prepares Deno, creates or reuses
 `/var/lib/mnscloud/agent/agent.uuid`, writes `agent.conf`, installs the systemd
-unit, and starts `mnscloud-agent`. If the enrollment command was generated from
-an existing offline Agent, the API returns that canonical Agent UUID and the
-installer overwrites the local UUID before starting the service.
+unit, restarts `mnscloud-agent`, and synchronizes the installed capabilities
+with the API. Re-running the installer after another local runtime is installed
+must publish the new effective capabilities automatically; a separate manual
+service restart is not part of the normal install flow. If the enrollment
+command was generated from an existing offline Agent, the API returns that
+canonical Agent UUID and the installer overwrites the local UUID before starting
+the service.
 
 The preferred flow is enrollment-based: MNSCloud creates a short-lived
 enrollment token, the installer consumes it, and the API returns the long-lived
@@ -324,6 +328,10 @@ used.
   executable local runtime commands before each heartbeat, so hosts publish the
   effective capability only when the local runtime command exists and is
   executable.
+- Linux install/reinstall explicitly restarts `mnscloud-agent` after rewriting
+  runtime files, `agent.conf`, and the systemd unit. Runtime installers may
+  re-run `install-agent.sh` to refresh capabilities without requiring an
+  extra operator restart.
 - FreeSWITCH hosts with `voip.freeswitch.manage` report live SIP registrations
   in heartbeat payloads so dashboards count registered extensions, not merely
   configured extensions.

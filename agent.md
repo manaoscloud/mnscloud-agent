@@ -16,11 +16,13 @@ capabilities, and API assignments.
 4. The API validates the enrollment, creates or activates the Agent identity,
    and returns the canonical Agent UUID and runtime token directly to the
    installer.
-5. The Agent sends heartbeat requests to `POST /api/v1/agent/heartbeat`.
-6. Heartbeat synchronizes host-declared capabilities.
-7. The API returns jobs through `POST /api/v1/agent/jobs/lease` according to
+5. The installer writes the service/config, restarts the local Agent service,
+   and synchronizes installed capabilities with the API.
+6. The Agent sends heartbeat requests to `POST /api/v1/agent/heartbeat`.
+7. Heartbeat synchronizes host-declared capabilities.
+8. The API returns jobs through `POST /api/v1/agent/jobs/lease` according to
    capabilities and assignments.
-8. The Agent runs the job locally and reports success or failure.
+9. The Agent runs the job locally and reports success or failure.
 
 ## Secure Enrollment
 
@@ -58,6 +60,13 @@ Operational flow:
 2. Copy the generated install command.
 3. Run that command on the target server.
 4. Confirm the Agent appears online in the App.
+
+Linux install and reinstall are idempotent. After rewriting `agent.conf`,
+runtime files, or the systemd unit, `install-agent.sh` must explicitly restart
+`mnscloud-agent` and sync capabilities with the API. Runtime installers can
+re-run `install-agent.sh` after enabling local capabilities such as WebRTC,
+TURN/STUN, Asterisk, or FreeSWITCH; operators must not need a separate manual
+restart in the normal install flow.
 
 The MNSCloud App builds `--api-base` from the current browser origin. In
 production this should be the same public origin that serves `/api/v1`. In local

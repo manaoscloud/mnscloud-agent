@@ -635,6 +635,7 @@ main() {
   run "chmod 0644 '${service_file}'"
   run "systemctl daemon-reload"
   run "systemctl enable --now mnscloud-agent"
+  run "systemctl restart mnscloud-agent"
   sync_installed_capabilities "$api_base" "${data_dir}/agent.uuid" "${data_dir}/agent.token" "$config_file" "$hostname"
 
   ok "mnscloud-agent installed as native systemd service."

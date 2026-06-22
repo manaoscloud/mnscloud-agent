@@ -80,6 +80,10 @@ identity.
   fail closed and require local uninstall plus a new generated install command.
 - The Agent declares local capabilities; the API decides delivery by capability
   and assignment.
+- Linux install/reinstall must explicitly restart `mnscloud-agent` after
+  rewriting runtime files, `agent.conf`, or the systemd unit, then synchronize
+  installed capabilities with the API. Do not turn capability refresh into a
+  manual operator restart step.
 - The Agent token lives at `/var/lib/mnscloud/agent/agent.token`.
 - On Windows, the Agent token lives at
   `C:\ProgramData\MNSCloud\Agent\agent.token`.
