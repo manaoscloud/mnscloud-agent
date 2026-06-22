@@ -184,6 +184,10 @@ async function applyRuntimeCapabilities(config: AgentConfig) {
   config.capabilities["realtime.turn.manage"] = await isExecutableFile(
     config.turnEdgeSyncCommand,
   );
+  config.capabilities["voip.asterisk.manage"] =
+    (await commandAvailable(config.asteriskCli)) !== null;
+  config.capabilities["voip.freeswitch.manage"] =
+    (await commandAvailable(config.freeswitchCli)) !== null;
 }
 
 function getConfigValue(

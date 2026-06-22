@@ -491,11 +491,11 @@ Nginx edge domain commands.
 - Command: `realtime.webrtc.sync`
 - Local command: `[realtime_webrtc_edge].sync_command`
 
-The Agent derives API/App update capabilities and realtime runtime capabilities
-from the matching local command being present and executable. This check runs on
-startup and before each heartbeat/job polling loop, so a host that installs or
-removes a runtime publishes its current capability without relying on stale
-static config.
+The Agent derives API/App update capabilities, realtime runtime capabilities,
+and Asterisk/FreeSWITCH management capabilities from the matching local command
+being present and executable. This check runs on startup and before each
+heartbeat/job polling loop, so a host that installs or removes a runtime
+publishes its current capability without relying on stale static config.
 
 The API assigns or auto-discovers the Agent for a `realtime.webrtc.server`,
 queues a `RealtimeWebRtcAgentJob`, and the Agent executes only the configured

@@ -216,9 +216,11 @@ The Agent heartbeat already reports:
 compare API/App installed versions against the latest published releases before
 showing an update action. API/App update capabilities are derived before each
 heartbeat from executable local update scripts under
-`/opt/mnscloud/mnscloud-api` and `/opt/mnscloud/mnscloud-app`, so hosts that
-install those runtimes after the Agent automatically publish the current
-inventory.
+`/opt/mnscloud/mnscloud-api` and `/opt/mnscloud/mnscloud-app`. Asterisk and
+FreeSWITCH management capabilities are also derived from the configured local
+CLI commands being available. Hosts that install those runtimes after the Agent
+automatically publish the current inventory and capabilities on the next Agent
+start/heartbeat.
 
 Expected API-side response shape for update checks:
 
