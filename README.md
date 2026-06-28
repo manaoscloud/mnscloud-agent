@@ -88,9 +88,11 @@ only once.
 The installer prepares Deno, creates or reuses
 `/var/lib/mnscloud/agent/agent.uuid`, writes `agent.conf`, installs the systemd
 unit, restarts `mnscloud-agent`, and synchronizes the installed capabilities
-with the API. Re-running the installer after another local runtime is installed
-must publish the new effective capabilities automatically; a separate manual
-service restart is not part of the normal install flow. If the enrollment
+with the API. The capability sync retries briefly before failing so a valid
+fresh enrollment is not reported as failed during a short API/gateway
+propagation window. Re-running the installer after another local runtime is
+installed must publish the new effective capabilities automatically; a separate
+manual service restart is not part of the normal install flow. If the enrollment
 command was generated from an existing offline Agent, the API returns that
 canonical Agent UUID and the installer overwrites the local UUID before starting
 the service.

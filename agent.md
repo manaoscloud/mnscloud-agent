@@ -63,8 +63,10 @@ Operational flow:
 
 Linux install and reinstall are idempotent. After rewriting `agent.conf`,
 runtime files, or the systemd unit, `install-agent.sh` must explicitly restart
-`mnscloud-agent` and sync capabilities with the API. Runtime installers can
-re-run `install-agent.sh` after enabling local capabilities such as WebRTC,
+`mnscloud-agent` and sync capabilities with the API. The installer may retry the
+capability sync for a short period after a fresh enrollment, but it must still
+fail if the API keeps rejecting the stored Agent identity. Runtime installers
+can re-run `install-agent.sh` after enabling local capabilities such as WebRTC,
 TURN/STUN, Asterisk, or FreeSWITCH; operators must not need a separate manual
 restart in the normal install flow.
 

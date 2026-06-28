@@ -554,12 +554,13 @@ sync_installed_capabilities() {
 
   [[ -s "${uuid_file}" && -s "${token_file}" ]] || fail "Agent UUID/token not found after install."
 
-  local agent_uuid agent_token capabilities_json payload_file response_file http_code
+  local agent_uuid agent_token capabilities_json payload_file response_file http_code attempt max_attempts
   agent_uuid="$(tr -d '[:space:]' < "${uuid_file}")"
   agent_token="$(tr -d '[:space:]' < "${token_file}")"
   capabilities_json="$(capabilities_json_from_config "${config_file}")"
   payload_file="$(mktemp)"
   response_file="$(mktemp)"
+  max_attempts="${MNSCLOUD_AGENT_SYNC_ATTEMPTS:-6}"
 
   HOSTNAME_VALUE="${hostname}" CAPABILITIES_JSON="${capabilities_json}" AGENT_VERSION="$(agent_version)" AGENT_BUILD_REF="$(agent_build_ref)" deno run \
     --allow-env=HOSTNAME_VALUE,CAPABILITIES_JSON,AGENT_VERSION,AGENT_BUILD_REF - <<'DENO' > "${payload_file}"
@@ -575,22 +576,29 @@ console.log(JSON.stringify({
 DENO
 
   info "Syncing installed Agent capabilities with MNSCloud API."
-  http_code="$(curl -sS -o "${response_file}" -w "%{http_code}" \
-    -X POST "${api_base}/api/v1/agent/heartbeat" \
-    -H "Content-Type: application/json" \
-    -H "X-MNSCloud-Agent-UUID: ${agent_uuid}" \
-    -H "Authorization: Bearer ${agent_token}" \
-    --data-binary "@${payload_file}")"
-  rm -f "${payload_file}"
+  for ((attempt = 1; attempt <= max_attempts; attempt++)); do
+    : > "${response_file}"
+    http_code="$(curl -sS -o "${response_file}" -w "%{http_code}" \
+      -X POST "${api_base}/api/v1/agent/heartbeat" \
+      -H "Content-Type: application/json" \
+      -H "X-MNSCloud-Agent-UUID: ${agent_uuid}" \
+      -H "Authorization: Bearer ${agent_token}" \
+      --data-binary "@${payload_file}")"
 
-  if [[ "${http_code}" != "200" ]]; then
-    warn "Agent capability sync failed with HTTP ${http_code}: $(tr '\n' ' ' < "${response_file}" | head -c 300)"
-    rm -f "${response_file}"
-    fail "Could not sync installed Agent capabilities with MNSCloud."
-  fi
+    if [[ "${http_code}" == "200" ]]; then
+      rm -f "${payload_file}" "${response_file}"
+      ok "Installed Agent capabilities synced with MNSCloud API."
+      return 0
+    fi
 
-  rm -f "${response_file}"
-  ok "Installed Agent capabilities synced with MNSCloud API."
+    warn "Agent capability sync attempt ${attempt}/${max_attempts} failed with HTTP ${http_code}: $(tr '\n' ' ' < "${response_file}" | head -c 300)"
+    if (( attempt < max_attempts )); then
+      sleep 10
+    fi
+  done
+
+  rm -f "${payload_file}" "${response_file}"
+  fail "Could not sync installed Agent capabilities with MNSCloud."
 }
 
 main() {
