@@ -31,6 +31,7 @@ type AgentConfig = {
   certbotCommand: string;
   certbotDefaultEmail: string;
   webrtcEdgeSyncCommand: string;
+  sbcSyncCommand: string;
   turnEdgeSyncCommand: string;
   mediaEdgeSyncCommand: string;
   asteriskCli: string;
@@ -48,14 +49,15 @@ type AgentConfig = {
 type LeaseJob = {
   jobUUID: string;
   jobType?:
-    | "recording_upload"
-    | "media_file_sync"
-    | "pabx_command"
-    | "cyber_security"
-    | "nginx_edge"
+    | "recording.upload"
+    | "media.file.sync"
+    | "pabx.command"
+    | "cyber.security"
+    | "nginx.edge"
     | "certbot"
-    | "realtime_webrtc_edge"
-    | "runtime_update"
+    | "realtime.webrtc.edge"
+    | "voip.sbc.runtime"
+    | "runtime.update"
     | string
     | null;
   action?: "sync" | "delete" | string | null;
@@ -110,9 +112,7 @@ const AGENT_OS: AgentConfig["os"] = IS_WINDOWS
   : "other";
 const PROGRAM_DATA = Deno.env.get("ProgramData") ?? "C:\\ProgramData";
 const CONFIG_PATH = Deno.env.get("MNSCLOUD_AGENT_CONFIG") ??
-  (IS_WINDOWS
-    ? `${PROGRAM_DATA}\\MNSCloud\\Agent\\agent.conf`
-    : "/etc/mnscloud/agent/agent.conf");
+  (IS_WINDOWS ? `${PROGRAM_DATA}\\MNSCloud\\Agent\\agent.conf` : "/etc/mnscloud/agent/agent.conf");
 const CROWDSEC_LOCAL_API_LISTEN_URI = "127.0.0.1:7422";
 const CROWDSEC_LOCAL_API_URL = `http://${CROWDSEC_LOCAL_API_LISTEN_URI}/`;
 
@@ -122,13 +122,9 @@ function parseList(value: string) {
 
 function parseRecordingMounts(value: string) {
   return parseList(value).map((entry) => {
-    const [hostRoot, containerRoot] = entry.split("=").map((item) =>
-      item?.trim()
-    );
+    const [hostRoot, containerRoot] = entry.split("=").map((item) => item?.trim());
     return hostRoot && containerRoot ? { hostRoot, containerRoot } : null;
-  }).filter((item): item is { hostRoot: string; containerRoot: string } =>
-    item !== null
-  );
+  }).filter((item): item is { hostRoot: string; containerRoot: string } => item !== null);
 }
 
 function parseIni(text: string): IniConfig {
@@ -181,6 +177,9 @@ async function applyRuntimeCapabilities(config: AgentConfig) {
   );
   config.capabilities["realtime.webrtc.manage"] = await isExecutableFile(
     config.webrtcEdgeSyncCommand,
+  );
+  config.capabilities["voip.sbc.manage"] = await isExecutableFile(
+    config.sbcSyncCommand,
   );
   config.capabilities["realtime.turn.manage"] = await isExecutableFile(
     config.turnEdgeSyncCommand,
@@ -258,9 +257,7 @@ async function loadConfig(): Promise<AgentConfig> {
       parsed,
       "agent",
       "update_repo_dir",
-      IS_WINDOWS
-        ? "C:\\mnscloud\\mnscloud-agent"
-        : "/opt/mnscloud/mnscloud-agent",
+      IS_WINDOWS ? "C:\\mnscloud\\mnscloud-agent" : "/opt/mnscloud/mnscloud-agent",
     ),
     pollIntervalMs: getNumber(parsed, "agent", "poll_interval_ms", 15_000),
     heartbeatIntervalMs: getNumber(
@@ -328,55 +325,55 @@ async function loadConfig(): Promise<AgentConfig> {
     capabilities: capabilitiesFromConfig(parsed),
     nginxEdgeConfigDir: getConfigValue(
       parsed,
-      "nginx_edge",
+      "nginx.edge",
       "config_dir",
       "/etc/nginx/mnscloud/theme-domains",
     ),
     nginxEdgeAcmeRoot: getConfigValue(
       parsed,
-      "nginx_edge",
+      "nginx.edge",
       "acme_root",
       "/var/www/certbot",
     ),
     nginxEdgeSslLiveDir: getConfigValue(
       parsed,
-      "nginx_edge",
+      "nginx.edge",
       "ssl_live_dir",
       "/etc/letsencrypt/live",
     ),
     nginxEdgeSslArchiveDir: getConfigValue(
       parsed,
-      "nginx_edge",
+      "nginx.edge",
       "ssl_archive_dir",
       "/etc/letsencrypt/archive",
     ),
     nginxEdgeSslRenewalDir: getConfigValue(
       parsed,
-      "nginx_edge",
+      "nginx.edge",
       "ssl_renewal_dir",
       "/etc/letsencrypt/renewal",
     ),
     nginxEdgeAppUpstream: getConfigValue(
       parsed,
-      "nginx_edge",
+      "nginx.edge",
       "app_upstream",
       "$app_upstream",
     ),
     nginxEdgeApiUpstream: getConfigValue(
       parsed,
-      "nginx_edge",
+      "nginx.edge",
       "api_upstream",
       "$api_upstream",
     ),
     nginxEdgeTestCommand: getConfigValue(
       parsed,
-      "nginx_edge",
+      "nginx.edge",
       "test_command",
       "nginx -t",
     ),
     nginxEdgeReloadCommand: getConfigValue(
       parsed,
-      "nginx_edge",
+      "nginx.edge",
       "reload_command",
       "systemctl reload nginx",
     ),
@@ -389,9 +386,15 @@ async function loadConfig(): Promise<AgentConfig> {
     certbotDefaultEmail: getConfigValue(parsed, "certbot", "default_email", ""),
     webrtcEdgeSyncCommand: getConfigValue(
       parsed,
-      "realtime_webrtc_edge",
+      "realtime.webrtc.edge",
       "sync_command",
       "/opt/mnscloud/kamailio-webrtc/scripts/update-kamailio-webrtc.sh",
+    ),
+    sbcSyncCommand: getConfigValue(
+      parsed,
+      "voip.sbc.runtime",
+      "sync_command",
+      "/opt/mnscloud/mnscloud-opensips-sbc/scripts/sync-and-reload-opensips-sbc.sh",
     ),
     turnEdgeSyncCommand: getConfigValue(
       parsed,
@@ -471,20 +474,14 @@ async function loadBuildMetadata(cwd = Deno.cwd()) {
   const versionFile = await optionalRead(
     `${cwd}${IS_WINDOWS ? "\\" : "/"}VERSION`,
   );
-  const version =
-    typeof build["version"] === "string" && build["version"].trim()
-      ? build["version"].trim()
-      : versionFile?.trim() || "0.0.0";
-  const buildRef = typeof build["buildRef"] === "string"
-    ? build["buildRef"].trim()
-    : "";
-  const buildDate = typeof build["buildDate"] === "string"
-    ? build["buildDate"].trim()
-    : "";
-  const updateChannel =
-    typeof build["updateChannel"] === "string" && build["updateChannel"].trim()
-      ? build["updateChannel"].trim()
-      : "stable";
+  const version = typeof build["version"] === "string" && build["version"].trim()
+    ? build["version"].trim()
+    : versionFile?.trim() || "0.0.0";
+  const buildRef = typeof build["buildRef"] === "string" ? build["buildRef"].trim() : "";
+  const buildDate = typeof build["buildDate"] === "string" ? build["buildDate"].trim() : "";
+  const updateChannel = typeof build["updateChannel"] === "string" && build["updateChannel"].trim()
+    ? build["updateChannel"].trim()
+    : "stable";
   return { version, buildRef, buildDate, updateChannel };
 }
 
@@ -577,7 +574,7 @@ async function reportJobProgress(
       agentToken,
       agentUUID,
       {
-        jobType: String(extra.jobType ?? "cyber_security"),
+        jobType: String(extra.jobType ?? "cyber.security"),
         step,
         percent,
         message,
@@ -608,9 +605,7 @@ async function jsonRequest<T>(
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
     throw new Error(
-      typeof payload?.error === "string"
-        ? payload.error
-        : `HTTP ${response.status}`,
+      typeof payload?.error === "string" ? payload.error : `HTTP ${response.status}`,
     );
   }
   return payload as T;
@@ -810,14 +805,10 @@ function resolveReadablePath(path: string, config: AgentConfig) {
     if (normalized === hostRoot || normalized.startsWith(`${hostRoot}/`)) {
       const suffix = normalized.slice(hostRoot.length).replace(/^\/+/, "");
       const candidate = suffix ? `${containerRoot}/${suffix}` : containerRoot;
-      return isAllowedLocalPath(candidate, config.recordingsRoots)
-        ? candidate
-        : null;
+      return isAllowedLocalPath(candidate, config.recordingsRoots) ? candidate : null;
     }
   }
-  return isAllowedLocalPath(normalized, config.recordingsRoots)
-    ? normalized
-    : null;
+  return isAllowedLocalPath(normalized, config.recordingsRoots) ? normalized : null;
 }
 
 function resolveMediaPath(path: string, config: AgentConfig) {
@@ -831,9 +822,7 @@ function resolveMediaPath(path: string, config: AgentConfig) {
     if (normalized === hostRoot || normalized.startsWith(`${hostRoot}/`)) {
       const suffix = normalized.slice(hostRoot.length).replace(/^\/+/, "");
       const candidate = suffix ? `${containerRoot}/${suffix}` : containerRoot;
-      return isAllowedLocalPath(candidate, config.mediaRoots)
-        ? candidate
-        : null;
+      return isAllowedLocalPath(candidate, config.mediaRoots) ? candidate : null;
     }
   }
   return isAllowedLocalPath(normalized, config.mediaRoots) ? normalized : null;
@@ -853,7 +842,7 @@ async function failJob(
   agentToken: string,
   code: string,
   message: string,
-  jobType = "recording_upload",
+  jobType = "recording.upload",
 ) {
   await jsonRequest(
     config,
@@ -865,9 +854,7 @@ async function failJob(
       errorCode: code,
       message,
     },
-  ).catch((error) =>
-    log("warn", "Failed to report job failure.", String(error))
-  );
+  ).catch((error) => log("warn", "Failed to report job failure.", String(error)));
 }
 
 async function uploadJob(
@@ -977,7 +964,7 @@ async function syncMediaFileJob(
       agentToken,
       "PATH_NOT_ALLOWED",
       requestedPath,
-      "media_file_sync",
+      "media.file.sync",
     );
     return;
   }
@@ -994,7 +981,7 @@ async function syncMediaFileJob(
           agentToken,
           "DELETE_FAILED",
           String(error),
-          "media_file_sync",
+          "media.file.sync",
         );
         return;
       }
@@ -1004,7 +991,7 @@ async function syncMediaFileJob(
       `/agent/jobs/${job.jobUUID}/complete`,
       agentToken,
       agentUUID,
-      { jobType: "media_file_sync", action: "delete" },
+      { jobType: "media.file.sync", action: "delete" },
     );
     log("info", "Offline media file removed.", {
       jobUUID: job.jobUUID,
@@ -1021,7 +1008,7 @@ async function syncMediaFileJob(
       agentToken,
       "DOWNLOAD_URL_MISSING",
       "No download URL was provided.",
-      "media_file_sync",
+      "media.file.sync",
     );
     return;
   }
@@ -1047,7 +1034,7 @@ async function syncMediaFileJob(
       agentToken,
       "DOWNLOAD_FAILED",
       `HTTP ${response.status}`,
-      "media_file_sync",
+      "media.file.sync",
     );
     return;
   }
@@ -1063,7 +1050,7 @@ async function syncMediaFileJob(
     `/agent/jobs/${job.jobUUID}/complete`,
     agentToken,
     agentUUID,
-    { jobType: "media_file_sync", action: "sync", size: bytes.byteLength },
+    { jobType: "media.file.sync", action: "sync", size: bytes.byteLength },
   );
   log("info", "Offline media file synced.", {
     jobUUID: job.jobUUID,
@@ -1203,8 +1190,7 @@ async function runAsteriskAmiValidate(config: AgentConfig) {
     const output = await readFromConnection(
       conn,
       config.commandTimeoutMs,
-      (text) =>
-        text.includes("Message: Goodbye") || text.includes("Response: Error"),
+      (text) => text.includes("Message: Goodbye") || text.includes("Response: Error"),
     );
     const success = output.includes("Response: Success") &&
       !output.includes("Authentication failed");
@@ -1278,7 +1264,7 @@ async function executePabxCommandJob(
       agentToken,
       "COMMAND_NOT_ALLOWED",
       `Unsupported PABX command type: ${commandType || "empty"}`,
-      "pabx_command",
+      "pabx.command",
     );
     return;
   }
@@ -1313,7 +1299,7 @@ async function executePabxCommandJob(
         agentToken,
         "ENGINE_NOT_SUPPORTED",
         `Unsupported PABX engine: ${engine || "empty"}`,
-        "pabx_command",
+        "pabx.command",
       );
       return;
     }
@@ -1326,7 +1312,7 @@ async function executePabxCommandJob(
         agentToken,
         "COMMAND_FAILED",
         result.stderr || result.stdout || `Exit code ${result.code}`,
-        "pabx_command",
+        "pabx.command",
       );
       return;
     }
@@ -1337,7 +1323,7 @@ async function executePabxCommandJob(
       agentToken,
       agentUUID,
       {
-        jobType: "pabx_command",
+        jobType: "pabx.command",
         result: {
           engine,
           commandType,
@@ -1363,7 +1349,7 @@ async function executePabxCommandJob(
       agentToken,
       "COMMAND_EXECUTION_FAILED",
       String(error),
-      "pabx_command",
+      "pabx.command",
     );
   }
 }
@@ -1594,9 +1580,7 @@ async function activateNginxEdgeDomain(config: AgentConfig, domain: string) {
   await Deno.mkdir(config.nginxEdgeConfigDir, { recursive: true });
   await Deno.mkdir(config.nginxEdgeAcmeRoot, { recursive: true });
   const path = nginxEdgeConfigPath(config, domain);
-  const previous = await fileExists(path)
-    ? await Deno.readTextFile(path)
-    : null;
+  const previous = await fileExists(path) ? await Deno.readTextFile(path) : null;
   const sslEnabled = await nginxEdgeHasCertificate(config, domain);
   await writeAtomic(
     path,
@@ -1620,9 +1604,7 @@ async function removeNginxEdgeDomain(config: AgentConfig, domain: string) {
   assertCapability(config, "nginx-edge.manage");
   assertSafeDomain(domain);
   const path = nginxEdgeConfigPath(config, domain);
-  const previous = await fileExists(path)
-    ? await Deno.readTextFile(path)
-    : null;
+  const previous = await fileExists(path) ? await Deno.readTextFile(path) : null;
   if (previous !== null) await Deno.remove(path);
   try {
     await testNginxEdge(config);
@@ -1689,7 +1671,7 @@ async function executeNginxEdgeJob(
         agentToken,
         "NGINX_EDGE_COMMAND_NOT_IMPLEMENTED",
         `${command || "unknown"} is not implemented by this agent version.`,
-        "nginx_edge",
+        "nginx.edge",
       );
       return;
     }
@@ -1698,7 +1680,7 @@ async function executeNginxEdgeJob(
       `/agent/jobs/${job.jobUUID}/complete`,
       agentToken,
       agentUUID,
-      { jobType: "nginx_edge", result },
+      { jobType: "nginx.edge", result },
     );
     log("info", "Nginx edge job completed.", { jobUUID: job.jobUUID, result });
   } catch (error) {
@@ -1709,7 +1691,7 @@ async function executeNginxEdgeJob(
       agentToken,
       "NGINX_EDGE_COMMAND_FAILED",
       error instanceof Error ? error.message : String(error),
-      "nginx_edge",
+      "nginx.edge",
     );
   }
 }
@@ -1749,8 +1731,7 @@ async function issueCertbotCertificate(
 
 async function renewCertbotCertificates(config: AgentConfig) {
   assertCapability(config, "certbot.manage");
-  const deployHook =
-    `${config.nginxEdgeTestCommand} && ${config.nginxEdgeReloadCommand}`;
+  const deployHook = `${config.nginxEdgeTestCommand} && ${config.nginxEdgeReloadCommand}`;
   const command = [
     shellQuote(config.certbotCommand),
     "renew",
@@ -1778,9 +1759,7 @@ async function inspectCertbotCertificate(
     domain,
     sslEnabled: await nginxEdgeHasCertificate(config, domain),
     livePath: `${config.nginxEdgeSslLiveDir.replace(/\/+$/, "")}/${domain}`,
-    renewalPath: `${
-      config.nginxEdgeSslRenewalDir.replace(/\/+$/, "")
-    }/${domain}.conf`,
+    renewalPath: `${config.nginxEdgeSslRenewalDir.replace(/\/+$/, "")}/${domain}.conf`,
   };
 }
 
@@ -1853,7 +1832,7 @@ async function executeWebRtcEdgeJob(
         agentToken,
         "WEBRTC_EDGE_COMMAND_NOT_IMPLEMENTED",
         `${command || "unknown"} is not implemented by this agent version.`,
-        "realtime_webrtc_edge",
+        "realtime.webrtc.edge",
       );
       return;
     }
@@ -1867,7 +1846,7 @@ async function executeWebRtcEdgeJob(
       agentToken,
       agentUUID,
       {
-        jobType: "realtime_webrtc_edge",
+        jobType: "realtime.webrtc.edge",
         result: {
           command,
           stdout: result.stdout,
@@ -1887,7 +1866,7 @@ async function executeWebRtcEdgeJob(
       agentToken,
       "WEBRTC_EDGE_COMMAND_FAILED",
       error instanceof Error ? error.message : String(error),
-      "realtime_webrtc_edge",
+      "realtime.webrtc.edge",
     );
   }
 }
@@ -1951,9 +1930,7 @@ function runtimeUpdateTarget(product: string) {
         const command = [
           "git fetch --tags --prune origin",
           `git checkout ${shellQuote(targetRef)}`,
-          `bash scripts/update-nginx-runtime.sh ${
-            updateArgs.map(shellQuote).join(" ")
-          }`,
+          `bash scripts/update-nginx-runtime.sh ${updateArgs.map(shellQuote).join(" ")}`,
         ].join(" && ");
         return ["bash", "-lc", command];
       },
@@ -1967,9 +1944,7 @@ async function scheduleLinuxAgentUpdate(
   jobUUID: string,
   targetRef: string,
 ) {
-  const unit = `mnscloud-agent-update-${
-    jobUUID.replace(/[^a-zA-Z0-9_-]/g, "-")
-  }`;
+  const unit = `mnscloud-agent-update-${jobUUID.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
   const command = [
     "sleep 2",
     `cd ${shellQuote(config.updateRepoDir)}`,
@@ -2041,7 +2016,7 @@ async function executeRuntimeUpdateJob(
       product === "mnscloud-agent" ? "scheduling" : "running",
       product === "mnscloud-agent" ? 40 : 20,
       `${target.label} update to ${targetRef} started.`,
-      { jobType: "runtime_update", product, targetRef, targetVersion },
+      { jobType: "runtime.update", product, targetRef, targetVersion },
     );
 
     let scheduled = false;
@@ -2093,7 +2068,7 @@ async function executeRuntimeUpdateJob(
       agentToken,
       agentUUID,
       {
-        jobType: "runtime_update",
+        jobType: "runtime.update",
         result: {
           product,
           targetRef,
@@ -2123,7 +2098,7 @@ async function executeRuntimeUpdateJob(
       agentToken,
       "RUNTIME_UPDATE_FAILED",
       error instanceof Error ? error.message : String(error),
-      "runtime_update",
+      "runtime.update",
     );
   }
 }
@@ -2136,9 +2111,7 @@ async function commandAvailable(command: string) {
       } -ErrorAction SilentlyContinue) | ForEach-Object { $_.Source }`,
       3000,
     );
-    return result.code === 0 && result.stdout
-      ? result.stdout.split(/\r?\n/)[0] || command
-      : null;
+    return result.code === 0 && result.stdout ? result.stdout.split(/\r?\n/)[0] || command : null;
   }
 
   const result = await runLocalCommand(
@@ -2219,9 +2192,7 @@ function crowdSecPolicyMode(value: unknown) {
 
 function crowdSecPolicyLevel(value: unknown) {
   const level = typeof value === "string" ? value.trim().toLowerCase() : "";
-  return ["basic", "balanced", "strict", "custom"].includes(level)
-    ? level
-    : "balanced";
+  return ["basic", "balanced", "strict", "custom"].includes(level) ? level : "balanced";
 }
 
 function crowdSecDecisionDuration(value: unknown) {
@@ -2233,13 +2204,9 @@ function crowdSecPolicyServices(services: unknown[]) {
   return services.flatMap((service): CrowdSecPolicyService[] => {
     if (!service || typeof service !== "object") return [];
     const record = service as Record<string, unknown>;
-    const slug = typeof record["slug"] === "string"
-      ? record["slug"].trim().toLowerCase()
-      : "";
+    const slug = typeof record["slug"] === "string" ? record["slug"].trim().toLowerCase() : "";
     const nameValue = record["name"];
-    const name = typeof nameValue === "string" && nameValue.trim()
-      ? nameValue.trim()
-      : slug;
+    const name = typeof nameValue === "string" && nameValue.trim() ? nameValue.trim() : slug;
     if (!slug || !/^[a-z0-9_-]+$/.test(slug)) return [];
     return [{ slug, name }];
   });
@@ -2248,9 +2215,7 @@ function crowdSecPolicyServices(services: unknown[]) {
 function crowdSecScenarioContainsFilter(services: CrowdSecPolicyService[]) {
   const supported = services
     .map((service) => service.slug)
-    .filter((slug) =>
-      ["asterisk", "freeswitch", "ssh", "nginx", "apache"].includes(slug)
-    );
+    .filter((slug) => ["asterisk", "freeswitch", "ssh", "nginx", "apache"].includes(slug));
   const unique = [...new Set(supported)];
   if (unique.length === 0) return "";
   return unique.map((slug) => `Alert.GetScenario() contains "${slug}"`).join(
@@ -2265,8 +2230,7 @@ function crowdSecLocalProfileContent(
 ) {
   const scenarioFilter = crowdSecScenarioContainsFilter(services);
   if (!scenarioFilter) return null;
-  const filter =
-    `Alert.Remediation == true && Alert.GetScope() == "Ip" && (${scenarioFilter})`;
+  const filter = `Alert.Remediation == true && Alert.GetScope() == "Ip" && (${scenarioFilter})`;
   const lines = [
     "# Managed by MNSCloud Agent. Do not edit manually.",
     "name: mnscloud_selected_services_remediation",
@@ -2390,9 +2354,7 @@ function crowdSecPolicyArtifacts(
     },
     {
       path: "/etc/crowdsec/scenarios/mnscloud-profile.yaml",
-      content: level === "strict"
-        ? crowdSecStrictScenarioContent(services)
-        : null,
+      content: level === "strict" ? crowdSecStrictScenarioContent(services) : null,
     },
   ];
 }
@@ -2476,9 +2438,7 @@ async function writeCrowdSecProfileAcquisition(services: unknown[]) {
   const entries = services.flatMap((service) => {
     if (!service || typeof service !== "object") return [];
     const record = service as Record<string, unknown>;
-    const slug = typeof record["slug"] === "string"
-      ? record["slug"].trim()
-      : "";
+    const slug = typeof record["slug"] === "string" ? record["slug"].trim() : "";
     const logPaths = stringArrayFromUnknown(record["logPaths"]);
     if (!slug || logPaths.length === 0) return [];
     return [{
@@ -2622,9 +2582,7 @@ function parseJsonList(text: string): Array<Record<string, unknown>> {
   if (!text.trim()) return [];
   try {
     const parsed = JSON.parse(text);
-    const candidates = Array.isArray(parsed)
-      ? parsed
-      : parsed && typeof parsed === "object"
+    const candidates = Array.isArray(parsed) ? parsed : parsed && typeof parsed === "object"
       ? [
         (parsed as Record<string, unknown>).alerts,
         (parsed as Record<string, unknown>).decisions,
@@ -2746,9 +2704,7 @@ async function packageAvailable(
     "sh",
     [
       "-lc",
-      `apt-cache policy ${
-        shellQuote(packageName)
-      } | awk '/Candidate:/ {print $2}'`,
+      `apt-cache policy ${shellQuote(packageName)} | awk '/Candidate:/ {print $2}'`,
     ],
     10_000,
   );
@@ -2812,9 +2768,7 @@ async function resolveCrowdSecFirewallBouncerPackage(
     if (await packageAvailable(packageName, family)) return packageName;
   }
   throw new Error(
-    `No CrowdSec firewall bouncer package is available. Checked: ${
-      candidates.join(", ")
-    }`,
+    `No CrowdSec firewall bouncer package is available. Checked: ${candidates.join(", ")}`,
   );
 }
 
@@ -2829,8 +2783,7 @@ async function configureCrowdSecFirewallBouncer(
     return {
       label: "Configure CrowdSec firewall bouncer",
       code: 0,
-      stdout:
-        "Bouncer configuration file not found; package defaults will be used.",
+      stdout: "Bouncer configuration file not found; package defaults will be used.",
       stderr: "",
     };
   }
@@ -2839,13 +2792,10 @@ async function configureCrowdSecFirewallBouncer(
     "hostname -s 2>/dev/null || hostname",
     "host",
   )).replace(/[^a-zA-Z0-9_.-]/g, "-") || "host";
-  const staleLiteralName =
-    `mnscloud-firewall-bouncer-${hostSuffix}-$(date +%s)`;
+  const staleLiteralName = `mnscloud-firewall-bouncer-${hostSuffix}-$(date +%s)`;
   const staleBouncer = await runLocalCommand("sh", [
     "-lc",
-    `cscli bouncers list 2>/dev/null | grep -Fq ${
-      shellQuote(staleLiteralName)
-    }`,
+    `cscli bouncers list 2>/dev/null | grep -Fq ${shellQuote(staleLiteralName)}`,
   ], Math.min(timeoutMs, 10_000));
   let apiKey = await commandText(
     `awk -F: '/^api_key:/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2; exit}' ${
@@ -2860,9 +2810,7 @@ async function configureCrowdSecFirewallBouncer(
         "-lc",
         `cscli bouncers delete ${
           shellQuote(staleLiteralName)
-        } >/dev/null 2>&1 || true; cscli bouncers add ${
-          shellQuote(bouncerName)
-        } -o raw`,
+        } >/dev/null 2>&1 || true; cscli bouncers add ${shellQuote(bouncerName)} -o raw`,
       ],
       timeoutMs,
     );
@@ -2888,9 +2836,7 @@ async function configureCrowdSecFirewallBouncer(
     }; then sed -i 's#^api_key:.*#api_key: ${apiKey}#' ${
       shellQuote(configPath)
     }; else printf '\\napi_key: ${apiKey}\\n' >> ${shellQuote(configPath)}; fi`,
-    `if grep -q '^mode:' ${
-      shellQuote(configPath)
-    }; then sed -i 's#^mode:.*#mode: ${mode}#' ${
+    `if grep -q '^mode:' ${shellQuote(configPath)}; then sed -i 's#^mode:.*#mode: ${mode}#' ${
       shellQuote(configPath)
     }; else printf '\\nmode: ${mode}\\n' >> ${shellQuote(configPath)}; fi`,
   ].join(" && ");
@@ -2910,8 +2856,7 @@ async function configureCrowdSecLocalApi(timeoutMs: number) {
     return {
       label: "Configure CrowdSec local API",
       code: 0,
-      stdout:
-        "CrowdSec configuration file not found; package defaults will be used.",
+      stdout: "CrowdSec configuration file not found; package defaults will be used.",
       stderr: "",
     };
   }
@@ -2931,9 +2876,7 @@ async function configureCrowdSecLocalApi(timeoutMs: number) {
     }; else printf '\\napi:\\n  server:\\n    listen_uri: ${CROWDSEC_LOCAL_API_LISTEN_URI}\\n' >> ${
       shellQuote(configPath)
     }; fi`,
-    `if test -f ${shellQuote(credentialsPath)}; then cp -a ${
-      shellQuote(credentialsPath)
-    } ${
+    `if test -f ${shellQuote(credentialsPath)}; then cp -a ${shellQuote(credentialsPath)} ${
       shellQuote(`${credentialsPath}.mnscloud.bak`)
     } 2>/dev/null || true; if grep -Eq '^[[:space:]]*url:' ${
       shellQuote(credentialsPath)
@@ -3045,9 +2988,7 @@ async function installCyberSecurityStack(
     await progress(
       label,
       percent,
-      result.code === 0
-        ? `${label} completed.`
-        : `${label} completed with warnings.`,
+      result.code === 0 ? `${label} completed.` : `${label} completed with warnings.`,
       {
         status: result.code === 0 ? "running" : "warning",
         output: result.stdout || result.stderr,
@@ -3087,9 +3028,7 @@ async function installCyberSecurityStack(
     await runStep(
       20,
       "Install base packages",
-      `if ${
-        packagesInstalledForFamilyCommand(basePackages, packageFamily)
-      }; then ${
+      `if ${packagesInstalledForFamilyCommand(basePackages, packageFamily)}; then ${
         packageInstallCommand(basePackages, packageFamily)
       }; else echo 'Base packages already installed.'; fi`,
       false,
@@ -3116,9 +3055,7 @@ async function installCyberSecurityStack(
   const bouncerPackage = await resolveCrowdSecFirewallBouncerPackage(
     packageFamily,
   );
-  const bouncerMode = bouncerPackage.includes("nftables")
-    ? "nftables"
-    : "iptables";
+  const bouncerMode = bouncerPackage.includes("nftables") ? "nftables" : "iptables";
   const securityPackages = ["crowdsec", bouncerPackage, "nftables"];
   await progress(
     "Select CrowdSec firewall bouncer package",
@@ -3279,9 +3216,7 @@ async function runPowerShellInstallStep(
   };
   if (result.code !== 0 && !allowFailure) {
     throw new Error(
-      `${label} failed: ${
-        [result.stderr, result.stdout].filter(Boolean).join("\n").slice(-6000)
-      }`,
+      `${label} failed: ${[result.stderr, result.stdout].filter(Boolean).join("\n").slice(-6000)}`,
     );
   }
   return step;
@@ -3327,9 +3262,7 @@ async function installWindowsCyberSecurityStack(
     await progress(
       label,
       percent,
-      result.code === 0
-        ? `${label} completed.`
-        : `${label} completed with warnings.`,
+      result.code === 0 ? `${label} completed.` : `${label} completed with warnings.`,
       {
         status: result.code === 0 ? "running" : "warning",
         output: result.stdout || result.stderr,
@@ -3435,16 +3368,12 @@ async function applyCyberSecurityProfile(
     ? payload["profileName"]
     : "Security profile";
   const bouncerEnabled = payload?.["bouncerEnabled"] !== false;
-  const mode = bouncerEnabled
-    ? crowdSecPolicyMode(payload?.["mode"])
-    : "monitor";
+  const mode = bouncerEnabled ? crowdSecPolicyMode(payload?.["mode"]) : "monitor";
   const level = crowdSecPolicyLevel(payload?.["level"]);
   const decisionDuration = crowdSecDecisionDuration(
     payload?.["defaultDecisionDuration"],
   );
-  const services = Array.isArray(payload?.["services"])
-    ? payload["services"]
-    : [];
+  const services = Array.isArray(payload?.["services"]) ? payload["services"] : [];
   const policyServices = crowdSecPolicyServices(services);
   const collections = payloadStringArray(payload, "collections", []);
   const serviceLabels = services.map((service) => {
@@ -3471,9 +3400,7 @@ async function applyCyberSecurityProfile(
     await progress(
       label,
       percent,
-      result.code === 0
-        ? `${label} completed.`
-        : `${label} completed with warnings.`,
+      result.code === 0 ? `${label} completed.` : `${label} completed with warnings.`,
       {
         status: result.code === 0 ? "running" : "warning",
         output: result.stdout || result.stderr,
@@ -3514,9 +3441,7 @@ async function applyCyberSecurityProfile(
     "Configure CrowdSec log acquisition",
     22,
     acquisition.length
-      ? `Configured log acquisition for ${
-        acquisition.map((entry) => entry.slug).join(", ")
-      }.`
+      ? `Configured log acquisition for ${acquisition.map((entry) => entry.slug).join(", ")}.`
       : "No log acquisition paths configured for selected services.",
     { acquisition },
   );
@@ -3705,9 +3630,7 @@ async function collectCyberSecurityStatus(config: AgentConfig) {
     "-lc",
     "systemctl is-active crowdsec-firewall-bouncer 2>/dev/null || true",
   ], 3000);
-  const firewallStatus = nft
-    ? (nftRules?.code === 0 ? "running" : "error")
-    : "missing";
+  const firewallStatus = nft ? (nftRules?.code === 0 ? "running" : "error") : "missing";
   const crowdsecStatus = crowdsec || cscli
     ? (crowdsecActive.stdout === "active" ? "running" : "stopped")
     : "missing";
@@ -3766,11 +3689,7 @@ async function windowsServiceStatus(serviceNames: string[]) {
   );
   if (result.code !== 0 || !result.stdout) return "missing";
   const status = result.stdout.trim().toLowerCase();
-  return status === "running"
-    ? "running"
-    : status === "missing"
-    ? "missing"
-    : "stopped";
+  return status === "running" ? "running" : status === "missing" ? "missing" : "stopped";
 }
 
 async function collectWindowsCyberSecurityStatus(config: AgentConfig) {
@@ -3858,7 +3777,7 @@ async function executeCyberSecurityJob(
         agentToken,
         agentUUID,
         {
-          jobType: "cyber_security",
+          jobType: "cyber.security",
           result,
         },
       );
@@ -3891,7 +3810,7 @@ async function executeCyberSecurityJob(
         agentToken,
         agentUUID,
         {
-          jobType: "cyber_security",
+          jobType: "cyber.security",
           result,
         },
       );
@@ -3924,7 +3843,7 @@ async function executeCyberSecurityJob(
         agentToken,
         agentUUID,
         {
-          jobType: "cyber_security",
+          jobType: "cyber.security",
           result,
         },
       );
@@ -3941,10 +3860,8 @@ async function executeCyberSecurityJob(
       agentUUID,
       agentToken,
       "CYBER_COMMAND_NOT_IMPLEMENTED",
-      `${
-        leasedCommand || "unknown"
-      } is modeled but not implemented by this agent version yet.`,
-      "cyber_security",
+      `${leasedCommand || "unknown"} is modeled but not implemented by this agent version yet.`,
+      "cyber.security",
     );
   } catch (error) {
     if (
@@ -3972,7 +3889,64 @@ async function executeCyberSecurityJob(
       agentToken,
       "CYBER_COMMAND_FAILED",
       error instanceof Error ? error.message : String(error),
-      "cyber_security",
+      "cyber.security",
+    );
+  }
+}
+
+async function executeSbcRuntimeJob(
+  job: LeaseJob,
+  config: AgentConfig,
+  agentUUID: string,
+  agentToken: string,
+) {
+  const command = String(
+    job.commandType ?? job.payload?.command ?? job.payload?.["command"] ?? "",
+  );
+  try {
+    assertCapability(config, "voip.sbc.manage");
+    if (command !== "voip.sbc.sync") {
+      await failJob(
+        config,
+        job.jobUUID,
+        agentUUID,
+        agentToken,
+        "SBC_RUNTIME_COMMAND_NOT_IMPLEMENTED",
+        `${command || "unknown"} is not implemented by this agent version.`,
+        "voip.sbc.runtime",
+      );
+      return;
+    }
+    const result = await runConfiguredShell(
+      config.sbcSyncCommand,
+      Math.max(config.commandTimeoutMs, 180_000),
+    );
+    await jsonRequest(
+      config,
+      `/agent/jobs/${job.jobUUID}/complete`,
+      agentToken,
+      agentUUID,
+      {
+        jobType: "voip.sbc.runtime",
+        result: {
+          command,
+          stdout: result.stdout,
+          stderr: result.stderr,
+          serverUUID: payloadString(job.payload, "serverUUID"),
+          reason: payloadString(job.payload, "reason"),
+        },
+      },
+    );
+    log("info", "SBC runtime job completed.", { jobUUID: job.jobUUID });
+  } catch (error) {
+    await failJob(
+      config,
+      job.jobUUID,
+      agentUUID,
+      agentToken,
+      "SBC_RUNTIME_COMMAND_FAILED",
+      error instanceof Error ? error.message : String(error),
+      "voip.sbc.runtime",
     );
   }
 }
@@ -3990,19 +3964,21 @@ async function pollJobs(
     { limit: 3 },
   );
   for (const job of result.data?.jobs ?? []) {
-    if (job.jobType === "media_file_sync") {
+    if (job.jobType === "media.file.sync") {
       await syncMediaFileJob(job, config, agentUUID, agentToken);
-    } else if (job.jobType === "pabx_command") {
+    } else if (job.jobType === "pabx.command") {
       await executePabxCommandJob(job, config, agentUUID, agentToken);
-    } else if (job.jobType === "cyber_security") {
+    } else if (job.jobType === "cyber.security") {
       await executeCyberSecurityJob(job, config, agentUUID, agentToken);
-    } else if (job.jobType === "nginx_edge") {
+    } else if (job.jobType === "nginx.edge") {
       await executeNginxEdgeJob(job, config, agentUUID, agentToken);
     } else if (job.jobType === "certbot") {
       await executeCertbotJob(job, config, agentUUID, agentToken);
-    } else if (job.jobType === "realtime_webrtc_edge") {
+    } else if (job.jobType === "realtime.webrtc.edge") {
       await executeWebRtcEdgeJob(job, config, agentUUID, agentToken);
-    } else if (job.jobType === "runtime_update") {
+    } else if (job.jobType === "voip.sbc.runtime") {
+      await executeSbcRuntimeJob(job, config, agentUUID, agentToken);
+    } else if (job.jobType === "runtime.update") {
       await executeRuntimeUpdateJob(job, config, agentUUID, agentToken);
     } else {
       await uploadJob(job, config, agentUUID, agentToken);
@@ -4030,9 +4006,7 @@ async function main() {
           agentUUID,
           tokenFile: config.agentTokenFile,
         });
-        await new Promise((resolve) =>
-          setTimeout(resolve, config.heartbeatIntervalMs)
-        );
+        await new Promise((resolve) => setTimeout(resolve, config.heartbeatIntervalMs));
         continue;
       }
 

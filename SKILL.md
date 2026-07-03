@@ -60,8 +60,8 @@ product. Specific resources are represented by:
 
 - `capabilities`: example `security.crowdsec.manage`, `voip.asterisk.manage`
 - `assignments`: example `voip.pabx.server`, `realtime.webrtc.server`
-- `jobs`: example `cyber_security`, `recording_upload`, `pabx_command`,
-  `realtime_webrtc_edge`
+- `jobs`: example `cyber.security`, `recording.upload`, `pabx.command`,
+  `realtime.webrtc.edge`, `voip.sbc.runtime`
 
 Do not add direct resource, mode, or privilege coupling to the Agent's primary
 identity.
@@ -103,14 +103,14 @@ identity.
   against the manifest channel and return the target `ref`.
 - `scripts/update-agent.sh --ref vX.Y.Z` is the production update command.
 - Omitted `--ref` must fail closed; implicit branch updates are not supported.
-- Remote App/API/Agent updates must queue `runtime_update` jobs with an explicit
+- Remote App/API/Agent updates must queue `runtime.update` jobs with an explicit
   `product`, product capability, and `targetRef`; they are supported only by
   Agent `1.0.6` or newer.
 - App/API updates are product rollout operations owned by the API/control plane.
   Browser UI must request the runtime product fleet and queue the product
   rollout; it must not infer cluster membership or expose App/API update actions
   as ordinary per-row agent buttons. The rollout may create one or many
-  `runtime_update` jobs depending on the eligible online agents reported in
+  `runtime.update` jobs depending on the eligible online agents reported in
   `MonitoringAgentRuntime`.
 - Agents older than `1.0.6` require one manual tagged update before remote
   updates can be offered in the App.
@@ -137,7 +137,7 @@ identity.
 - Keep WebRTC edge functionality capability-based with `realtime.webrtc.manage`;
   the Agent may run only the configured local sync command for
   `realtime.webrtc.sync` jobs. The effective capability must be derived from
-  `[realtime_webrtc_edge].sync_command` being executable, not from stale static
+  `[realtime.webrtc.edge].sync_command` being executable, not from stale static
   state.
 - Keep TURN/STUN edge functionality capability-based with
   `realtime.turn.manage`; the Agent may run only typed TURN jobs once the

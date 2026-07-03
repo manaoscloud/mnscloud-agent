@@ -101,7 +101,7 @@ state.
 ## Remote Updates
 
 Remote updates are release-tag based. The control plane must never ask the Agent
-to update from an implicit branch. The API queues a `runtime_update` job with a
+to update from an implicit branch. The API queues a `runtime.update` job with a
 `product`, capability, and `targetRef` such as `v1.0.6`; the Agent validates the
 ref format and runs only the local updater mapped to that declared product.
 
@@ -213,7 +213,7 @@ delete_after_upload = true
 roots = /var/lib/mnscloud/files
 mounts =
 
-[nginx_edge]
+[nginx.edge]
 config_dir = /etc/nginx/mnscloud/theme-domains
 acme_root = /var/www/certbot
 ssl_live_dir = /etc/letsencrypt/live
@@ -228,8 +228,11 @@ reload_command = systemctl reload nginx
 command = certbot
 default_email =
 
-[realtime_webrtc_edge]
+[realtime.webrtc.edge]
 sync_command = /opt/mnscloud/kamailio-webrtc/scripts/update-kamailio-webrtc.sh
+
+[voip.sbc.runtime]
+sync_command = /opt/mnscloud/mnscloud-opensips-sbc/scripts/sync-and-reload-opensips-sbc.sh
 
 [turn_edge]
 sync_command = /opt/mnscloud/turn/scripts/update-turn.sh
@@ -505,9 +508,9 @@ WebRTC edge provisioning uses a dedicated job contract instead of the generic
 Nginx edge domain commands.
 
 - Capability: `realtime.webrtc.manage`
-- Job type: `realtime_webrtc_edge`
+- Job type: `realtime.webrtc.edge`
 - Command: `realtime.webrtc.sync`
-- Local command: `[realtime_webrtc_edge].sync_command`
+- Local command: `[realtime.webrtc.edge].sync_command`
 
 The Agent derives API/App update capabilities, realtime runtime capabilities,
 and Asterisk/FreeSWITCH management capabilities from the matching local command

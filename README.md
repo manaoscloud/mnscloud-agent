@@ -172,7 +172,7 @@ The update command fails closed when the release ref is omitted. Production and
 automation must never update from an implicit branch checkout.
 
 Remote updates from the MNSCloud App use explicit release refs. The API queues a
-`runtime_update` job with `product`, capability, and `targetRef`. Agent
+`runtime.update` job with `product`, capability, and `targetRef`. Agent
 self-updates are scheduled outside the running service process; API/App runtime
 updates run through their local release update scripts. Remote updates are
 supported only by Agents that declare `mnscloud.agent.update`. Older Agents must
@@ -340,8 +340,11 @@ used.
 - Nginx edge and Certbot can be enabled on the public edge host through
   `nginx-edge.manage` and `certbot.manage` capabilities.
 - WebRTC edge sync is enabled on `mnscloud-kamailio-webrtc` hosts when
-  `[realtime_webrtc_edge].sync_command` points to an executable local runtime
+  `[realtime.webrtc.edge].sync_command` points to an executable local runtime
   script.
+- SBC runtime sync is enabled on `mnscloud-opensips-sbc` hosts when
+  `[voip.sbc.runtime].sync_command` points to an executable local runtime
+  script and the agent reports `voip.sbc.manage`.
 - TURN/STUN edge management is enabled on `mnscloud-turn` hosts when
   `[turn_edge].sync_command` points to an executable local runtime script.
 - Realtime media edge management is enabled on `mnscloud-media` hosts when

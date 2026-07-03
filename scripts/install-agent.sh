@@ -341,7 +341,7 @@ delete_after_upload = true
 roots = /var/lib/mnscloud/files
 mounts =
 
-[nginx_edge]
+[nginx.edge]
 config_dir = /etc/nginx/mnscloud/theme-domains
 acme_root = /var/www/certbot
 ssl_live_dir = /etc/letsencrypt/live
@@ -356,8 +356,11 @@ reload_command = systemctl reload nginx
 command = certbot
 default_email =
 
-[realtime_webrtc_edge]
+[realtime.webrtc.edge]
 sync_command = /opt/mnscloud/kamailio-webrtc/scripts/update-kamailio-webrtc.sh
+
+[voip.sbc.runtime]
+sync_command = /opt/mnscloud/mnscloud-opensips-sbc/scripts/sync-and-reload-opensips-sbc.sh
 
 [turn_edge]
 sync_command = /opt/mnscloud/turn/scripts/update-turn.sh
@@ -381,6 +384,7 @@ security.logs.read = true
 voip.asterisk.manage = $(detect_capability asterisk)
 voip.freeswitch.manage = $(detect_capability fs_cli)
 realtime.webrtc.manage = $(detect_executable_file /opt/mnscloud/kamailio-webrtc/scripts/update-kamailio-webrtc.sh)
+voip.sbc.manage = $(detect_executable_file /opt/mnscloud/mnscloud-opensips-sbc/scripts/sync-and-reload-opensips-sbc.sh)
 realtime.turn.manage = $(detect_executable_file /opt/mnscloud/turn/scripts/update-turn.sh)
 realtime.media.manage = $(detect_executable_file /opt/mnscloud/media/scripts/update-media.sh)
 docker.manage = $(detect_capability docker)
