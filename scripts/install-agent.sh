@@ -361,6 +361,7 @@ sync_command = /opt/mnscloud/kamailio-webrtc/scripts/update-kamailio-webrtc.sh
 
 [voip.sbc.runtime]
 sync_command = /opt/mnscloud/mnscloud-opensips-sbc/scripts/sync-and-reload-opensips-sbc.sh
+node_uuid_file = /etc/mnscloud/sbc/node.uuid
 
 [turn_edge]
 sync_command = /opt/mnscloud/turn/scripts/update-turn.sh

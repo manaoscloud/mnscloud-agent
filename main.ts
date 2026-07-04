@@ -32,6 +32,7 @@ type AgentConfig = {
   certbotDefaultEmail: string;
   webrtcEdgeSyncCommand: string;
   sbcSyncCommand: string;
+  sbcNodeUUIDFile: string;
   turnEdgeSyncCommand: string;
   mediaEdgeSyncCommand: string;
   asteriskCli: string;
@@ -395,6 +396,12 @@ async function loadConfig(): Promise<AgentConfig> {
       "voip.sbc.runtime",
       "sync_command",
       "/opt/mnscloud/mnscloud-opensips-sbc/scripts/sync-and-reload-opensips-sbc.sh",
+    ),
+    sbcNodeUUIDFile: getConfigValue(
+      parsed,
+      "voip.sbc.runtime",
+      "node_uuid_file",
+      "/etc/mnscloud/sbc/node.uuid",
     ),
     turnEdgeSyncCommand: getConfigValue(
       parsed,
@@ -761,6 +768,9 @@ async function heartbeat(
 ) {
   const pabxRegistrations = await collectPabxRegistrations(config);
   const runtimeVersions = await collectRuntimeVersions(config);
+  const sbcNodeUUID = config.capabilities["voip.sbc.manage"]
+    ? (await optionalRead(config.sbcNodeUUIDFile))?.trim()
+    : null;
   await jsonRequest(config, "/agent/heartbeat", agentToken, agentUUID, {
     name: config.name,
     hostname: config.hostname,
@@ -776,6 +786,12 @@ async function heartbeat(
     mediaMounts: config.mediaMounts,
     runtimeVersions,
     capabilities: config.capabilities,
+    sbcRuntime: sbcNodeUUID
+      ? {
+        nodeUUID: sbcNodeUUID,
+        engine: "opensips",
+      }
+      : undefined,
     pabxRegistrations,
     cyberSecurityStatus: cyberSecurityStatus ?? undefined,
   });

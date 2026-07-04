@@ -359,7 +359,9 @@ used.
   script.
 - SBC runtime sync is enabled on `mnscloud-opensips-sbc` hosts when
   `[voip.sbc.runtime].sync_command` points to an executable local runtime
-  script and the agent reports `voip.sbc.manage`.
+  script and the agent reports `voip.sbc.manage`. When enabled, the Agent also reports
+  `[voip.sbc.runtime].node_uuid_file` so the API can bind the host to its
+  `voip.sbc.server` assignment before leasing `voip.sbc.runtime` jobs.
 - TURN/STUN edge management is enabled on `mnscloud-turn` hosts when
   `[turn_edge].sync_command` points to an executable local runtime script.
 - Realtime media edge management is enabled on `mnscloud-media` hosts when

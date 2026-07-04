@@ -241,6 +241,7 @@ sync_command = /opt/mnscloud/kamailio-webrtc/scripts/update-kamailio-webrtc.sh
 
 [voip.sbc.runtime]
 sync_command = /opt/mnscloud/mnscloud-opensips-sbc/scripts/sync-and-reload-opensips-sbc.sh
+node_uuid_file = /etc/mnscloud/sbc/node.uuid
 
 [turn_edge]
 sync_command = /opt/mnscloud/turn/scripts/update-turn.sh
@@ -531,6 +532,11 @@ queues a `RealtimeWebRtcAgentJob`, and the Agent executes only the configured
 sync command. The sync command is expected to be the runtime script from
 `mnscloud-kamailio-webrtc`, which fetches the edge config from the API, renders
 Nginx/Kamailio files, validates both services, and reloads them locally.
+
+For SBC, the Agent reports the local `node_uuid_file` value when the
+`voip.sbc.manage` capability is active. The API uses that node UUID to bind the
+Agent to the canonical `voip.sbc.server` assignment before leasing
+`voip.sbc.runtime` jobs.
 
 WebRTC jobs are not Nginx edge jobs. The generic `nginx-edge.manage` capability
 owns App/API/theme-domain HTTP edge work only. SIP/WSS, RTP/SRTP, TURN/STUN,
