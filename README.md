@@ -12,6 +12,7 @@ capabilities declared in `agent.conf`, API assignments, and typed jobs.
 - Product/runtime: `mnscloud-agent`
 - Project directory: `agent/`
 - Linux installer: `scripts/install-agent.sh`
+- Linux validator: `scripts/validate-agent.sh`
 - Windows installer: `scripts/install-agent-windows.ps1`
 - Linux uninstaller: `scripts/uninstall-agent.sh`
 - Windows uninstaller: `scripts/uninstall-agent-windows.ps1`
@@ -170,6 +171,20 @@ case, uninstall locally and generate a new install command from the application.
 
 The update command fails closed when the release ref is omitted. Production and
 automation must never update from an implicit branch checkout.
+
+Validate an installed Linux Agent before installing a runtime that depends on it:
+
+```bash
+sudo bash scripts/validate-agent.sh \
+  --require-active \
+  --require-enrolled \
+  --require-job voip.sbc.runtime
+```
+
+Runtime installers should call `scripts/validate-agent.sh` instead of duplicating local checks for
+`mnscloud-agent.service`, Agent UUID/token files, job compatibility, or optional heartbeat
+validation. This keeps Agent prerequisite behavior consistent across SBC, WebRTC, TURN/STUN,
+media, PABX, and future managed runtimes.
 
 Remote updates from the MNSCloud App use explicit release refs. The API queues a
 `runtime.update` job with `product`, capability, and `targetRef`. Agent

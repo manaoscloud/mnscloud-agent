@@ -124,6 +124,7 @@ release alone is not enough to mark API/App as updateable.
 Agent lifecycle scripts are intentionally symmetric:
 
 - `scripts/install-agent.sh`
+- `scripts/validate-agent.sh`
 - `scripts/update-agent.sh`
 - `scripts/uninstall-agent.sh`
 
@@ -155,6 +156,13 @@ including the local UUID and runtime token.
 Local uninstall does not delete the Agent record in the MNSCloud API. Operators
 must delete or deactivate that record in the App when the identity should no
 longer be used.
+
+`scripts/validate-agent.sh` is the shared prerequisite contract for managed
+runtime installers. Installers must call it instead of embedding their own
+checks when they require the Agent to be installed, enrolled, active, or capable
+of a typed job such as `realtime.webrtc.edge` or `voip.sbc.runtime`. The
+validator checks local systemd state, Agent identity files, installed runtime
+support, optional capabilities, and optional API heartbeat validation.
 
 ## Configuration
 
