@@ -33,6 +33,7 @@ type AgentConfig = {
   webrtcEdgeSyncCommand: string;
   sbcSyncCommand: string;
   sbcNodeUUIDFile: string;
+  sbcRuntimeConfigFile: string;
   turnEdgeSyncCommand: string;
   mediaEdgeSyncCommand: string;
   asteriskCli: string;
@@ -403,6 +404,12 @@ async function loadConfig(): Promise<AgentConfig> {
       "node_uuid_file",
       "/etc/mnscloud/sbc/node.uuid",
     ),
+    sbcRuntimeConfigFile: getConfigValue(
+      parsed,
+      "voip.sbc.runtime",
+      "runtime_config_file",
+      "/etc/mnscloud/sbc/runtime/config.json",
+    ),
     turnEdgeSyncCommand: getConfigValue(
       parsed,
       "turn_edge",
@@ -771,6 +778,7 @@ async function heartbeat(
   const sbcNodeUUID = config.capabilities["voip.sbc.manage"]
     ? (await optionalRead(config.sbcNodeUUIDFile))?.trim()
     : null;
+  const sbcRuntimeConfig = sbcNodeUUID ? await optionalRead(config.sbcRuntimeConfigFile) : "";
   await jsonRequest(config, "/agent/heartbeat", agentToken, agentUUID, {
     name: config.name,
     hostname: config.hostname,
@@ -790,6 +798,7 @@ async function heartbeat(
       ? {
         nodeUUID: sbcNodeUUID,
         engine: "opensips",
+        needsSync: !sbcRuntimeConfig,
       }
       : undefined,
     pabxRegistrations,
