@@ -1,28 +1,111 @@
 name: Auto Release
 
 on:
-  push:
+  workflow_run:
+    workflows: [CI]
     branches: [main]
+    types: [completed]
   workflow_dispatch:
     inputs:
       version:
-        description: "Optional explicit semantic version. When empty, patch is incremented from VERSION."
-        required: false
+        description: 'Explicit semantic version to promote through the same validated release path.'
+        required: true
         type: string
 
 permissions:
+  actions: read
   contents: write
 
 concurrency:
-  group: auto-release-${{ github.ref }}
+  group: mnscloud-agent-stable-release
   cancel-in-progress: false
 
 jobs:
   release:
-    uses: manaoscloud/mnscloud-runtime-kit/.github/workflows/auto-release.yml@main
-    with:
-      release_script: scripts/release-agent.sh
-      version: ${{ github.event.inputs.version || '' }}
-      setup_deno: true
-      checkout_runtime_kit: true
-    secrets: inherit
+    name: Promote validated Agent release
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || 'main' }}
+          fetch-depth: 0
+      - name: Verify validated source is still main
+        if: github.event_name == 'workflow_run'
+        run: |
+          set -euo pipefail
+          git fetch origin main --quiet
+          [[ "$(git rev-parse origin/main)" == "${{ github.event.workflow_run.head_sha }}" ]]
+      - name: Download CI release candidate
+        if: github.event_name == 'workflow_run'
+        uses: actions/download-artifact@v7
+        with:
+          name: mnscloud-agent-release-candidate
+          path: release-candidate
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+      - name: Prepare manual release candidate
+        if: github.event_name == 'workflow_dispatch'
+        run: >-
+          bash scripts/prepare-release-candidate.sh
+          --output release-candidate
+          --source-sha "$(git rev-parse HEAD)"
+          --version "${{ inputs.version }}"
+      - name: Verify release candidate
+        run: bash scripts/release-agent.sh --verify-release-candidate release-candidate
+      - name: Promote release tag and GitHub Release
+        run: bash scripts/release-agent.sh --promote-release-candidate release-candidate
+      - name: Resolve promoted release version
+        id: release
+        run: |
+          set -euo pipefail
+          version="$(python3 -c "import json; print(json.load(open('release-candidate/release-candidate.json'))['version'])")"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Notify MNSCloud release cache
+        env:
+          MNSCLOUD_RELEASE_SYNC_URL: ${{ vars.MNSCLOUD_RELEASE_SYNC_URL || secrets.MNSCLOUD_RELEASE_SYNC_URL || '' }}
+          MNSCLOUD_RELEASE_SYNC_TOKEN: ${{ secrets.MNSCLOUD_RELEASE_SYNC_TOKEN || secrets.MNSCLOUD_DEPLOY_TOKEN || '' }}
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [ -z "$MNSCLOUD_RELEASE_SYNC_URL" ] || [ -z "$MNSCLOUD_RELEASE_SYNC_TOKEN" ]; then
+            echo 'Release cache notification skipped: integration is not configured.'
+            exit 0
+          fi
+          git fetch --tags --quiet
+          git checkout --detach "v${RELEASE_VERSION}"
+          python3 - <<'PY' > /tmp/mnscloud-release-payload.json
+          import json
+          import subprocess
+
+          manifest = json.load(open('releases/manifest.json', encoding='utf-8'))
+          stable = manifest['channels']['stable']
+          ref = stable['ref']
+          print(json.dumps({
+              'product': manifest['product'],
+              'channel': 'stable',
+              'version': stable['version'],
+              'ref': ref,
+              'buildRef': subprocess.check_output(['git', 'rev-list', '-n', '1', ref], text=True).strip()[:12],
+              'buildDate': stable['releasedAt'],
+              'releasedAt': stable['releasedAt'],
+              'notes': f'Synced from validated GitHub Actions release {ref}.',
+              'artifactName': None,
+              'artifactUrl': None,
+              'artifactSha256': None,
+              'artifactSizeBytes': None,
+              'artifactContentType': None,
+          }))
+          PY
+          base_url="${MNSCLOUD_RELEASE_SYNC_URL%/}"
+          endpoint="${base_url}/api/v1/runtime/releases/publish"
+          [[ "$base_url" == */api/v1 ]] && endpoint="${base_url}/runtime/releases/publish"
+          curl -fsS -X POST \
+            -H "Authorization: Bearer ${MNSCLOUD_RELEASE_SYNC_TOKEN}" \
+            -H 'Content-Type: application/json' \
+            --data @/tmp/mnscloud-release-payload.json \
+            "$endpoint"

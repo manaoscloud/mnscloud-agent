@@ -5,6 +5,10 @@ on:
   push:
     branches: [main]
 
+concurrency:
+  group: agent-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   agent:
     name: Deno agent
@@ -12,6 +16,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
       - name: Setup Deno
         uses: denoland/setup-deno@v2
         with:
@@ -20,3 +26,17 @@ jobs:
         run: deno task check
       - name: Shell syntax check
         run: bash -n scripts/*.sh
+      - name: Prepare release candidate
+        if: github.event_name == 'push'
+        run: >-
+          bash scripts/prepare-release-candidate.sh
+          --output release-candidate
+          --source-sha "${{ github.sha }}"
+      - name: Upload release candidate
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mnscloud-agent-release-candidate
+          path: release-candidate/release-candidate.json
+          if-no-files-found: error
+          retention-days: 7

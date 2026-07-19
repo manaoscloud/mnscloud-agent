@@ -131,8 +131,11 @@ view as the primary troubleshooting surface instead of querying the database.
 ## Updating
 
 Production Agent updates are driven by explicit Git tags/releases. The `main`
-branch is a development integration branch and is not a production update
-target. The MNSCloud API/application should read `releases/manifest.json`,
+branch is protected development integration source and is not a production
+update target. CI binds a release candidate to the exact validated source SHA;
+only a successful CI may be promoted by `Auto Release` to a dedicated
+`release/mnscloud-agent-vX.Y.Z` provenance branch and immutable Git tag. The
+MNSCloud API/application should read `releases/manifest.json`,
 select the operator-approved channel, compare that channel with the version
 reported by the Agent heartbeat, and send/update using the manifest `ref`.
 
