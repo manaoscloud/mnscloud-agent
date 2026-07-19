@@ -57,6 +57,10 @@ jobs:
           --version "${{ inputs.version }}"
       - name: Verify release candidate
         run: bash scripts/release-agent.sh --verify-release-candidate release-candidate
+      - name: Configure release author
+        run: |
+          git config user.name 'mnscloud-release-bot'
+          git config user.email 'actions@users.noreply.github.com'
       - name: Promote release tag and GitHub Release
         run: bash scripts/release-agent.sh --promote-release-candidate release-candidate
       - name: Resolve promoted release version
