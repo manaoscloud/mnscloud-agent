@@ -1273,6 +1273,61 @@ async function runFreeswitchEslValidate(config: AgentConfig) {
   }
 }
 
+const PABX_TRUNK_RUNTIME_NAME = /^trunk-[a-f0-9]{32}$/;
+const MAX_DIAGNOSTIC_OUTPUT_LENGTH = 24_000;
+
+function diagnosticOutput(value: string) {
+  return value
+    .replace(/(password|secret|authorization)\s*[:=]\s*[^\s,;]+/gi, "$1=[REDACTED]")
+    .slice(0, MAX_DIAGNOSTIC_OUTPUT_LENGTH)
+    .trim();
+}
+
+function trunkRegistrationStatus(engine: string, output: string, exitCode: number) {
+  const normalized = output.toLowerCase();
+  if (exitCode !== 0 || /error|fail|unreachable|timeout|forbidden|rejected/.test(normalized)) {
+    return "failed";
+  }
+  if (engine === "asterisk") {
+    if (/unregistered|not registered|rejected|failed|unavailable/.test(normalized)) {
+      return "not_registered";
+    }
+    if (/registered|available|success/.test(normalized)) return "registered";
+  }
+  if (engine === "freeswitch") {
+    if (/\breged\b|\bregistered\b|\bup\b/.test(normalized)) return "registered";
+    if (/\bdown\b|\bfail(?:ed)?\b|\bunreg(?:istered)?\b/.test(normalized)) return "not_registered";
+  }
+  return "unknown";
+}
+
+async function runPabxTrunkRegistrationDiagnostic(
+  engine: string,
+  runtimeName: string,
+  config: AgentConfig,
+) {
+  if (!PABX_TRUNK_RUNTIME_NAME.test(runtimeName)) {
+    throw new Error("Invalid PABX trunk runtime name.");
+  }
+  if (engine === "asterisk") {
+    const args = ["-rx", `pjsip show registration ${runtimeName}`];
+    return {
+      command: config.asteriskCli,
+      args,
+      result: await runLocalCommand(config.asteriskCli, args, config.commandTimeoutMs),
+    };
+  }
+  if (engine === "freeswitch") {
+    const args = ["-x", `sofia status gateway ${runtimeName}`];
+    return {
+      command: config.freeswitchCli,
+      args,
+      result: await runLocalCommand(config.freeswitchCli, args, config.commandTimeoutMs),
+    };
+  }
+  throw new Error(`Unsupported PABX engine: ${engine || "empty"}`);
+}
+
 async function executePabxCommandJob(
   job: LeaseJob,
   config: AgentConfig,
@@ -1281,7 +1336,7 @@ async function executePabxCommandJob(
 ) {
   const engine = String(job.engine ?? "").toLowerCase();
   const commandType = String(job.commandType ?? "");
-  if (commandType !== "server.health.validate") {
+  if (!["server.health.validate", "trunk.registration.status"].includes(commandType)) {
     await failJob(
       config,
       job.jobUUID,
@@ -1298,6 +1353,74 @@ async function executePabxCommandJob(
   let args: string[] = [];
   let result: { code: number; stdout: string; stderr: string; method?: string };
   try {
+    if (commandType === "trunk.registration.status") {
+      const runtimeName = payloadString(job.payload, "runtimeName").toLowerCase();
+      const registrationEnabled = job.payload?.["registrationEnabled"] === true ||
+        job.payload?.["registrationEnabled"] === 1 || job.payload?.["registrationEnabled"] === "1";
+      if (!registrationEnabled) {
+        await jsonRequest(
+          config,
+          `/agent/jobs/${job.jobUUID}/complete`,
+          agentToken,
+          agentUUID,
+          {
+            jobType: "pabx.command",
+            result: {
+              engine,
+              commandType,
+              runtimeName,
+              registrationEnabled: false,
+              registrationStatus: "not_applicable",
+              observedAt: new Date().toISOString(),
+              method: "not_applicable",
+              stdout: "Outbound SIP registration is disabled for this trunk.",
+              stderr: "",
+            },
+          },
+        );
+        return;
+      }
+      const diagnostic = await runPabxTrunkRegistrationDiagnostic(engine, runtimeName, config);
+      command = diagnostic.command;
+      args = diagnostic.args;
+      result = diagnostic.result;
+      const stdout = diagnosticOutput(result.stdout);
+      const stderr = diagnosticOutput(result.stderr);
+      await jsonRequest(
+        config,
+        `/agent/jobs/${job.jobUUID}/complete`,
+        agentToken,
+        agentUUID,
+        {
+          jobType: "pabx.command",
+          result: {
+            engine,
+            commandType,
+            runtimeName,
+            registrationEnabled: true,
+            registrationStatus: trunkRegistrationStatus(
+              engine,
+              `${stdout}\n${stderr}`,
+              result.code,
+            ),
+            observedAt: new Date().toISOString(),
+            command,
+            args,
+            method: result.method ?? "cli",
+            exitCode: result.code,
+            stdout,
+            stderr,
+          },
+        },
+      );
+      log("info", "PABX trunk runtime diagnostic completed.", {
+        jobUUID: job.jobUUID,
+        engine,
+        runtimeName,
+      });
+      return;
+    }
+
     if (engine === "asterisk") {
       if (config.asteriskAmiUsername && config.asteriskAmiSecret) {
         result = await runAsteriskAmiValidate(config);
