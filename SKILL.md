@@ -142,6 +142,10 @@ identity.
   `realtime.webrtc.sync` jobs. The effective capability must be derived from
   `[realtime.webrtc.edge].sync_command` being executable, not from stale static
   state.
+- Keep FreeSWITCH PABX runtime synchronization capability-based with
+  `voip.freeswitch.manage`; a `pabx.command` with `runtime.sync` may execute
+  only `[voip.freeswitch.runtime].sync_command`, never a remote ESL command or
+  arbitrary shell payload.
 - Keep TURN/STUN edge functionality capability-based with
   `realtime.turn.manage`; the Agent may run only typed TURN jobs once the
   API/control plane owns the corresponding contract. The effective capability
