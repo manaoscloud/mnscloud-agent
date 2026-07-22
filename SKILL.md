@@ -80,6 +80,9 @@ identity.
   fail closed and require local uninstall plus a new generated install command.
 - The Agent declares local capabilities; the API decides delivery by capability
   and assignment.
+- `pabx.command` is a typed allowlist, never a remote shell. Runtime diagnostics may run only fixed
+  local CLI queries derived from API-owned resource identifiers; their output must be bounded and
+  redacted before completion.
 - Linux install/reinstall must explicitly restart `mnscloud-agent` after
   rewriting runtime files, `agent.conf`, or the systemd unit, then synchronize
   installed capabilities with the API. Do not turn capability refresh into a
