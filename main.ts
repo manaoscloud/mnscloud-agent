@@ -36,6 +36,7 @@ type AgentConfig = {
   sbcRuntimeConfigFile: string;
   turnEdgeSyncCommand: string;
   mediaEdgeSyncCommand: string;
+  freeswitchRuntimeSyncCommand: string;
   asteriskCli: string;
   freeswitchCli: string;
   asteriskAmiHost: string;
@@ -192,7 +193,8 @@ async function applyRuntimeCapabilities(config: AgentConfig) {
   config.capabilities["voip.asterisk.manage"] =
     (await commandAvailable(config.asteriskCli)) !== null;
   config.capabilities["voip.freeswitch.manage"] =
-    (await commandAvailable(config.freeswitchCli)) !== null;
+    (await commandAvailable(config.freeswitchCli)) !== null &&
+    await isExecutableFile(config.freeswitchRuntimeSyncCommand);
 }
 
 function getConfigValue(
@@ -421,6 +423,12 @@ async function loadConfig(): Promise<AgentConfig> {
       "realtime_media_edge",
       "sync_command",
       "/opt/mnscloud/media/scripts/update-media.sh",
+    ),
+    freeswitchRuntimeSyncCommand: getConfigValue(
+      parsed,
+      "voip.freeswitch.runtime",
+      "sync_command",
+      "/opt/mnscloud/mnscloud-freeswitch/scripts/sync-freeswitch-runtime.sh",
     ),
     asteriskCli: getConfigValue(parsed, "commands", "asterisk_cli", "asterisk"),
     freeswitchCli: getConfigValue(
@@ -1285,6 +1293,7 @@ function diagnosticOutput(value: string) {
 
 function trunkRegistrationStatus(engine: string, output: string, exitCode: number) {
   const normalized = output.toLowerCase();
+  if (/invalid gateway!|not found/.test(normalized)) return "not_configured";
   if (exitCode !== 0 || /error|fail|unreachable|timeout|forbidden|rejected/.test(normalized)) {
     return "failed";
   }
@@ -1336,7 +1345,7 @@ async function executePabxCommandJob(
 ) {
   const engine = String(job.engine ?? "").toLowerCase();
   const commandType = String(job.commandType ?? "");
-  if (!["server.health.validate", "trunk.registration.status"].includes(commandType)) {
+  if (!["server.health.validate", "trunk.registration.status", "runtime.sync"].includes(commandType)) {
     await failJob(
       config,
       job.jobUUID,
@@ -1353,10 +1362,123 @@ async function executePabxCommandJob(
   let args: string[] = [];
   let result: { code: number; stdout: string; stderr: string; method?: string };
   try {
+    if (commandType === "runtime.sync") {
+      const runtimeName = payloadString(job.payload, "runtimeName").toLowerCase();
+      const runtimeOperation = payloadString(job.payload, "runtimeOperation", "upsert");
+      const registrationEnabled = job.payload?.["registrationEnabled"] === true ||
+        job.payload?.["registrationEnabled"] === 1 || job.payload?.["registrationEnabled"] === "1";
+      if (engine === "freeswitch") {
+        if (!config.capabilities["voip.freeswitch.manage"]) {
+          throw new Error("FreeSWITCH runtime synchronization capability is unavailable on this Agent.");
+        }
+        command = config.freeswitchRuntimeSyncCommand;
+        result = await runConfiguredShell(command, Math.max(config.commandTimeoutMs, 180_000));
+      } else if (engine === "asterisk") {
+        if (!config.capabilities["voip.asterisk.manage"]) {
+          throw new Error("Asterisk management capability is unavailable on this Agent.");
+        }
+        command = config.asteriskCli;
+        args = ["-rx", "pjsip reload"];
+        result = await runLocalCommand(command, args, config.commandTimeoutMs);
+        if (result.code !== 0 || /error|fail/.test(`${result.stdout}\n${result.stderr}`.toLowerCase())) {
+          throw new Error(`Asterisk PJSIP reload failed: ${diagnosticOutput(`${result.stdout}\n${result.stderr}`) || "no output"}`);
+        }
+      } else {
+        throw new Error(`Runtime synchronization is not implemented for ${engine || "empty"}.`);
+      }
+
+      let verification = "";
+      let registrationStatus = "not_applicable";
+      if (runtimeName && engine === "freeswitch") {
+        const gateway = await runLocalCommand(
+          config.freeswitchCli,
+          ["-x", `sofia status gateway ${runtimeName}`],
+          config.commandTimeoutMs,
+        );
+        verification = diagnosticOutput(`${gateway.stdout}\n${gateway.stderr}`);
+        if (runtimeOperation === "remove") {
+          if (!/invalid gateway!/i.test(verification)) {
+            throw new Error(`Removed gateway ${runtimeName} is still loaded.`);
+          }
+        } else {
+          if (gateway.code !== 0 || /invalid gateway!/i.test(verification)) {
+            throw new Error(`Gateway ${runtimeName} was not loaded after runtime synchronization: ${verification || "no output"}`);
+          }
+          if (registrationEnabled) {
+            const register = await runLocalCommand(
+              config.freeswitchCli,
+              ["-x", `sofia profile external register ${runtimeName}`],
+              config.commandTimeoutMs,
+            );
+            verification = diagnosticOutput(`${verification}\n${register.stdout}\n${register.stderr}`);
+            if (register.code !== 0 || /-ERR|invalid gateway!/i.test(verification)) {
+              throw new Error(`Gateway ${runtimeName} registration command failed: ${verification || "no output"}`);
+            }
+          }
+          registrationStatus = trunkRegistrationStatus("freeswitch", verification, 0);
+        }
+      }
+      await jsonRequest(config, `/agent/jobs/${job.jobUUID}/complete`, agentToken, agentUUID, {
+        jobType: "pabx.command",
+        result: {
+          engine,
+          commandType,
+          runtimeName,
+          runtimeOperation,
+          registrationEnabled,
+          registrationStatus,
+          observedAt: new Date().toISOString(),
+          command,
+          method: engine === "freeswitch" ? "local-runtime-sync" : "pjsip-reload",
+          exitCode: result.code,
+          stdout: diagnosticOutput(`${result.stdout}\n${verification}`),
+          stderr: diagnosticOutput(result.stderr),
+        },
+      });
+      log("info", "PABX runtime synchronized.", { jobUUID: job.jobUUID, engine, runtimeName });
+      return;
+    }
+
     if (commandType === "trunk.registration.status") {
       const runtimeName = payloadString(job.payload, "runtimeName").toLowerCase();
       const registrationEnabled = job.payload?.["registrationEnabled"] === true ||
         job.payload?.["registrationEnabled"] === 1 || job.payload?.["registrationEnabled"] === "1";
+      let synchronizationOutput = "";
+      if (engine === "freeswitch") {
+        if (!PABX_TRUNK_RUNTIME_NAME.test(runtimeName)) {
+          throw new Error("Invalid PABX trunk runtime name.");
+        }
+        if (!config.capabilities["voip.freeswitch.manage"]) {
+          throw new Error("FreeSWITCH runtime synchronization capability is unavailable on this Agent.");
+        }
+        const synchronization = await runConfiguredShell(
+          config.freeswitchRuntimeSyncCommand,
+          Math.max(config.commandTimeoutMs, 180_000),
+        );
+        synchronizationOutput = diagnosticOutput(
+          `${synchronization.stdout}\n${synchronization.stderr}`,
+        );
+        if (synchronization.code !== 0) {
+          throw new Error(
+            `FreeSWITCH runtime synchronization failed: ${synchronizationOutput || "no output"}`,
+          );
+        }
+        if (registrationEnabled) {
+          const register = await runLocalCommand(
+            config.freeswitchCli,
+            ["-x", `sofia profile external register ${runtimeName}`],
+            config.commandTimeoutMs,
+          );
+          synchronizationOutput = diagnosticOutput(
+            `${synchronizationOutput}\n${register.stdout}\n${register.stderr}`,
+          );
+          if (register.code !== 0 || /-ERR|invalid gateway!/i.test(synchronizationOutput)) {
+            throw new Error(
+              `FreeSWITCH gateway registration command failed: ${synchronizationOutput || "no output"}`,
+            );
+          }
+        }
+      }
       if (!registrationEnabled) {
         await jsonRequest(
           config,
@@ -1372,8 +1494,10 @@ async function executePabxCommandJob(
               registrationEnabled: false,
               registrationStatus: "not_applicable",
               observedAt: new Date().toISOString(),
-              method: "not_applicable",
-              stdout: "Outbound SIP registration is disabled for this trunk.",
+              method: engine === "freeswitch" ? "local-runtime-sync" : "not_applicable",
+              stdout: diagnosticOutput(
+                `${synchronizationOutput}\nOutbound SIP registration is disabled for this trunk.`,
+              ),
               stderr: "",
             },
           },
@@ -1406,9 +1530,9 @@ async function executePabxCommandJob(
             observedAt: new Date().toISOString(),
             command,
             args,
-            method: result.method ?? "cli",
+            method: engine === "freeswitch" ? "local-runtime-sync+cli" : result.method ?? "cli",
             exitCode: result.code,
-            stdout,
+            stdout: diagnosticOutput(`${synchronizationOutput}\n${stdout}`),
             stderr,
           },
         },

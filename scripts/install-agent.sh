@@ -364,6 +364,9 @@ sync_command = /opt/mnscloud/mnscloud-opensips-sbc/scripts/sync-and-reload-opens
 node_uuid_file = /etc/mnscloud/sbc/node.uuid
 runtime_config_file = /etc/mnscloud/sbc/runtime/config.json
 
+[voip.freeswitch.runtime]
+sync_command = /opt/mnscloud/mnscloud-freeswitch/scripts/sync-freeswitch-runtime.sh
+
 [turn_edge]
 sync_command = /opt/mnscloud/turn/scripts/update-turn.sh
 

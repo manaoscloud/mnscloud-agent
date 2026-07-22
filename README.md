@@ -355,6 +355,12 @@ used.
 - FreeSWITCH hosts with `voip.freeswitch.manage` report live SIP registrations
   in heartbeat payloads so dashboards count registered extensions, not merely
   configured extensions.
+- FreeSWITCH PABX runtime synchronization is Agent-only. A host advertises
+  `voip.freeswitch.manage` only when both `fs_cli` and
+  `[voip.freeswitch.runtime].sync_command` are available. A typed
+  `pabx.command` with `runtime.sync` retrieves the authorized Sofia
+  configuration, replaces it atomically, reloads FreeSWITCH, and verifies the
+  affected gateway. RabbitMQ/ESL control is not a fallback path for this flow.
 - Nginx edge and Certbot can be enabled on the public edge host through
   `nginx-edge.manage` and `certbot.manage` capabilities.
 - WebRTC edge sync is enabled on `mnscloud-kamailio-webrtc` hosts when
