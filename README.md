@@ -8,7 +8,8 @@ Service. There is a single runtime: the Agent only runs work allowed by local
 capabilities declared in `agent.conf`, API assignments, and typed jobs.
 
 PABX diagnostics are typed read-only jobs, never browser-provided shell commands. The
-`extension.registration.status` and `extension.registration.list` jobs inspect the
+`trunk.registration.status`, `trunk.registration.list`, `extension.registration.status` and
+`extension.registration.list` jobs inspect the
 runtime registration state for one extension or for the extensions of an assigned
 PABX account. The API owns authorization, tenant scope, target resolution, and the
 bounded payload; the Agent only performs the fixed local engine query.

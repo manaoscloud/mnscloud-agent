@@ -1357,6 +1357,35 @@ type PabxExtensionRuntimeTarget = {
   domain: string;
 };
 
+type PabxTrunkRuntimeTarget = {
+  trunkUUID: string;
+  name: string;
+  runtimeName: string;
+  registrationEnabled: boolean;
+};
+
+function pabxTrunkRuntimeTargets(payload: Record<string, unknown> | null | undefined) {
+  const trunks = payload?.["trunks"];
+  if (!Array.isArray(trunks) || trunks.length === 0 || trunks.length > 500) {
+    throw new Error("PABX trunk runtime diagnostics require between 1 and 500 trunks.");
+  }
+  return trunks.map((item): PabxTrunkRuntimeTarget => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      throw new Error("Invalid PABX trunk runtime target.");
+    }
+    const target = item as Record<string, unknown>;
+    const trunkUUID = payloadString(target, "trunkUUID");
+    const runtimeName = payloadString(target, "runtimeName").toLowerCase();
+    const name = payloadString(target, "name") || runtimeName;
+    const registrationEnabled = target["registrationEnabled"] === true ||
+      target["registrationEnabled"] === 1 || target["registrationEnabled"] === "1";
+    if (!trunkUUID || !PABX_TRUNK_RUNTIME_NAME.test(runtimeName)) {
+      throw new Error("Invalid PABX trunk runtime target fields.");
+    }
+    return { trunkUUID, name, runtimeName, registrationEnabled };
+  });
+}
+
 function pabxExtensionRuntimeTargets(payload: Record<string, unknown> | null | undefined) {
   const extensions = payload?.["extensions"];
   if (!Array.isArray(extensions) || extensions.length === 0 || extensions.length > 500) {
@@ -1460,6 +1489,7 @@ async function executePabxCommandJob(
     ![
       "server.health.validate",
       "trunk.registration.status",
+      "trunk.registration.list",
       "extension.registration.status",
       "extension.registration.list",
       "runtime.sync",
@@ -1695,6 +1725,106 @@ async function executePabxCommandJob(
         jobUUID: job.jobUUID,
         engine,
         runtimeName,
+      });
+      return;
+    }
+
+    if (commandType === "trunk.registration.list") {
+      const targets = pabxTrunkRuntimeTargets(job.payload);
+      const observedAt = new Date().toISOString();
+      const trunks = [] as Array<Record<string, unknown>>;
+      let output = "";
+      let errors = "";
+
+      for (const target of targets) {
+        if (!target.registrationEnabled) {
+          const stdout = "Outbound SIP registration is disabled for this trunk.";
+          trunks.push({
+            trunkUUID: target.trunkUUID,
+            name: target.name,
+            runtimeName: target.runtimeName,
+            registrationEnabled: false,
+            registrationStatus: "not_applicable",
+            observedAt,
+            method: "not_applicable",
+            exitCode: 0,
+            stdout,
+            stderr: "",
+          });
+          output += `\n[${target.name}]\n${stdout}\n`;
+          continue;
+        }
+
+        try {
+          const diagnostic = await runPabxTrunkRegistrationDiagnostic(
+            engine,
+            target.runtimeName,
+            config,
+          );
+          const stdout = diagnosticOutput(diagnostic.result.stdout);
+          const stderr = diagnosticOutput(diagnostic.result.stderr);
+          const registrationStatus = trunkRegistrationStatus(
+            engine,
+            `${stdout}\n${stderr}`,
+            diagnostic.result.code,
+          );
+          trunks.push({
+            trunkUUID: target.trunkUUID,
+            name: target.name,
+            runtimeName: target.runtimeName,
+            registrationEnabled: true,
+            registrationStatus,
+            observedAt,
+            command: diagnostic.command,
+            args: diagnostic.args,
+            method: "cli",
+            exitCode: diagnostic.result.code,
+            stdout,
+            stderr,
+          });
+          output += `\n[${target.name}]\n${stdout || stderr || "No command output returned."}\n`;
+          if (stderr) errors += `\n[${target.name}]\n${stderr}\n`;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          trunks.push({
+            trunkUUID: target.trunkUUID,
+            name: target.name,
+            runtimeName: target.runtimeName,
+            registrationEnabled: true,
+            registrationStatus: "failed",
+            observedAt,
+            method: "cli",
+            exitCode: 1,
+            stdout: "",
+            stderr: diagnosticOutput(message),
+          });
+          errors += `\n[${target.name}]\n${message}\n`;
+        }
+      }
+
+      await jsonRequest(
+        config,
+        `/agent/jobs/${job.jobUUID}/complete`,
+        agentToken,
+        agentUUID,
+        {
+          jobType: "pabx.command",
+          result: {
+            engine,
+            commandType,
+            observedAt,
+            method: "cli",
+            exitCode: 0,
+            trunks,
+            stdout: diagnosticOutput(output),
+            stderr: diagnosticOutput(errors),
+          },
+        },
+      );
+      log("info", "PABX trunk aggregate runtime diagnostic completed.", {
+        jobUUID: job.jobUUID,
+        engine,
+        trunkCount: trunks.length,
       });
       return;
     }

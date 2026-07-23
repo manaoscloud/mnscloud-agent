@@ -84,7 +84,8 @@ identity.
   local CLI queries derived from API-owned resource identifiers; their output must be bounded and
   redacted before completion.
 - PABX extension diagnostics use the typed `extension.registration.status` and
-  `extension.registration.list` command types. They inspect one extension or the active extensions
+  `trunk.registration.list` and `extension.registration.list` command types. They inspect one
+  trunk, all active trunks, one extension, or all active extensions
   of an assigned PABX account respectively; payloads contain only API-owned extension identifiers,
   usernames, and domains. Do not add a generic command or shell payload as a shortcut.
 - Linux install/reinstall must explicitly restart `mnscloud-agent` after
