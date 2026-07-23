@@ -96,7 +96,7 @@ type RuntimeVersionReport = {
 };
 
 type PabxRegistrationReport = {
-  engine: "freeswitch";
+  engine: "asterisk" | "freeswitch";
   username: string;
   domain?: string;
   contact?: string;
@@ -1282,6 +1282,7 @@ async function runFreeswitchEslValidate(config: AgentConfig) {
 }
 
 const PABX_TRUNK_RUNTIME_NAME = /^trunk-[a-f0-9]{32}$/;
+const PABX_EXTENSION_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9_.+*-]{0,127}$/;
 const MAX_DIAGNOSTIC_OUTPUT_LENGTH = 24_000;
 
 function diagnosticOutput(value: string) {
@@ -1350,6 +1351,103 @@ async function runPabxTrunkRegistrationDiagnostic(
   throw new Error(`Unsupported PABX engine: ${engine || "empty"}`);
 }
 
+type PabxExtensionRuntimeTarget = {
+  extensionUUID: string;
+  username: string;
+  domain: string;
+};
+
+function pabxExtensionRuntimeTargets(payload: Record<string, unknown> | null | undefined) {
+  const extensions = payload?.["extensions"];
+  if (!Array.isArray(extensions) || extensions.length === 0 || extensions.length > 500) {
+    throw new Error("PABX extension runtime diagnostics require between 1 and 500 extensions.");
+  }
+  return extensions.map((item): PabxExtensionRuntimeTarget => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      throw new Error("Invalid PABX extension runtime target.");
+    }
+    const target = item as Record<string, unknown>;
+    const extensionUUID = payloadString(target, "extensionUUID");
+    const username = payloadString(target, "username");
+    const domain = normalizeDomain(payloadString(target, "domain"));
+    if (!extensionUUID || !PABX_EXTENSION_IDENTIFIER.test(username)) {
+      throw new Error("Invalid PABX extension runtime target fields.");
+    }
+    assertSafeDomain(domain);
+    return { extensionUUID, username, domain };
+  });
+}
+
+function parseAsteriskPjsipContacts(output: string): PabxRegistrationReport[] {
+  const reports: PabxRegistrationReport[] = [];
+  for (const rawLine of output.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    const match = line.match(/Contact:\s+([^\s/]+)\/sip:([^@;>]+)@([^;>\s]+)/i);
+    if (!match) continue;
+    reports.push({
+      engine: "asterisk",
+      username: match[2],
+      domain: normalizeDomain(match[3]),
+      contact: match[0].replace(/^Contact:\s+/i, ""),
+      networkIP: match[3],
+    });
+  }
+  return reports;
+}
+
+async function runPabxExtensionRegistrationDiagnostic(engine: string, config: AgentConfig) {
+  if (engine === "freeswitch") {
+    if (!config.capabilities["voip.freeswitch.manage"]) {
+      throw new Error("FreeSWITCH management capability is unavailable on this Agent.");
+    }
+    const args = ["-x", "show registrations as json"];
+    const result = await runLocalCommand(config.freeswitchCli, args, config.commandTimeoutMs);
+    if (result.code !== 0) return { command: config.freeswitchCli, args, result, reports: [] };
+    let reports: PabxRegistrationReport[] = [];
+    try {
+      reports = rowsFromJsonPayload(JSON.parse(result.stdout))
+        .map(normalizeFreeSwitchRegistrationRow)
+        .filter((item): item is PabxRegistrationReport => item !== null);
+    } catch {
+      reports = parseFreeSwitchRegistrationsText(result.stdout);
+    }
+    return { command: config.freeswitchCli, args, result, reports };
+  }
+  if (engine === "asterisk") {
+    if (!config.capabilities["voip.asterisk.manage"]) {
+      throw new Error("Asterisk management capability is unavailable on this Agent.");
+    }
+    const args = ["-rx", "pjsip show contacts"];
+    const result = await runLocalCommand(config.asteriskCli, args, config.commandTimeoutMs);
+    return {
+      command: config.asteriskCli,
+      args,
+      result,
+      reports: result.code === 0 ? parseAsteriskPjsipContacts(result.stdout) : [],
+    };
+  }
+  throw new Error(`Unsupported PABX engine: ${engine || "empty"}`);
+}
+
+function extensionRegistrationStatus(
+  target: PabxExtensionRuntimeTarget,
+  reports: PabxRegistrationReport[],
+) {
+  const registration = reports.find((item) =>
+    item.username === target.username &&
+    (!target.domain || normalizeDomain(item.domain ?? "") === target.domain)
+  );
+  return {
+    extensionUUID: target.extensionUUID,
+    username: target.username,
+    domain: target.domain,
+    registrationStatus: registration ? "registered" : "not_registered",
+    endpoint: registration?.networkIP ?? null,
+    contact: registration?.contact ?? null,
+    expiresAt: registration?.expiresAt ?? null,
+  };
+}
+
 async function executePabxCommandJob(
   job: LeaseJob,
   config: AgentConfig,
@@ -1358,7 +1456,15 @@ async function executePabxCommandJob(
 ) {
   const engine = String(job.engine ?? "").toLowerCase();
   const commandType = String(job.commandType ?? "");
-  if (!["server.health.validate", "trunk.registration.status", "runtime.sync"].includes(commandType)) {
+  if (
+    ![
+      "server.health.validate",
+      "trunk.registration.status",
+      "extension.registration.status",
+      "extension.registration.list",
+      "runtime.sync",
+    ].includes(commandType)
+  ) {
     await failJob(
       config,
       job.jobUUID,
@@ -1375,6 +1481,61 @@ async function executePabxCommandJob(
   let args: string[] = [];
   let result: { code: number; stdout: string; stderr: string; method?: string };
   try {
+    if (
+      commandType === "extension.registration.status" ||
+      commandType === "extension.registration.list"
+    ) {
+      const targets = pabxExtensionRuntimeTargets(job.payload);
+      const diagnostic = await runPabxExtensionRegistrationDiagnostic(engine, config);
+      command = diagnostic.command;
+      args = diagnostic.args;
+      result = diagnostic.result;
+      const stdout = diagnosticOutput(result.stdout);
+      const stderr = diagnosticOutput(result.stderr);
+      if (result.code !== 0) {
+        await failJob(
+          config,
+          job.jobUUID,
+          agentUUID,
+          agentToken,
+          "COMMAND_FAILED",
+          stderr || stdout || `Exit code ${result.code}`,
+          "pabx.command",
+        );
+        return;
+      }
+      await jsonRequest(
+        config,
+        `/agent/jobs/${job.jobUUID}/complete`,
+        agentToken,
+        agentUUID,
+        {
+          jobType: "pabx.command",
+          result: {
+            engine,
+            commandType,
+            observedAt: new Date().toISOString(),
+            command,
+            args,
+            method: result.method ?? "cli",
+            exitCode: result.code,
+            extensions: targets.map((target) =>
+              extensionRegistrationStatus(target, diagnostic.reports)
+            ),
+            stdout,
+            stderr,
+          },
+        },
+      );
+      log("info", "PABX extension runtime diagnostic completed.", {
+        jobUUID: job.jobUUID,
+        engine,
+        commandType,
+        extensionCount: targets.length,
+      });
+      return;
+    }
+
     if (commandType === "runtime.sync") {
       const runtimeName = payloadString(job.payload, "runtimeName").toLowerCase();
       const runtimeOperation = payloadString(job.payload, "runtimeOperation", "upsert");
@@ -1382,7 +1543,9 @@ async function executePabxCommandJob(
         job.payload?.["registrationEnabled"] === 1 || job.payload?.["registrationEnabled"] === "1";
       if (engine === "freeswitch") {
         if (!config.capabilities["voip.freeswitch.manage"]) {
-          throw new Error("FreeSWITCH runtime synchronization capability is unavailable on this Agent.");
+          throw new Error(
+            "FreeSWITCH runtime synchronization capability is unavailable on this Agent.",
+          );
         }
         command = config.freeswitchRuntimeSyncCommand;
         result = await runConfiguredShell(command, Math.max(config.commandTimeoutMs, 180_000));
@@ -1393,8 +1556,14 @@ async function executePabxCommandJob(
         command = config.asteriskCli;
         args = ["-rx", "pjsip reload"];
         result = await runLocalCommand(command, args, config.commandTimeoutMs);
-        if (result.code !== 0 || /error|fail/.test(`${result.stdout}\n${result.stderr}`.toLowerCase())) {
-          throw new Error(`Asterisk PJSIP reload failed: ${diagnosticOutput(`${result.stdout}\n${result.stderr}`) || "no output"}`);
+        if (
+          result.code !== 0 || /error|fail/.test(`${result.stdout}\n${result.stderr}`.toLowerCase())
+        ) {
+          throw new Error(
+            `Asterisk PJSIP reload failed: ${
+              diagnosticOutput(`${result.stdout}\n${result.stderr}`) || "no output"
+            }`,
+          );
         }
       } else {
         throw new Error(`Runtime synchronization is not implemented for ${engine || "empty"}.`);
@@ -1415,7 +1584,11 @@ async function executePabxCommandJob(
           }
         } else {
           if (gateway.code !== 0 || /invalid gateway!/i.test(verification)) {
-            throw new Error(`Gateway ${runtimeName} was not loaded after runtime synchronization: ${verification || "no output"}`);
+            throw new Error(
+              `Gateway ${runtimeName} was not loaded after runtime synchronization: ${
+                verification || "no output"
+              }`,
+            );
           }
           if (registrationEnabled) {
             const register = await runLocalCommand(
@@ -1423,9 +1596,15 @@ async function executePabxCommandJob(
               ["-x", `sofia profile external register ${runtimeName}`],
               config.commandTimeoutMs,
             );
-            verification = diagnosticOutput(`${verification}\n${register.stdout}\n${register.stderr}`);
+            verification = diagnosticOutput(
+              `${verification}\n${register.stdout}\n${register.stderr}`,
+            );
             if (register.code !== 0 || /-ERR|invalid gateway!/i.test(verification)) {
-              throw new Error(`Gateway ${runtimeName} registration command failed: ${verification || "no output"}`);
+              throw new Error(
+                `Gateway ${runtimeName} registration command failed: ${
+                  verification || "no output"
+                }`,
+              );
             }
           }
           registrationStatus = trunkRegistrationStatus("freeswitch", verification, 0);

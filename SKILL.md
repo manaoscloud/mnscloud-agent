@@ -83,6 +83,10 @@ identity.
 - `pabx.command` is a typed allowlist, never a remote shell. Runtime diagnostics may run only fixed
   local CLI queries derived from API-owned resource identifiers; their output must be bounded and
   redacted before completion.
+- PABX extension diagnostics use the typed `extension.registration.status` and
+  `extension.registration.list` command types. They inspect one extension or the active extensions
+  of an assigned PABX account respectively; payloads contain only API-owned extension identifiers,
+  usernames, and domains. Do not add a generic command or shell payload as a shortcut.
 - Linux install/reinstall must explicitly restart `mnscloud-agent` after
   rewriting runtime files, `agent.conf`, or the systemd unit, then synchronize
   installed capabilities with the API. Do not turn capability refresh into a
