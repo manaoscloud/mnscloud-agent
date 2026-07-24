@@ -90,6 +90,7 @@ command_path_from_capability() {
   case "$1" in
     realtime.webrtc.manage) config_value "realtime.webrtc.edge" "sync_command" "/opt/mnscloud/kamailio-webrtc/scripts/update-kamailio-webrtc.sh" ;;
     voip.sbc.manage) config_value "voip.sbc.runtime" "sync_command" "/opt/mnscloud/mnscloud-opensips-sbc/scripts/sync-and-reload-opensips-sbc.sh" ;;
+    voip.softswitch.manage) config_value "voip.softswitch.runtime" "sync_command" "/opt/mnscloud/mnscloud-kamailio-softswitch/scripts/sync-kamailio-softswitch-runtime.sh" ;;
     voip.freeswitch.manage) config_value "voip.freeswitch.runtime" "sync_command" "/opt/mnscloud/mnscloud-freeswitch/scripts/sync-freeswitch-runtime.sh" ;;
     realtime.turn.manage) config_value "turn_edge" "sync_command" "/opt/mnscloud/turn/scripts/update-turn.sh" ;;
     realtime.media.manage) config_value "realtime_media_edge" "sync_command" "/opt/mnscloud/media/scripts/update-media.sh" ;;

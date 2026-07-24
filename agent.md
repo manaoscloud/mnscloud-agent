@@ -247,6 +247,11 @@ runtime_config_file = /etc/mnscloud/sbc/runtime/config.json
 [voip.freeswitch.runtime]
 sync_command = /opt/mnscloud/mnscloud-freeswitch/scripts/sync-freeswitch-runtime.sh
 
+[voip.softswitch.runtime]
+sync_command = /opt/mnscloud/mnscloud-kamailio-softswitch/scripts/sync-kamailio-softswitch-runtime.sh
+node_uuid_file = /etc/mnscloud/softswitch/node.uuid
+runtime_config_file = /etc/mnscloud/softswitch/runtime/registrations.json
+
 [turn_edge]
 sync_command = /opt/mnscloud/turn/scripts/update-turn.sh
 
