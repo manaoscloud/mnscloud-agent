@@ -1298,6 +1298,43 @@ function commandOutputFailed(result: { code: number; stdout: string; stderr: str
   );
 }
 
+function freeswitchGatewayState(output: string) {
+  return output.match(/^\s*State\s+([^\s]+)/mi)?.[1]?.toUpperCase() ?? null;
+}
+
+async function waitForFreeSwitchGatewayUnregistration(
+  config: AgentConfig,
+  runtimeName: string,
+) {
+  const deadline = Date.now() + 30_000;
+  let lastOutput = "";
+
+  while (Date.now() < deadline) {
+    const status = await runLocalCommand(
+      config.freeswitchCli,
+      ["-x", `sofia status gateway ${runtimeName}`],
+      config.commandTimeoutMs,
+    );
+    lastOutput = `${status.stdout}\n${status.stderr}`;
+    const state = freeswitchGatewayState(lastOutput);
+
+    // Sofia reports UNREGISTER while an unregister is queued and UNREGED only
+    // after the gateway has returned to its unregistered state.
+    if (state === "UNREGED") return { state, output: lastOutput };
+    if (/invalid gateway!/i.test(lastOutput)) {
+      throw new Error(
+        `FreeSWITCH gateway ${runtimeName} disappeared before unregistration was confirmed.`,
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+  }
+
+  throw new Error(
+    `Timed out waiting for FreeSWITCH to confirm unregistration of ${runtimeName}. ` +
+      `Last Sofia state: ${freeswitchGatewayState(lastOutput) ?? "unknown"}.`,
+  );
+}
+
 function trunkRegistrationStatus(engine: string, output: string, exitCode: number) {
   const normalized = output.toLowerCase();
   if (/invalid gateway!|not found/.test(normalized)) return "not_configured";
@@ -1586,6 +1623,7 @@ async function executePabxCommandJob(
       let unregisterArgs: string[] = [];
       let reconcileCommand = "";
       let reconcileArgs: string[] = [];
+      let unregistrationState: string | null = null;
 
       if (engine === "freeswitch") {
         if (!config.capabilities["voip.freeswitch.manage"]) {
@@ -1623,7 +1661,14 @@ async function executePabxCommandJob(
           );
         }
 
-        reconcileCommand = config.freeswitchRuntimeSyncCommand;
+        const unregistration = await waitForFreeSwitchGatewayUnregistration(
+          config,
+          runtimeName,
+        );
+        unregistrationState = unregistration.state;
+
+        reconcileCommand = `MNSCLOUD_FREESWITCH_RETIRE_GATEWAYS=${runtimeName} ` +
+          config.freeswitchRuntimeSyncCommand;
         reconcileResult = await runConfiguredShell(
           reconcileCommand,
           Math.max(config.commandTimeoutMs, 180_000),
@@ -1714,6 +1759,8 @@ async function executePabxCommandJob(
           commandType,
           runtimeName,
           unregistrationRequested: true,
+          unregistrationConfirmed: engine === "freeswitch",
+          unregistrationState,
           runtimeRemoved: true,
           observedAt: new Date().toISOString(),
           unregisterCommand,
