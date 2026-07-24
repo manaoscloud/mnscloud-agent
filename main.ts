@@ -1292,6 +1292,12 @@ function diagnosticOutput(value: string) {
     .trim();
 }
 
+function commandOutputFailed(result: { code: number; stdout: string; stderr: string }) {
+  return result.code !== 0 || /(^|\n)\s*(?:-ERR|ERROR|FAILED)\b/i.test(
+    `${result.stdout}\n${result.stderr}`,
+  );
+}
+
 function trunkRegistrationStatus(engine: string, output: string, exitCode: number) {
   const normalized = output.toLowerCase();
   if (/invalid gateway!|not found/.test(normalized)) return "not_configured";
@@ -1493,6 +1499,7 @@ async function executePabxCommandJob(
       "extension.registration.status",
       "extension.registration.list",
       "runtime.sync",
+      "trunk.unregister",
     ].includes(commandType)
   ) {
     await failJob(
@@ -1562,6 +1569,170 @@ async function executePabxCommandJob(
         engine,
         commandType,
         extensionCount: targets.length,
+      });
+      return;
+    }
+
+    if (commandType === "trunk.unregister") {
+      const runtimeName = payloadString(job.payload, "runtimeName").toLowerCase();
+      if (!PABX_TRUNK_RUNTIME_NAME.test(runtimeName)) {
+        throw new Error("PABX trunk unregistration requires a valid runtime name.");
+      }
+
+      let unregisterResult: { code: number; stdout: string; stderr: string };
+      let reconcileResult: { code: number; stdout: string; stderr: string };
+      let verificationResult: { code: number; stdout: string; stderr: string };
+      let unregisterCommand = "";
+      let unregisterArgs: string[] = [];
+      let reconcileCommand = "";
+      let reconcileArgs: string[] = [];
+
+      if (engine === "freeswitch") {
+        if (!config.capabilities["voip.freeswitch.manage"]) {
+          throw new Error(
+            "FreeSWITCH runtime synchronization capability is unavailable on this Agent.",
+          );
+        }
+
+        const loaded = await runLocalCommand(
+          config.freeswitchCli,
+          ["-x", `sofia status gateway ${runtimeName}`],
+          config.commandTimeoutMs,
+        );
+        if (loaded.code !== 0 || /invalid gateway!/i.test(`${loaded.stdout}\n${loaded.stderr}`)) {
+          throw new Error(
+            `Cannot unregister FreeSWITCH gateway ${runtimeName}: it is not loaded locally. ` +
+              "The carrier registration can only expire unless the trunk is recreated and removed again.",
+          );
+        }
+
+        unregisterCommand = config.freeswitchCli;
+        unregisterArgs = ["-x", `sofia profile external unregister ${runtimeName}`];
+        unregisterResult = await runLocalCommand(
+          unregisterCommand,
+          unregisterArgs,
+          config.commandTimeoutMs,
+        );
+        if (commandOutputFailed(unregisterResult)) {
+          throw new Error(
+            `FreeSWITCH unregistration request failed for ${runtimeName}: ` +
+              `${
+                diagnosticOutput(`${unregisterResult.stdout}\n${unregisterResult.stderr}`) ||
+                "no output"
+              }`,
+          );
+        }
+
+        reconcileCommand = config.freeswitchRuntimeSyncCommand;
+        reconcileResult = await runConfiguredShell(
+          reconcileCommand,
+          Math.max(config.commandTimeoutMs, 180_000),
+        );
+        if (commandOutputFailed(reconcileResult)) {
+          throw new Error(
+            `FreeSWITCH runtime reconciliation failed after unregistering ${runtimeName}: ` +
+              `${
+                diagnosticOutput(`${reconcileResult.stdout}\n${reconcileResult.stderr}`) ||
+                "no output"
+              }`,
+          );
+        }
+
+        verificationResult = await runLocalCommand(
+          config.freeswitchCli,
+          ["-x", `sofia status gateway ${runtimeName}`],
+          config.commandTimeoutMs,
+        );
+        if (
+          !/invalid gateway!/i.test(`${verificationResult.stdout}\n${verificationResult.stderr}`)
+        ) {
+          throw new Error(`FreeSWITCH gateway ${runtimeName} remains loaded after removal.`);
+        }
+      } else if (engine === "asterisk") {
+        if (!config.capabilities["voip.asterisk.manage"]) {
+          throw new Error("Asterisk management capability is unavailable on this Agent.");
+        }
+
+        unregisterCommand = config.asteriskCli;
+        unregisterArgs = ["-rx", `pjsip send unregister ${runtimeName}`];
+        unregisterResult = await runLocalCommand(
+          unregisterCommand,
+          unregisterArgs,
+          config.commandTimeoutMs,
+        );
+        if (
+          commandOutputFailed(unregisterResult) || /not found|no such/i.test(
+            `${unregisterResult.stdout}\n${unregisterResult.stderr}`,
+          )
+        ) {
+          throw new Error(
+            `Asterisk unregistration request failed for ${runtimeName}: ` +
+              `${
+                diagnosticOutput(`${unregisterResult.stdout}\n${unregisterResult.stderr}`) ||
+                "no output"
+              }`,
+          );
+        }
+
+        reconcileCommand = config.asteriskCli;
+        reconcileArgs = ["-rx", "pjsip reload"];
+        reconcileResult = await runLocalCommand(
+          reconcileCommand,
+          reconcileArgs,
+          config.commandTimeoutMs,
+        );
+        if (commandOutputFailed(reconcileResult)) {
+          throw new Error(
+            `Asterisk PJSIP reload failed after unregistering ${runtimeName}: ` +
+              `${
+                diagnosticOutput(`${reconcileResult.stdout}\n${reconcileResult.stderr}`) ||
+                "no output"
+              }`,
+          );
+        }
+
+        verificationResult = await runLocalCommand(
+          config.asteriskCli,
+          ["-rx", `pjsip show registration ${runtimeName}`],
+          config.commandTimeoutMs,
+        );
+        if (
+          !/not found|no such|no outbound registration/i.test(
+            `${verificationResult.stdout}\n${verificationResult.stderr}`,
+          )
+        ) {
+          throw new Error(`Asterisk registration ${runtimeName} remains loaded after removal.`);
+        }
+      } else {
+        throw new Error(`Trunk unregistration is not implemented for ${engine || "empty"}.`);
+      }
+
+      await jsonRequest(config, `/agent/jobs/${job.jobUUID}/complete`, agentToken, agentUUID, {
+        jobType: "pabx.command",
+        result: {
+          engine,
+          commandType,
+          runtimeName,
+          unregistrationRequested: true,
+          runtimeRemoved: true,
+          observedAt: new Date().toISOString(),
+          unregisterCommand,
+          unregisterArgs,
+          reconcileCommand,
+          reconcileArgs,
+          exitCode: reconcileResult.code,
+          stdout: diagnosticOutput(
+            `${unregisterResult.stdout}\n${reconcileResult.stdout}\n${verificationResult.stdout}`,
+          ),
+          stderr: diagnosticOutput(
+            `${unregisterResult.stderr}\n${reconcileResult.stderr}\n${verificationResult.stderr}`,
+          ),
+        },
+      });
+      log("info", "PABX trunk unregistered and removed from runtime.", {
+        jobUUID: job.jobUUID,
+        engine,
+        runtimeName,
       });
       return;
     }
