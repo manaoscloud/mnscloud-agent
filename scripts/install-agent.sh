@@ -367,6 +367,11 @@ runtime_config_file = /etc/mnscloud/sbc/runtime/config.json
 [voip.freeswitch.runtime]
 sync_command = /opt/mnscloud/mnscloud-freeswitch/scripts/sync-freeswitch-runtime.sh
 
+[voip.softswitch.runtime]
+sync_command = /opt/mnscloud/mnscloud-kamailio-softswitch/scripts/sync-kamailio-softswitch-runtime.sh
+node_uuid_file = /etc/mnscloud/softswitch/node.uuid
+runtime_config_file = /etc/mnscloud/softswitch/runtime/registrations.json
+
 [turn_edge]
 sync_command = /opt/mnscloud/turn/scripts/update-turn.sh
 
@@ -390,6 +395,7 @@ voip.asterisk.manage = $(detect_capability asterisk)
 voip.freeswitch.manage = $(detect_capability fs_cli)
 realtime.webrtc.manage = $(detect_executable_file /opt/mnscloud/kamailio-webrtc/scripts/update-kamailio-webrtc.sh)
 voip.sbc.manage = $(detect_executable_file /opt/mnscloud/mnscloud-opensips-sbc/scripts/sync-and-reload-opensips-sbc.sh)
+voip.softswitch.manage = $(detect_executable_file /opt/mnscloud/mnscloud-kamailio-softswitch/scripts/sync-kamailio-softswitch-runtime.sh)
 realtime.turn.manage = $(detect_executable_file /opt/mnscloud/turn/scripts/update-turn.sh)
 realtime.media.manage = $(detect_executable_file /opt/mnscloud/media/scripts/update-media.sh)
 docker.manage = $(detect_capability docker)

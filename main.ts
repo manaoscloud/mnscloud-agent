@@ -34,6 +34,9 @@ type AgentConfig = {
   sbcSyncCommand: string;
   sbcNodeUUIDFile: string;
   sbcRuntimeConfigFile: string;
+  softswitchSyncCommand: string;
+  softswitchNodeUUIDFile: string;
+  softswitchRuntimeConfigFile: string;
   turnEdgeSyncCommand: string;
   mediaEdgeSyncCommand: string;
   freeswitchRuntimeSyncCommand: string;
@@ -60,6 +63,7 @@ type LeaseJob = {
     | "certbot"
     | "realtime.webrtc.edge"
     | "voip.sbc.runtime"
+    | "voip.softswitch.runtime"
     | "runtime.update"
     | string
     | null;
@@ -183,6 +187,9 @@ async function applyRuntimeCapabilities(config: AgentConfig) {
   );
   config.capabilities["voip.sbc.manage"] = await isExecutableFile(
     config.sbcSyncCommand,
+  );
+  config.capabilities["voip.softswitch.manage"] = await isExecutableFile(
+    config.softswitchSyncCommand,
   );
   config.capabilities["realtime.turn.manage"] = await isExecutableFile(
     config.turnEdgeSyncCommand,
@@ -411,6 +418,24 @@ async function loadConfig(): Promise<AgentConfig> {
       "voip.sbc.runtime",
       "runtime_config_file",
       "/etc/mnscloud/sbc/runtime/config.json",
+    ),
+    softswitchSyncCommand: getConfigValue(
+      parsed,
+      "voip.softswitch.runtime",
+      "sync_command",
+      "/opt/mnscloud/mnscloud-kamailio-softswitch/scripts/sync-kamailio-softswitch-runtime.sh",
+    ),
+    softswitchNodeUUIDFile: getConfigValue(
+      parsed,
+      "voip.softswitch.runtime",
+      "node_uuid_file",
+      "/etc/mnscloud/softswitch/node.uuid",
+    ),
+    softswitchRuntimeConfigFile: getConfigValue(
+      parsed,
+      "voip.softswitch.runtime",
+      "runtime_config_file",
+      "/etc/mnscloud/softswitch/runtime/registrations.json",
     ),
     turnEdgeSyncCommand: getConfigValue(
       parsed,
@@ -787,6 +812,12 @@ async function heartbeat(
     ? (await optionalRead(config.sbcNodeUUIDFile))?.trim()
     : null;
   const sbcRuntimeConfig = sbcNodeUUID ? await optionalRead(config.sbcRuntimeConfigFile) : "";
+  const softswitchNodeUUID = config.capabilities["voip.softswitch.manage"]
+    ? (await optionalRead(config.softswitchNodeUUIDFile))?.trim()
+    : null;
+  const softswitchRuntimeConfig = softswitchNodeUUID
+    ? await optionalRead(config.softswitchRuntimeConfigFile)
+    : "";
   await jsonRequest(config, "/agent/heartbeat", agentToken, agentUUID, {
     name: config.name,
     hostname: config.hostname,
@@ -807,6 +838,13 @@ async function heartbeat(
         nodeUUID: sbcNodeUUID,
         engine: "opensips",
         needsSync: !sbcRuntimeConfig,
+      }
+      : undefined,
+    softswitchRuntime: softswitchNodeUUID
+      ? {
+        nodeUUID: softswitchNodeUUID,
+        engine: "kamailio",
+        needsSync: !softswitchRuntimeConfig,
       }
       : undefined,
     pabxRegistrations,
@@ -4725,6 +4763,55 @@ async function executeSbcRuntimeJob(
   }
 }
 
+async function executeSoftswitchRuntimeJob(
+  job: LeaseJob,
+  config: AgentConfig,
+  agentUUID: string,
+  agentToken: string,
+) {
+  const command = String(job.commandType ?? job.payload?.command ?? job.payload?.["command"] ?? "");
+  try {
+    assertCapability(config, "voip.softswitch.manage");
+    if (command !== "voip.softswitch.sync") {
+      await failJob(
+        config,
+        job.jobUUID,
+        agentUUID,
+        agentToken,
+        "SOFTSWITCH_RUNTIME_COMMAND_NOT_IMPLEMENTED",
+        `${command || "unknown"} is not implemented by this agent version.`,
+        "voip.softswitch.runtime",
+      );
+      return;
+    }
+    const result = await runConfiguredShell(
+      config.softswitchSyncCommand,
+      Math.max(config.commandTimeoutMs, 180_000),
+    );
+    await jsonRequest(config, `/agent/jobs/${job.jobUUID}/complete`, agentToken, agentUUID, {
+      jobType: "voip.softswitch.runtime",
+      result: {
+        command,
+        stdout: result.stdout,
+        stderr: result.stderr,
+        serverUUID: payloadString(job.payload, "serverUUID"),
+        reason: payloadString(job.payload, "reason"),
+      },
+    });
+    log("info", "Softswitch runtime job completed.", { jobUUID: job.jobUUID });
+  } catch (error) {
+    await failJob(
+      config,
+      job.jobUUID,
+      agentUUID,
+      agentToken,
+      "SOFTSWITCH_RUNTIME_COMMAND_FAILED",
+      error instanceof Error ? error.message : String(error),
+      "voip.softswitch.runtime",
+    );
+  }
+}
+
 async function pollJobs(
   config: AgentConfig,
   agentUUID: string,
@@ -4752,6 +4839,8 @@ async function pollJobs(
       await executeWebRtcEdgeJob(job, config, agentUUID, agentToken);
     } else if (job.jobType === "voip.sbc.runtime") {
       await executeSbcRuntimeJob(job, config, agentUUID, agentToken);
+    } else if (job.jobType === "voip.softswitch.runtime") {
+      await executeSoftswitchRuntimeJob(job, config, agentUUID, agentToken);
     } else if (job.jobType === "runtime.update") {
       await executeRuntimeUpdateJob(job, config, agentUUID, agentToken);
     } else {
