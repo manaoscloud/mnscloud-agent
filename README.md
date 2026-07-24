@@ -367,7 +367,10 @@ used.
   `[voip.freeswitch.runtime].sync_command` are available. A typed
   `pabx.command` with `runtime.sync` retrieves the authorized Sofia
   configuration, replaces it atomically, reloads FreeSWITCH, and verifies the
-  affected gateway. RabbitMQ/ESL control is not a fallback path for this flow.
+  affected gateway. A registering-trunk removal uses the distinct typed
+  `trunk.unregister` command: the Agent waits for Sofia to reach `UNREGED`
+  before authorizing local gateway removal. RabbitMQ/ESL control is not a
+  fallback path for this flow.
 - Nginx edge and Certbot can be enabled on the public edge host through
   `nginx-edge.manage` and `certbot.manage` capabilities.
 - WebRTC edge sync is enabled on `mnscloud-kamailio-webrtc` hosts when
