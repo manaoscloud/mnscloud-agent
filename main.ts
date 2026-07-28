@@ -3027,7 +3027,9 @@ function crowdSecPolicyServices(services: unknown[]) {
 function crowdSecScenarioContainsFilter(services: CrowdSecPolicyService[]) {
   const supported = services
     .map((service) => service.slug)
-    .filter((slug) => ["asterisk", "freeswitch", "ssh", "nginx", "apache"].includes(slug));
+    .filter((slug) =>
+      ["asterisk", "freeswitch", "kamailio", "opensips", "ssh", "nginx", "apache"].includes(slug)
+    );
   const unique = [...new Set(supported)];
   if (unique.length === 0) return "";
   return unique.map((slug) => `Alert.GetScenario() contains "${slug}"`).join(
@@ -3145,10 +3147,57 @@ function crowdSecStrictScenarioContent(services: CrowdSecPolicyService[]) {
       "  remediation: true",
     ].join("\n"));
   }
+  for (const engine of ["kamailio", "opensips"]) {
+    if (!slugs.has(engine)) continue;
+    documents.push([
+      "type: leaky",
+      `name: mnscloud/${engine}-sip-auth-bruteforce-strict`,
+      `description: \"MNSCloud strict ${engine} SIP authentication bruteforce detection\"`,
+      `filter: \"evt.Meta.log_type == 'mnscloud_sip_edge_denied' && evt.Meta.service == '${engine}'\"`,
+      'leakspeed: "1m"',
+      "capacity: 8",
+      "groupby: evt.Meta.source_ip",
+      'blackhole: "10m"',
+      "labels:",
+      `  service: ${engine}`,
+      "  confidence: 3",
+      "  spoofable: 0",
+      "  classification:",
+      "    - attack.T1110",
+      '  behavior: "generic:bruteforce"',
+      `  label: \"MNSCloud Strict ${engine} SIP Bruteforce\"`,
+      "  remediation: true",
+    ].join("\n"));
+  }
   if (documents.length === 0) return null;
   return [
     "# Managed by MNSCloud Agent. Do not edit manually.",
     documents.join("\n---\n"),
+    "",
+  ].join("\n");
+}
+
+function crowdSecSipParserContent(services: CrowdSecPolicyService[]) {
+  const hasSipEdge = services.some((service) =>
+    service.slug === "kamailio" || service.slug === "opensips"
+  );
+  if (!hasSipEdge) return null;
+  return [
+    "# Managed by MNSCloud Agent. Do not edit manually.",
+    "name: mnscloud/sip-edge-denied",
+    'description: "Extracts MNSCloud SIP edge denials for CrowdSec scenarios"',
+    "filter: \"evt.Line.Raw contains 'MNSCloud SIP edge denied'\"",
+    "onsuccess: next_stage",
+    "nodes:",
+    "  - grok:",
+    "      pattern: '%{GREEDYDATA}MNSCloud SIP edge denied engine=%{WORD:service} source=%{IP:source_ip} username=%{DATA:sip_username} domain=%{DATA:sip_domain} reason=%{WORD:sip_reason}'",
+    "statics:",
+    "  - meta: log_type",
+    "    value: mnscloud_sip_edge_denied",
+    "  - meta: service",
+    "    expression: evt.Parsed.service",
+    "  - meta: source_ip",
+    "    expression: evt.Parsed.source_ip",
     "",
   ].join("\n");
 }
@@ -3167,6 +3216,10 @@ function crowdSecPolicyArtifacts(
     {
       path: "/etc/crowdsec/scenarios/mnscloud-profile.yaml",
       content: level === "strict" ? crowdSecStrictScenarioContent(services) : null,
+    },
+    {
+      path: "/etc/crowdsec/parsers/s01-parse/mnscloud-sip-edge.yaml",
+      content: crowdSecSipParserContent(services),
     },
   ];
 }
@@ -3238,7 +3291,8 @@ function crowdSecAcquisitionType(slug: string) {
     freeswitch: "freeswitch",
     mariadb: "mysql",
     nginx: "nginx",
-    opensips: "opensips",
+    kamailio: "syslog",
+    opensips: "syslog",
     postfix: "postfix",
     postgresql: "postgresql",
     ssh: "syslog",
