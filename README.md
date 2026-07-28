@@ -196,6 +196,22 @@ Runtime installers should call `scripts/validate-agent.sh` instead of duplicatin
 validation. This keeps Agent prerequisite behavior consistent across SBC, WebRTC, TURN/STUN,
 media, PABX, and future managed runtimes.
 
+## Cyber Security edge profiles
+
+Cyber Security remains the control plane for SIP scanner detection and temporary blocking. The API
+runtime rate limiter is only an availability guard; it must not be used as the firewall decision
+point for SIP traffic.
+
+- `pabx-edge`: SSH, HTTP management, Asterisk, and FreeSWITCH.
+- `softswitch-edge`: SSH, HTTP management, Kamailio, and OpenSIPS.
+- `sbc-edge`: SSH, HTTP management, and OpenSIPS.
+
+For a strict profile that includes Kamailio or OpenSIPS, the Agent writes a managed CrowdSec parser
+for structured `MNSCloud SIP edge denied` logs. Repeated denials from the same source IP are
+grouped into a CrowdSec decision and enforced by the configured bouncer/firewall. On hosts with
+CrowdSec enabled, validate the generated policy with `sudo crowdsec -t`, inspect parser metrics
+with `sudo cscli metrics`, and inspect active decisions with `sudo cscli decisions list`.
+
 Remote updates from the MNSCloud App use explicit release refs. The API queues a
 `runtime.update` job with `product`, capability, and `targetRef`. Agent
 self-updates are scheduled outside the running service process; API/App runtime
