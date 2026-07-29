@@ -402,7 +402,8 @@ used.
   `voip.softswitch.manage` when `[voip.softswitch.runtime].sync_command` and
   `[voip.softswitch.runtime].subscriber_status_command` are executable. Its heartbeat includes the
   node UUID and sanitized runtime-state presence, allowing the API to maintain the
-  `voip.softswitch.server` assignment and queue typed `voip.softswitch.runtime` jobs. The Agent invokes the
+  `voip.softswitch.server` assignment and queue a platform-scoped `voip.softswitch.sync` bootstrap job
+  without inventing a tenant scope for the server. The Agent invokes the
   local reconciliation script; Kamailio's UAC module owns registration renewal
   between synchronizations.
 - TURN/STUN edge management is enabled on `mnscloud-turn` hosts when
