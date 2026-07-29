@@ -151,11 +151,13 @@ identity.
   `voip.freeswitch.manage`; a `pabx.command` with `runtime.sync` may execute
   only `[voip.freeswitch.runtime].sync_command`, never a remote ESL command or
   arbitrary shell payload.
-- Keep Kamailio Softswitch runtime synchronization capability-based with
+- Keep Kamailio Softswitch runtime synchronization and subscriber diagnostics capability-based with
   `voip.softswitch.manage`; the Agent may run only
-  `[voip.softswitch.runtime].sync_command` for `voip.softswitch.runtime` jobs.
-  The local reconciler applies or removes UAC registrations and never logs
-  registration credentials.
+  `[voip.softswitch.runtime].sync_command` for `runtime.sync` and
+  `[voip.softswitch.runtime].subscriber_status_command` for
+  `subscriber.registration.status` or `subscriber.registration.list` jobs. The status command receives
+  only a bounded structured subscriber list and must not accept arbitrary shell input. The local
+  reconciler applies or removes UAC registrations and never logs registration credentials.
 - Keep TURN/STUN edge functionality capability-based with
   `realtime.turn.manage`; the Agent may run only typed TURN jobs once the
   API/control plane owns the corresponding contract. The effective capability

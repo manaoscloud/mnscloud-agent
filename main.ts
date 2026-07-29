@@ -35,6 +35,7 @@ type AgentConfig = {
   sbcNodeUUIDFile: string;
   sbcRuntimeConfigFile: string;
   softswitchSyncCommand: string;
+  softswitchSubscriberStatusCommand: string;
   softswitchNodeUUIDFile: string;
   softswitchRuntimeConfigFile: string;
   turnEdgeSyncCommand: string;
@@ -188,9 +189,9 @@ async function applyRuntimeCapabilities(config: AgentConfig) {
   config.capabilities["voip.sbc.manage"] = await isExecutableFile(
     config.sbcSyncCommand,
   );
-  config.capabilities["voip.softswitch.manage"] = await isExecutableFile(
-    config.softswitchSyncCommand,
-  );
+  config.capabilities["voip.softswitch.manage"] =
+    (await isExecutableFile(config.softswitchSyncCommand)) &&
+    (await isExecutableFile(config.softswitchSubscriberStatusCommand));
   config.capabilities["realtime.turn.manage"] = await isExecutableFile(
     config.turnEdgeSyncCommand,
   );
@@ -424,6 +425,12 @@ async function loadConfig(): Promise<AgentConfig> {
       "voip.softswitch.runtime",
       "sync_command",
       "/opt/mnscloud/mnscloud-kamailio-softswitch/scripts/sync-kamailio-softswitch-runtime.sh",
+    ),
+    softswitchSubscriberStatusCommand: getConfigValue(
+      parsed,
+      "voip.softswitch.runtime",
+      "subscriber_status_command",
+      "/opt/mnscloud/mnscloud-kamailio-softswitch/scripts/kamailio-subscriber-runtime-status.sh",
     ),
     softswitchNodeUUIDFile: getConfigValue(
       parsed,
@@ -4826,7 +4833,10 @@ async function executeSoftswitchRuntimeJob(
   const command = String(job.commandType ?? job.payload?.command ?? job.payload?.["command"] ?? "");
   try {
     assertCapability(config, "voip.softswitch.manage");
-    if (command !== "voip.softswitch.sync") {
+    if (
+      !["voip.softswitch.sync", "subscriber.registration.status", "subscriber.registration.list"]
+        .includes(command)
+    ) {
       await failJob(
         config,
         job.jobUUID,
@@ -4838,10 +4848,52 @@ async function executeSoftswitchRuntimeJob(
       );
       return;
     }
-    const result = await runConfiguredShell(
-      config.softswitchSyncCommand,
-      Math.max(config.commandTimeoutMs, 180_000),
-    );
+    let result: { stdout: string; stderr: string; code?: number };
+    if (command === "voip.softswitch.sync") {
+      result = await runConfiguredShell(
+        config.softswitchSyncCommand,
+        Math.max(config.commandTimeoutMs, 180_000),
+      );
+    } else {
+      const engine = payloadString(job.payload, "engine", String(job.engine ?? "")).toLowerCase();
+      if (engine !== "kamailio") {
+        throw new Error(
+          `Softswitch subscriber diagnostics are not implemented for engine: ${
+            engine || "unknown"
+          }.`,
+        );
+      }
+      const subscribers = Array.isArray(job.payload?.subscribers) ? job.payload.subscribers : [];
+      if (!subscribers.length || subscribers.length > 500) {
+        throw new Error("Softswitch subscriber diagnostic payload is invalid.");
+      }
+      const input = await Deno.makeTempFile({
+        prefix: "mnscloud-softswitch-subscribers-",
+        suffix: ".json",
+      });
+      try {
+        await Deno.writeTextFile(input, JSON.stringify({ subscribers }));
+        await Deno.chmod(input, 0o600);
+        result = await runLocalCommand(
+          config.softswitchSubscriberStatusCommand,
+          ["--input", input],
+          Math.max(config.commandTimeoutMs, 60_000),
+        );
+        if (result.code !== 0) {
+          throw new Error(
+            result.stderr || result.stdout || "Softswitch subscriber diagnostic failed.",
+          );
+        }
+      } finally {
+        await Deno.remove(input).catch(() => undefined);
+      }
+    }
+    let diagnostic: unknown = null;
+    try {
+      diagnostic = JSON.parse(result.stdout);
+    } catch {
+      diagnostic = null;
+    }
     await jsonRequest(config, `/agent/jobs/${job.jobUUID}/complete`, agentToken, agentUUID, {
       jobType: "voip.softswitch.runtime",
       result: {
@@ -4850,6 +4902,9 @@ async function executeSoftswitchRuntimeJob(
         stderr: result.stderr,
         serverUUID: payloadString(job.payload, "serverUUID"),
         reason: payloadString(job.payload, "reason"),
+        ...(diagnostic && typeof diagnostic === "object"
+          ? diagnostic as Record<string, unknown>
+          : {}),
       },
     });
     log("info", "Softswitch runtime job completed.", { jobUUID: job.jobUUID });

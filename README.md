@@ -398,11 +398,11 @@ used.
   `[voip.sbc.runtime].node_uuid_file` and whether
   `[voip.sbc.runtime].runtime_config_file` exists, so the API can bind the host to its
   `voip.sbc.server` assignment and queue the initial `voip.sbc.runtime` job when needed.
-- Softswitch runtime sync is Agent-only. A Kamailio host advertises
-  `voip.softswitch.manage` when `[voip.softswitch.runtime].sync_command` is
-  executable. Its heartbeat includes the node UUID and sanitized runtime-state
-  presence, allowing the API to maintain the `voip.softswitch.server`
-  assignment and queue `voip.softswitch.runtime` jobs. The Agent invokes the
+- Softswitch runtime sync and subscriber diagnostics are Agent-only. A Kamailio host advertises
+  `voip.softswitch.manage` when `[voip.softswitch.runtime].sync_command` and
+  `[voip.softswitch.runtime].subscriber_status_command` are executable. Its heartbeat includes the
+  node UUID and sanitized runtime-state presence, allowing the API to maintain the
+  `voip.softswitch.server` assignment and queue typed `voip.softswitch.runtime` jobs. The Agent invokes the
   local reconciliation script; Kamailio's UAC module owns registration renewal
   between synchronizations.
 - TURN/STUN edge management is enabled on `mnscloud-turn` hosts when
