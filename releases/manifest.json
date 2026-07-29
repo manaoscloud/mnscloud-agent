@@ -16,11 +16,12 @@
   },
   "channels": {
     "stable": {
-      "version": "1.0.43",
-      "ref": "v1.0.43",
+      "version": "1.0.55",
+      "ref": "v1.0.55",
       "minimumVersion": "1.0.0",
-      "releasedAt": "2026-07-05T00:11:49Z",
-      "autoUpdate": false
+      "releasedAt": "2026-07-29T13:18:09Z",
+      "autoUpdate": false,
+      "sourceSha": "01b2dd116449f4dcca82ca3f4d5cbd30fceae245"
     },
     "candidate": {
       "version": "1.0.4",
