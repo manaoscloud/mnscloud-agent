@@ -136,6 +136,12 @@ validate_capability() {
   if command_path="$(command_path_from_capability "$capability")"; then
     [[ -x "$command_path" ]] ||
       fail "Agent capability ${capability} requires executable local command: ${command_path}"
+    if [[ "$capability" == "voip.softswitch.manage" ]]; then
+      local status_command
+      status_command="$(config_value "voip.softswitch.runtime" "subscriber_status_command" "/opt/mnscloud/mnscloud-kamailio-softswitch/scripts/kamailio-subscriber-runtime-status.sh")"
+      [[ -x "$status_command" ]] ||
+        fail "Agent capability ${capability} requires executable subscriber status command: ${status_command}"
+    fi
     ok "Agent capability ${capability} is derivable from executable local command."
     return 0
   fi

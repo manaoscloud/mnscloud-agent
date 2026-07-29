@@ -658,8 +658,16 @@ async function jsonRequest<T>(
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
+    const record = payload && typeof payload === "object" && !Array.isArray(payload)
+      ? payload as Record<string, unknown>
+      : {};
+    const diagnostics = [record["code"], record["error"], record["detail"]]
+      .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+      .map((value) => value.replace(/\s+/g, " ").trim().slice(0, 300));
     throw new Error(
-      typeof payload?.error === "string" ? payload.error : `HTTP ${response.status}`,
+      `${path} returned HTTP ${response.status}${
+        diagnostics.length ? `: ${diagnostics.join(" | ")}` : ""
+      }`,
     );
   }
   return payload as T;

@@ -369,6 +369,7 @@ sync_command = /opt/mnscloud/mnscloud-freeswitch/scripts/sync-freeswitch-runtime
 
 [voip.softswitch.runtime]
 sync_command = /opt/mnscloud/mnscloud-kamailio-softswitch/scripts/sync-kamailio-softswitch-runtime.sh
+subscriber_status_command = /opt/mnscloud/mnscloud-kamailio-softswitch/scripts/kamailio-subscriber-runtime-status.sh
 node_uuid_file = /etc/mnscloud/softswitch/node.uuid
 runtime_config_file = /etc/mnscloud/softswitch/runtime/registrations.json
 
