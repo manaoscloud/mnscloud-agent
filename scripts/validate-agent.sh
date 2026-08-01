@@ -42,6 +42,7 @@ log() {
 
 info() { log INFO "$*"; }
 ok() { log OK "$*"; }
+warn() { log WARN "$*"; }
 fail() { log ERROR "$*"; exit 1; }
 
 trim_file() {
@@ -140,7 +141,7 @@ validate_capability() {
       local status_command
       status_command="$(config_value "voip.softswitch.runtime" "subscriber_status_command" "/opt/mnscloud/mnscloud-kamailio-softswitch/scripts/kamailio-subscriber-runtime-status.sh")"
       [[ -x "$status_command" ]] ||
-        fail "Agent capability ${capability} requires executable subscriber status command: ${status_command}"
+        warn "Subscriber runtime diagnostics are unavailable because the optional command is not executable: ${status_command}"
     fi
     ok "Agent capability ${capability} is derivable from executable local command."
     return 0

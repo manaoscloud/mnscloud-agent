@@ -399,9 +399,11 @@ used.
   `[voip.sbc.runtime].runtime_config_file` exists, so the API can bind the host to its
   `voip.sbc.server` assignment and queue the initial `voip.sbc.runtime` job when needed.
 - Softswitch runtime sync and subscriber diagnostics are Agent-only. A Kamailio host advertises
-  `voip.softswitch.manage` when `[voip.softswitch.runtime].sync_command` and
-  `[voip.softswitch.runtime].subscriber_status_command` are executable. Its heartbeat includes the
-  node UUID and sanitized runtime-state presence, allowing the API to maintain the
+  `voip.softswitch.manage` when `[voip.softswitch.runtime].sync_command` is executable. Subscriber
+  diagnostics validate `[voip.softswitch.runtime].subscriber_status_command` only when that
+  read-only diagnostic is requested, so an unavailable diagnostic never blocks provisioning or
+  synchronization. Its heartbeat includes the node UUID and sanitized runtime-state presence,
+  allowing the API to maintain the
   `voip.softswitch.server` assignment and queue a platform-scoped `voip.softswitch.sync` bootstrap job
   without inventing a tenant scope for the server. The Agent invokes the
   local reconciliation script; Kamailio's UAC module owns registration renewal

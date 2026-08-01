@@ -189,9 +189,11 @@ async function applyRuntimeCapabilities(config: AgentConfig) {
   config.capabilities["voip.sbc.manage"] = await isExecutableFile(
     config.sbcSyncCommand,
   );
-  config.capabilities["voip.softswitch.manage"] =
-    (await isExecutableFile(config.softswitchSyncCommand)) &&
-    (await isExecutableFile(config.softswitchSubscriberStatusCommand));
+  // Runtime provisioning depends only on the canonical synchronizer. Subscriber
+  // diagnostics validate their dedicated read-only command when a job is executed.
+  config.capabilities["voip.softswitch.manage"] = await isExecutableFile(
+    config.softswitchSyncCommand,
+  );
   config.capabilities["realtime.turn.manage"] = await isExecutableFile(
     config.turnEdgeSyncCommand,
   );
