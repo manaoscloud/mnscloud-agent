@@ -2899,9 +2899,24 @@ async function executeRuntimeUpdateJob(
     }
 
     if (result.code !== 0) {
-      throw new Error(
-        result.stderr || result.stdout || `Updater exited with ${result.code}.`,
+      const stdout = diagnosticOutput(result.stdout);
+      const stderr = diagnosticOutput(result.stderr);
+      const message = [
+        `${target.label} updater exited with code ${result.code}.`,
+        stdout ? `stdout:\n${stdout}` : "",
+        stderr ? `stderr:\n${stderr}` : "",
+        `Guidance: review the failing step above, correct the local prerequisite, then retry the same version.`,
+      ].filter(Boolean).join("\n");
+      await failJob(
+        config,
+        job.jobUUID,
+        agentUUID,
+        agentToken,
+        "RUNTIME_UPDATE_FAILED",
+        message,
+        "runtime.update",
       );
+      return;
     }
 
     const installedRuntime = product !== "mnscloud-agent" && target.repoDir
@@ -4896,9 +4911,7 @@ async function executeSoftswitchRuntimeJob(
       const engine = payloadString(job.payload, "engine", String(job.engine ?? "")).toLowerCase();
       if (engine !== "kamailio") {
         throw new Error(
-          `Softswitch runtime diagnostics are not implemented for engine: ${
-            engine || "unknown"
-          }.`,
+          `Softswitch runtime diagnostics are not implemented for engine: ${engine || "unknown"}.`,
         );
       }
       const isTrunkDiagnostic = command.startsWith("trunk.registration.");
@@ -4906,17 +4919,24 @@ async function executeSoftswitchRuntimeJob(
         ? (Array.isArray(job.payload?.trunks) ? job.payload.trunks : [])
         : (Array.isArray(job.payload?.subscribers) ? job.payload.subscribers : []);
       if (!targets.length || targets.length > 500) {
-        throw new Error(`Softswitch ${isTrunkDiagnostic ? "trunk" : "subscriber"} diagnostic payload is invalid.`);
+        throw new Error(
+          `Softswitch ${isTrunkDiagnostic ? "trunk" : "subscriber"} diagnostic payload is invalid.`,
+        );
       }
       const input = await Deno.makeTempFile({
         prefix: `mnscloud-softswitch-${isTrunkDiagnostic ? "trunks" : "subscribers"}-`,
         suffix: ".json",
       });
       try {
-        await Deno.writeTextFile(input, JSON.stringify(isTrunkDiagnostic ? { trunks: targets } : { subscribers: targets }));
+        await Deno.writeTextFile(
+          input,
+          JSON.stringify(isTrunkDiagnostic ? { trunks: targets } : { subscribers: targets }),
+        );
         await Deno.chmod(input, 0o600);
         result = await runLocalCommand(
-          isTrunkDiagnostic ? config.softswitchTrunkStatusCommand : config.softswitchSubscriberStatusCommand,
+          isTrunkDiagnostic
+            ? config.softswitchTrunkStatusCommand
+            : config.softswitchSubscriberStatusCommand,
           ["--input", input],
           Math.max(config.commandTimeoutMs, 60_000),
         );
