@@ -36,6 +36,7 @@ type AgentConfig = {
   sbcRuntimeConfigFile: string;
   softswitchSyncCommand: string;
   softswitchSubscriberStatusCommand: string;
+  softswitchTrunkStatusCommand: string;
   softswitchNodeUUIDFile: string;
   softswitchRuntimeConfigFile: string;
   turnEdgeSyncCommand: string;
