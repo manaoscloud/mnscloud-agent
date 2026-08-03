@@ -184,6 +184,9 @@ async function applyRuntimeCapabilities(config: AgentConfig) {
   config.capabilities["mnscloud.app.update"] = await isExecutableFile(
     "/opt/mnscloud/mnscloud-app/scripts/update-nginx-runtime.sh",
   );
+  config.capabilities["mnscloud.kamailio-softswitch.update"] = await isExecutableFile(
+    "/opt/mnscloud/mnscloud-kamailio-softswitch/scripts/update-kamailio-softswitch.sh",
+  );
   config.capabilities["realtime.webrtc.manage"] = await isExecutableFile(
     config.webrtcEdgeSyncCommand,
   );
@@ -573,6 +576,12 @@ async function collectRuntimeVersions(config: AgentConfig) {
       "mnscloud-api",
       "mnscloud.api.update",
       "/opt/mnscloud/mnscloud-api",
+      config,
+    ),
+    runtimeVersionReport(
+      "mnscloud-kamailio-softswitch",
+      "mnscloud.kamailio-softswitch.update",
+      "/opt/mnscloud/mnscloud-kamailio-softswitch",
       config,
     ),
     runtimeVersionReport(
@@ -2770,6 +2779,12 @@ function runtimeUpdateTarget(product: string) {
         ].join(" && ");
         return ["bash", "-lc", command];
       },
+    },
+    "mnscloud-kamailio-softswitch": {
+      label: "Kamailio Softswitch",
+      capability: "mnscloud.kamailio-softswitch.update",
+      repoDir: "/opt/mnscloud/mnscloud-kamailio-softswitch",
+      command: (targetRef) => ["bash", "scripts/update-kamailio-softswitch.sh", "--ref", targetRef],
     },
   };
   return targets[product] ?? null;
