@@ -434,6 +434,12 @@ async function loadConfig(): Promise<AgentConfig> {
       "subscriber_status_command",
       "/opt/mnscloud/mnscloud-kamailio-softswitch/scripts/kamailio-subscriber-runtime-status.sh",
     ),
+    softswitchTrunkStatusCommand: getConfigValue(
+      parsed,
+      "voip.softswitch.runtime",
+      "trunk_status_command",
+      "/opt/mnscloud/mnscloud-kamailio-softswitch/scripts/kamailio-trunk-runtime-status.sh",
+    ),
     softswitchNodeUUIDFile: getConfigValue(
       parsed,
       "voip.softswitch.runtime",
@@ -4844,7 +4850,13 @@ async function executeSoftswitchRuntimeJob(
   try {
     assertCapability(config, "voip.softswitch.manage");
     if (
-      !["voip.softswitch.sync", "subscriber.registration.status", "subscriber.registration.list"]
+      ![
+        "voip.softswitch.sync",
+        "subscriber.registration.status",
+        "subscriber.registration.list",
+        "trunk.registration.status",
+        "trunk.registration.list",
+      ]
         .includes(command)
     ) {
       await failJob(
@@ -4868,24 +4880,27 @@ async function executeSoftswitchRuntimeJob(
       const engine = payloadString(job.payload, "engine", String(job.engine ?? "")).toLowerCase();
       if (engine !== "kamailio") {
         throw new Error(
-          `Softswitch subscriber diagnostics are not implemented for engine: ${
+          `Softswitch runtime diagnostics are not implemented for engine: ${
             engine || "unknown"
           }.`,
         );
       }
-      const subscribers = Array.isArray(job.payload?.subscribers) ? job.payload.subscribers : [];
-      if (!subscribers.length || subscribers.length > 500) {
-        throw new Error("Softswitch subscriber diagnostic payload is invalid.");
+      const isTrunkDiagnostic = command.startsWith("trunk.registration.");
+      const targets = isTrunkDiagnostic
+        ? (Array.isArray(job.payload?.trunks) ? job.payload.trunks : [])
+        : (Array.isArray(job.payload?.subscribers) ? job.payload.subscribers : []);
+      if (!targets.length || targets.length > 500) {
+        throw new Error(`Softswitch ${isTrunkDiagnostic ? "trunk" : "subscriber"} diagnostic payload is invalid.`);
       }
       const input = await Deno.makeTempFile({
-        prefix: "mnscloud-softswitch-subscribers-",
+        prefix: `mnscloud-softswitch-${isTrunkDiagnostic ? "trunks" : "subscribers"}-`,
         suffix: ".json",
       });
       try {
-        await Deno.writeTextFile(input, JSON.stringify({ subscribers }));
+        await Deno.writeTextFile(input, JSON.stringify(isTrunkDiagnostic ? { trunks: targets } : { subscribers: targets }));
         await Deno.chmod(input, 0o600);
         result = await runLocalCommand(
-          config.softswitchSubscriberStatusCommand,
+          isTrunkDiagnostic ? config.softswitchTrunkStatusCommand : config.softswitchSubscriberStatusCommand,
           ["--input", input],
           Math.max(config.commandTimeoutMs, 60_000),
         );
