@@ -2,34 +2,31 @@
 
 ## Overview
 
-`mnscloud-agent` is the platform's standalone local Agent. It is not named after
-PABX, firewall, Docker, or any other specific function; those behaviors are
-represented as capabilities and jobs. There is a single runtime. Its effective
-limits come from operating system permissions, `agent.conf`, synchronized
-capabilities, and API assignments.
+`mnscloud-agent` is the platform's standalone local Agent. It is not named after PABX, firewall,
+Docker, or any other specific function; those behaviors are represented as capabilities and jobs.
+There is a single runtime. Its effective limits come from operating system permissions,
+`agent.conf`, synchronized capabilities, and API assignments.
 
 ## Architecture
 
 1. The installer creates the local `agent.conf`.
 2. The installer creates or reuses the local `agent.uuid`.
 3. The installer can consume a short-lived MNSCloud enrollment token.
-4. The API validates the enrollment, creates or activates the Agent identity,
-   and returns the canonical Agent UUID and runtime token directly to the
-   installer.
-5. The installer writes the service/config, restarts the local Agent service,
-   and synchronizes installed capabilities with the API.
+4. The API validates the enrollment, creates or activates the Agent identity, and returns the
+   canonical Agent UUID and runtime token directly to the installer.
+5. The installer writes the service/config, restarts the local Agent service, and synchronizes
+   installed capabilities with the API.
 6. The Agent sends heartbeat requests to `POST /api/v1/agent/heartbeat`.
 7. Heartbeat synchronizes host-declared capabilities.
-8. The API returns jobs through `POST /api/v1/agent/jobs/lease` according to
-   capabilities and assignments.
+8. The API returns jobs through `POST /api/v1/agent/jobs/lease` according to capabilities and
+   assignments.
 9. The Agent runs the job locally and reports success or failure.
 
 ## Secure Enrollment
 
-The preferred activation flow is enrollment-based. The MNSCloud API creates a
-single-use enrollment token with a short TTL. The app may display an install
-command containing that temporary enrollment token, but it never receives the
-long-lived Agent runtime token.
+The preferred activation flow is enrollment-based. The MNSCloud API creates a single-use enrollment
+token with a short TTL. The app may display an install command containing that temporary enrollment
+token, but it never receives the long-lived Agent runtime token.
 
 The installer consumes the enrollment through:
 
@@ -37,16 +34,13 @@ The installer consumes the enrollment through:
 POST /api/v1/agent/enroll
 ```
 
-If the enrollment is valid, the API returns the runtime token only to the
-server-side installer. When the enrollment was generated from an existing
-offline Agent, the API also returns that existing Agent UUID; the installer
-writes the canonical UUID to `/var/lib/mnscloud/agent/agent.uuid`, writes the
-token to `/var/lib/mnscloud/agent/agent.token`, and starts the service.
-Enrollment creation and consumption are recorded as tenant and global activity
-logs by the API.
+If the enrollment is valid, the API returns the runtime token only to the server-side installer.
+When the enrollment was generated from an existing offline Agent, the API also returns that existing
+Agent UUID; the installer writes the canonical UUID to `/var/lib/mnscloud/agent/agent.uuid`, writes
+the token to `/var/lib/mnscloud/agent/agent.token`, and starts the service. Enrollment creation and
+consumption are recorded as tenant and global activity logs by the API.
 
-The generated command will look similar to this, but do not copy this example
-literally:
+The generated command will look similar to this, but do not copy this example literally:
 
 ```bash
 sudo bash scripts/install-agent.sh \
@@ -61,63 +55,54 @@ Operational flow:
 3. Run that command on the target server.
 4. Confirm the Agent appears online in the App.
 
-Linux install and reinstall are idempotent. After rewriting `agent.conf`,
-runtime files, or the systemd unit, `install-agent.sh` must explicitly restart
-`mnscloud-agent` and sync capabilities with the API. The installer may retry the
-capability sync for a short period after a fresh enrollment, but it must still
-fail if the API keeps rejecting the stored Agent identity. Runtime installers
-can re-run `install-agent.sh` after enabling local capabilities such as WebRTC,
-TURN/STUN, Asterisk, or FreeSWITCH; operators must not need a separate manual
-restart in the normal install flow.
+Linux install and reinstall are idempotent. After rewriting `agent.conf`, runtime files, or the
+systemd unit, `install-agent.sh` must explicitly restart `mnscloud-agent` and sync capabilities with
+the API. The installer may retry the capability sync for a short period after a fresh enrollment,
+but it must still fail if the API keeps rejecting the stored Agent identity. Runtime installers can
+re-run `install-agent.sh` after enabling local capabilities such as WebRTC, TURN/STUN, Asterisk, or
+FreeSWITCH; operators must not need a separate manual restart in the normal install flow.
 
-The MNSCloud App builds `--api-base` from the current browser origin. In
-production this should be the same public origin that serves `/api/v1`. In local
-development, do not use a `localhost` command on a remote server unless that
-server can actually reach that address.
+The MNSCloud App builds `--api-base` from the current browser origin. In production this should be
+the same public origin that serves `/api/v1`. In local development, do not use a `localhost` command
+on a remote server unless that server can actually reach that address.
 
-The Agent name shown in the MNSCloud App is the canonical name stored in the
-enrollment record. The installer's local label is reported separately as
-`installationName` and should not overwrite the App-side Agent name.
+The Agent name shown in the MNSCloud App is the canonical name stored in the enrollment record. The
+installer's local label is reported separately as `installationName` and should not overwrite the
+App-side Agent name.
 
-Do not register the local UUID manually for new installs. The installer sends
-the UUID while consuming the enrollment, and the API links the Agent
-automatically. If the enrollment targets an existing Agent record, the API
-response wins and the installer replaces the local UUID with that canonical
-Agent UUID.
+Do not register the local UUID manually for new installs. The installer sends the UUID while
+consuming the enrollment, and the API links the Agent automatically. If the enrollment targets an
+existing Agent record, the API response wins and the installer replaces the local UUID with that
+canonical Agent UUID.
 
-When the installer or updater runs without a new enrollment token, it is not
-allowed to trust local files alone. It must validate the existing
-`agent.uuid`/`agent.token` pair with:
+When the installer or updater runs without a new enrollment token, it is not allowed to trust local
+files alone. It must validate the existing `agent.uuid`/`agent.token` pair with:
 
 ```text
 POST /api/v1/agent/heartbeat
 ```
 
-If the API rejects the identity, installation or update must fail before
-starting the local service. This protects deleted or deactivated Agent
-identities from being silently revived by a server that still has old local
-state.
+If the API rejects the identity, installation or update must fail before starting the local service.
+This protects deleted or deactivated Agent identities from being silently revived by a server that
+still has old local state.
 
 ## Remote Updates
 
-Remote updates are release-tag based. The control plane must never ask the Agent
-to update from an implicit branch. The API queues a `runtime.update` job with a
-`product`, capability, and `targetRef` such as `v1.0.6`; the Agent validates the
-ref format and runs only the local updater mapped to that declared product.
+Remote updates are release-tag based. The control plane must never ask the Agent to update from an
+implicit branch. The API queues a `runtime.update` job with a `product`, capability, and `targetRef`
+such as `v1.0.6`; the Agent validates the ref format and runs only the local updater mapped to that
+declared product.
 
-Remote update support starts at Agent `1.0.6`. Hosts running an older Agent must
-be manually updated once before the App can queue remote updates for them. The
-Agent self-updates are scheduled outside the currently running process, while
-API/App runtime updates are executed synchronously by the host Agent. Final
-state is confirmed by the next heartbeat or runtime validation.
+Remote update support starts at Agent `1.0.6`. Hosts running an older Agent must be manually updated
+once before the App can queue remote updates for them. The Agent self-updates are scheduled outside
+the currently running process, while API/App runtime updates are executed synchronously by the host
+Agent. Final state is confirmed by the next heartbeat or runtime validation.
 
-The Agent derives `mnscloud.api.update` and `mnscloud.app.update` before each
-heartbeat from executable local update scripts under
-`/opt/mnscloud/mnscloud-api` and `/opt/mnscloud/mnscloud-app`. When either
-capability is active, the heartbeat also reports the installed local runtime
-version for that product. The API compares this host inventory against the
-published release manifest before exposing an update action in the App. A
-release alone is not enough to mark API/App as updateable.
+The Agent derives `mnscloud.api.update` and `mnscloud.app.update` before each heartbeat from
+executable local update scripts under `/opt/mnscloud/mnscloud-api` and `/opt/mnscloud/mnscloud-app`.
+When either capability is active, the heartbeat also reports the installed local runtime version for
+that product. The API compares this host inventory against the published release manifest before
+exposing an update action in the App. A release alone is not enough to mark API/App as updateable.
 
 ## Local Uninstall
 
@@ -134,8 +119,8 @@ Windows uses the same lifecycle naming with PowerShell scripts:
 - `scripts/update-agent-windows.ps1`
 - `scripts/uninstall-agent-windows.ps1`
 
-The Linux uninstaller removes the local systemd service, runtime files,
-configuration, state, and logs:
+The Linux uninstaller removes the local systemd service, runtime files, configuration, state, and
+logs:
 
 ```text
 /etc/systemd/system/mnscloud-agent.service
@@ -145,24 +130,20 @@ configuration, state, and logs:
 /var/log/mnscloud/agent
 ```
 
-The repository checkout is preserved by default so an operator can reinstall or
-inspect scripts after cleanup. Passing `--remove-repository` also removes
-`/opt/mnscloud/mnscloud-agent`.
+The repository checkout is preserved by default so an operator can reinstall or inspect scripts
+after cleanup. Passing `--remove-repository` also removes `/opt/mnscloud/mnscloud-agent`.
 
-The Windows uninstaller removes the `MNSCloudAgent` service,
-`C:\Program Files\MNSCloud\Agent`, and `C:\ProgramData\MNSCloud\Agent`,
-including the local UUID and runtime token.
+The Windows uninstaller removes the `MNSCloudAgent` service, `C:\Program Files\MNSCloud\Agent`, and
+`C:\ProgramData\MNSCloud\Agent`, including the local UUID and runtime token.
 
-Local uninstall does not delete the Agent record in the MNSCloud API. Operators
-must delete or deactivate that record in the App when the identity should no
-longer be used.
+Local uninstall does not delete the Agent record in the MNSCloud API. Operators must delete or
+deactivate that record in the App when the identity should no longer be used.
 
-`scripts/validate-agent.sh` is the shared prerequisite contract for managed
-runtime installers. Installers must call it instead of embedding their own
-checks when they require the Agent to be installed, enrolled, active, or capable
-of a typed job such as `realtime.webrtc.edge` or `voip.sbc.runtime`. The
-validator checks local systemd state, Agent identity files, installed runtime
-support, optional capabilities, and optional API heartbeat validation.
+`scripts/validate-agent.sh` is the shared prerequisite contract for managed runtime installers.
+Installers must call it instead of embedding their own checks when they require the Agent to be
+installed, enrolled, active, or capable of a typed job such as `realtime.webrtc.edge` or
+`voip.sbc.runtime`. The validator checks local systemd state, Agent identity files, installed
+runtime support, optional capabilities, and optional API heartbeat validation.
 
 ## Configuration
 
@@ -289,24 +270,21 @@ security.windows.defender.manage = false
 shell.exec = false
 ```
 
-Do not use `.env` for the Agent. Identity and state live under
-`/var/lib/mnscloud/agent` on Linux and `C:\ProgramData\MNSCloud\Agent` on
-Windows.
+Do not use `.env` for the Agent. Identity and state live under `/var/lib/mnscloud/agent` on Linux
+and `C:\ProgramData\MNSCloud\Agent` on Windows.
 
 ## Database
 
 Canonical model:
 
-- `MonitoringAgent`: identity, token, hostname, version, status, heartbeat, and
-  tenant.
-- `MonitoringAgentCapability`: capabilities declared by the Agent, such as
-  `linux.status`, `security.crowdsec.manage`, and `voip.asterisk.manage`.
-- `MonitoringAgentAssignment`: resources assigned to the Agent, such as
-  `voip.pabx.server` or future cyber security resources.
+- `MonitoringAgent`: identity, token, hostname, version, status, heartbeat, and tenant.
+- `MonitoringAgentCapability`: capabilities declared by the Agent, such as `linux.status`,
+  `security.crowdsec.manage`, and `voip.asterisk.manage`.
+- `MonitoringAgentAssignment`: resources assigned to the Agent, such as `voip.pabx.server` or future
+  cyber security resources.
 
-Do not add type, mode, privilege, or resource columns directly to
-`MonitoringAgent`. Relationships must stay capability-based and
-assignment-based.
+Do not add type, mode, privilege, or resource columns directly to `MonitoringAgent`. Relationships
+must stay capability-based and assignment-based.
 
 ## Supported Systems
 
@@ -322,9 +300,8 @@ Supported Windows systems:
 - Windows Server 2019/2022/2025
 - Windows 10/11 Pro/Enterprise
 
-Other Linux distributions or Windows editions are experimental. They may work
-when the required runtime tools are available, but they are not guaranteed to be
-100% compatible.
+Other Linux distributions or Windows editions are experimental. They may work when the required
+runtime tools are available, but they are not guaranteed to be 100% compatible.
 
 ## API
 
@@ -341,16 +318,14 @@ Canonical headers:
 - `Authorization: Bearer <token>`
 - `X-MNSCloud-Agent-UUID: <uuid>`
 
-Do not create technology-specific Agent endpoints. PABX, cyber security, and
-future functions must use the same lease/progress/complete/fail flow with
-`jobType` and typed payloads.
+Do not create technology-specific Agent endpoints. PABX, cyber security, and future functions must
+use the same lease/progress/complete/fail flow with `jobType` and typed payloads.
 
 ## Language Policy
 
-All public Agent repository content must be written in English: documentation,
-installer messages, code comments, examples, commit-facing text, and user-facing
-runtime output. Keep Portuguese only in external discussions, not inside this
-repository.
+All public Agent repository content must be written in English: documentation, installer messages,
+code comments, examples, commit-facing text, and user-facing runtime output. Keep Portuguese only in
+external discussions, not inside this repository.
 
 ## Capabilities
 
@@ -383,13 +358,12 @@ Capabilities are stable, granular names. Examples:
 - `security.windows.eventlog.read`
 - `security.windows.defender.manage`
 
-The Agent declares capabilities in heartbeat requests. The API uses capabilities
-together with assignments to decide which jobs may be delivered.
+The Agent declares capabilities in heartbeat requests. The API uses capabilities together with
+assignments to decide which jobs may be delivered.
 
 ## PABX
 
-For PABX, the assignment remains `voip.pabx.server`, but the capability is
-engine-specific:
+For PABX, the assignment remains `voip.pabx.server`, but the capability is engine-specific:
 
 - Asterisk: `voip.asterisk.manage`
 - FreeSWITCH: `voip.freeswitch.manage`
@@ -399,165 +373,146 @@ With a compatible assignment and capability, the Agent can:
 - sync recording uploads;
 - remove local recordings after confirmed upload;
 - sync offline media files;
-- report live SIP registrations from FreeSWITCH heartbeats for dashboard/runtime
-  status;
+- report live SIP registrations from FreeSWITCH heartbeats for dashboard/runtime status;
+- report sanitized Softswitch runtime inventory from Kamailio hosts, including engine version, OS
+  distribution, kernel, architecture, systemd service state, and UAC RPC method availability;
 - run typed local commands allowed by jobs;
 - use local AMI/ESL when configured, or local CLI as fallback.
 
-FreeSWITCH registration status is collected with
-`fs_cli -x "show registrations as json"` and sent as `pabxRegistrations` in the
-standard heartbeat. The API owns matching those rows to tenant PABX extensions
-and deciding whether a registration is current; the Agent only reports what the
-local runtime exposes.
+FreeSWITCH registration status is collected with `fs_cli -x "show registrations as json"` and sent
+as `pabxRegistrations` in the standard heartbeat. The API owns matching those rows to tenant PABX
+extensions and deciding whether a registration is current; the Agent only reports what the local
+runtime exposes.
 
 ## Cyber Security
 
-Cyber security uses the same runtime. Jobs such as nftables and CrowdSec
-installation/configuration must require explicit capabilities
-(`security.nftables.manage`, `security.crowdsec.manage`) and suitable
-assignments.
+Cyber security uses the same runtime. Jobs such as nftables and CrowdSec installation/configuration
+must require explicit capabilities (`security.nftables.manage`, `security.crowdsec.manage`) and
+suitable assignments.
 
 Implemented cyber security jobs:
 
-- `cyber.security.status`: reports nftables, CrowdSec, firewall bouncer, OS,
-  kernel, and server network status.
-- `cyber.security.install`: installs and enables `nftables`, `crowdsec`, and the
-  CrowdSec firewall bouncer on supported Linux systems. Debian uses the nftables
-  bouncer package when available; RHEL-compatible systems use the official RPM
-  bouncer package. It also installs the default CrowdSec collections
-  `crowdsecurity/linux` and `crowdsecurity/sshd`, unless a job payload supplies
-  a different `collections` array. The Linux installer configures the CrowdSec
-  Local API on `127.0.0.1:7422`, updates local API credentials, and points the
-  firewall bouncer to the same loopback endpoint to avoid conflicts with
-  application services that already use port `8080`.
-- `cyber.security.profile.apply`: installs the selected CrowdSec collections,
-  writes MNSCloud-managed log acquisition, validates local policy artifacts with
-  `crowdsec -t`, and reloads CrowdSec. The Linux agent translates profile `mode`
-  and `level` into local CrowdSec policy files instead of editing Hub content
-  directly:
-  - `mode=monitor` writes a selected-service profile with no decisions and
-    `on_success: break`.
-  - `mode=enforce` writes a selected-service ban profile using
-    `defaultDecisionDuration`.
-  - `level=strict` writes additional MNSCloud scenarios for Asterisk and
-    FreeSWITCH slow SIP enumeration/bruteforce detection.
-  - `basic`, `balanced`, and unsupported services rely on the official CrowdSec
-    Hub collections without extra local scenarios.
+- `cyber.security.status`: reports nftables, CrowdSec, firewall bouncer, OS, kernel, and server
+  network status.
+- `cyber.security.install`: installs and enables `nftables`, `crowdsec`, and the CrowdSec firewall
+  bouncer on supported Linux systems. Debian uses the nftables bouncer package when available;
+  RHEL-compatible systems use the official RPM bouncer package. It also installs the default
+  CrowdSec collections `crowdsecurity/linux` and `crowdsecurity/sshd`, unless a job payload supplies
+  a different `collections` array. The Linux installer configures the CrowdSec Local API on
+  `127.0.0.1:7422`, updates local API credentials, and points the firewall bouncer to the same
+  loopback endpoint to avoid conflicts with application services that already use port `8080`.
+- `cyber.security.profile.apply`: installs the selected CrowdSec collections, writes
+  MNSCloud-managed log acquisition, validates local policy artifacts with `crowdsec -t`, and reloads
+  CrowdSec. The Linux agent translates profile `mode` and `level` into local CrowdSec policy files
+  instead of editing Hub content directly:
+  - `mode=monitor` writes a selected-service profile with no decisions and `on_success: break`.
+  - `mode=enforce` writes a selected-service ban profile using `defaultDecisionDuration`.
+  - `level=strict` writes additional MNSCloud scenarios for Asterisk and FreeSWITCH slow SIP
+    enumeration/bruteforce detection.
+  - `basic`, `balanced`, and unsupported services rely on the official CrowdSec Hub collections
+    without extra local scenarios.
 
-The Linux install job is intentionally conservative. It does not flush existing
-firewall rules, does not open inbound ports, and configures the CrowdSec
-firewall bouncer using a local bouncer API key.
+The Linux install job is intentionally conservative. It does not flush existing firewall rules, does
+not open inbound ports, and configures the CrowdSec firewall bouncer using a local bouncer API key.
 
-Windows cyber security uses CrowdSec for Windows and the CrowdSec Windows
-Firewall remediation component. Windows jobs must require Windows capabilities
-such as `windows.package.install`, `windows.service.manage`,
-`security.crowdsec.manage`, and `security.windows.firewall.manage`.
+Windows cyber security uses CrowdSec for Windows and the CrowdSec Windows Firewall remediation
+component. Windows jobs must require Windows capabilities such as `windows.package.install`,
+`windows.service.manage`, `security.crowdsec.manage`, and `security.windows.firewall.manage`.
 
 Implemented Windows cyber security behavior:
 
-- `cyber.security.status`: reports Windows Firewall, CrowdSec service, CrowdSec
-  Windows Firewall bouncer, OS, host IP, alerts, and decisions.
-- `cyber.security.install`: installs CrowdSec and the Windows Firewall bouncer
-  through Chocolatey, enables Windows Firewall profiles, starts CrowdSec
-  services, and installs the `crowdsecurity/windows` collection by default.
-- `cyber.security.profile.apply`: installs configured CrowdSec collections and
-  restarts CrowdSec services.
+- `cyber.security.status`: reports Windows Firewall, CrowdSec service, CrowdSec Windows Firewall
+  bouncer, OS, host IP, alerts, and decisions.
+- `cyber.security.install`: installs CrowdSec and the Windows Firewall bouncer through Chocolatey,
+  enables Windows Firewall profiles, starts CrowdSec services, and installs the
+  `crowdsecurity/windows` collection by default.
+- `cyber.security.profile.apply`: installs configured CrowdSec collections and restarts CrowdSec
+  services.
 
-The Windows install job requires Chocolatey. If Chocolatey is not installed, the
-job must either install it beforehand or set `installChocolatey=true` in the job
-payload.
+The Windows install job requires Chocolatey. If Chocolatey is not installed, the job must either
+install it beforehand or set `installChocolatey=true` in the job payload.
 
 Reference:
 
-- CrowdSec Linux installation:
-  <https://docs.crowdsec.net/u/getting_started/installation/linux/>
-- CrowdSec Windows installation:
-  <https://docs.crowdsec.net/u/getting_started/installation/windows>
+- CrowdSec Linux installation: <https://docs.crowdsec.net/u/getting_started/installation/linux/>
+- CrowdSec Windows installation: <https://docs.crowdsec.net/u/getting_started/installation/windows>
 - CrowdSec Windows Firewall remediation component:
   <https://docs.crowdsec.net/u/bouncers/windows_firewall/>
 
-Long-running cyber security jobs report progress before and after each major
-step so the platform can display the current stage, percentage, and failure
-details without requiring direct database access.
+Long-running cyber security jobs report progress before and after each major step so the platform
+can display the current stage, percentage, and failure details without requiring direct database
+access.
 
 ## Nginx Edge And Certbot
 
-The Agent can manage public edge Nginx configuration and certificates when it is
-installed on the Nginx edge host and declares these capabilities:
+The Agent can manage public edge Nginx configuration and certificates when it is installed on the
+Nginx edge host and declares these capabilities:
 
 - `nginx-edge.manage`
 - `certbot.manage`
 
-The edge host keeps certificate private keys local under `/etc/letsencrypt`.
-Nginx reads certificates directly from local files; certificates are not copied
-through the API or shared with other modules.
+The edge host keeps certificate private keys local under `/etc/letsencrypt`. Nginx reads
+certificates directly from local files; certificates are not copied through the API or shared with
+other modules.
 
-Theme domain provisioning uses this Agent path as the primary production model:
-the API creates `NginxEdgeAgentJob` and `CertbotAgentJob` records, the edge
-agent leases them with outbound API polling, performs the local Nginx/Certbot
-operation, and reports completion back to the API.
+Theme domain provisioning uses this Agent path as the primary production model: the API creates
+`NginxEdgeAgentJob` and `CertbotAgentJob` records, the edge agent leases them with outbound API
+polling, performs the local Nginx/Certbot operation, and reports completion back to the API.
 
 Implemented Nginx edge commands:
 
 - `nginx.edge.domain.activate`: writes or refreshes the domain Nginx config.
-- `nginx.edge.domain.remove`: removes the domain config and local certificate
-  files.
-- `nginx.edge.domain.inspect`: reports whether config and certificate files
-  exist.
+- `nginx.edge.domain.remove`: removes the domain config and local certificate files.
+- `nginx.edge.domain.inspect`: reports whether config and certificate files exist.
 - `nginx.edge.config.test`: runs the configured Nginx config test command.
 - `nginx.edge.reload`: runs the configured Nginx reload command.
 
 Implemented Certbot commands:
 
-- `certbot.certificate.issue`: creates the HTTP challenge config, issues a
-  certificate with webroot validation using the job payload `email`, then
-  refreshes the HTTPS config.
-- `certbot.certificates.renew`: renews existing certificates and reloads Nginx
-  through the configured deploy hook.
+- `certbot.certificate.issue`: creates the HTTP challenge config, issues a certificate with webroot
+  validation using the job payload `email`, then refreshes the HTTPS config.
+- `certbot.certificates.renew`: renews existing certificates and reloads Nginx through the
+  configured deploy hook.
 - `certbot.certificate.inspect`: reports local certificate paths for a domain.
 
-For HTTP-01 validation, the Nginx edge host must serve
-`/.well-known/acme-challenge/` from the configured `acme_root`, normally
-`/var/www/certbot`.
+For HTTP-01 validation, the Nginx edge host must serve `/.well-known/acme-challenge/` from the
+configured `acme_root`, normally `/var/www/certbot`.
 
 ## WebRTC Edge Jobs
 
-WebRTC edge provisioning uses a dedicated job contract instead of the generic
-Nginx edge domain commands.
+WebRTC edge provisioning uses a dedicated job contract instead of the generic Nginx edge domain
+commands.
 
 - Capability: `realtime.webrtc.manage`
 - Job type: `realtime.webrtc.edge`
 - Command: `realtime.webrtc.sync`
 - Local command: `[realtime.webrtc.edge].sync_command`
 
-The Agent derives API/App update capabilities, realtime runtime capabilities,
-and Asterisk/FreeSWITCH management capabilities from the matching local command
-being present and executable. This check runs on startup and before each
-heartbeat/job polling loop, so a host that installs or removes a runtime
-publishes its current capability without relying on stale static config.
+The Agent derives API/App update capabilities, realtime runtime capabilities, and
+Asterisk/FreeSWITCH management capabilities from the matching local command being present and
+executable. This check runs on startup and before each heartbeat/job polling loop, so a host that
+installs or removes a runtime publishes its current capability without relying on stale static
+config.
 
-The API assigns or auto-discovers the Agent for a `realtime.webrtc.server`,
-queues a `RealtimeWebRtcAgentJob`, and the Agent executes only the configured
-sync command. The sync command is expected to be the runtime script from
-`mnscloud-kamailio-webrtc`, which fetches the edge config from the API, renders
-Nginx/Kamailio files, validates both services, and reloads them locally.
+The API assigns or auto-discovers the Agent for a `realtime.webrtc.server`, queues a
+`RealtimeWebRtcAgentJob`, and the Agent executes only the configured sync command. The sync command
+is expected to be the runtime script from `mnscloud-kamailio-webrtc`, which fetches the edge config
+from the API, renders Nginx/Kamailio files, validates both services, and reloads them locally.
 
-For SBC, the Agent reports the local `node_uuid_file` value and whether the
-local `runtime_config_file` exists when the `voip.sbc.manage` capability is
-active. The API uses that node UUID to bind the Agent to the canonical
-`voip.sbc.server` assignment and queues the initial `voip.sbc.runtime` job when
-the assignment is new or local runtime config is missing.
+For SBC, the Agent reports the local `node_uuid_file` value and whether the local
+`runtime_config_file` exists when the `voip.sbc.manage` capability is active. The API uses that node
+UUID to bind the Agent to the canonical `voip.sbc.server` assignment and queues the initial
+`voip.sbc.runtime` job when the assignment is new or local runtime config is missing.
 
-WebRTC jobs are not Nginx edge jobs. The generic `nginx-edge.manage` capability
-owns App/API/theme-domain HTTP edge work only. SIP/WSS, RTP/SRTP, TURN/STUN,
-SFU/video media, rtpengine control, and PABX exposure must use
-WebRTC/media-specific capabilities and dedicated realtime modules.
+WebRTC jobs are not Nginx edge jobs. The generic `nginx-edge.manage` capability owns
+App/API/theme-domain HTTP edge work only. SIP/WSS, RTP/SRTP, TURN/STUN, SFU/video media, rtpengine
+control, and PABX exposure must use WebRTC/media-specific capabilities and dedicated realtime
+modules.
 
-TURN/STUN hosts expose `realtime.turn.manage` when `[turn_edge].sync_command`
-points to an executable `mnscloud-turn` runtime script. TURN jobs must stay
-typed and API/DB-owned before the Agent executes local runtime sync.
+TURN/STUN hosts expose `realtime.turn.manage` when `[turn_edge].sync_command` points to an
+executable `mnscloud-turn` runtime script. TURN jobs must stay typed and API/DB-owned before the
+Agent executes local runtime sync.
 
-Dedicated RTP/media hosts expose `realtime.media.manage` when
-`[realtime_media_edge].sync_command` points to an executable `mnscloud-media`
-runtime script. Media jobs must stay typed and API/DB-owned before the Agent
-executes local rtpengine runtime sync.
+Dedicated RTP/media hosts expose `realtime.media.manage` when `[realtime_media_edge].sync_command`
+points to an executable `mnscloud-media` runtime script. Media jobs must stay typed and API/DB-owned
+before the Agent executes local rtpengine runtime sync.
