@@ -833,6 +833,68 @@ async function collectPabxRegistrations(config: AgentConfig) {
   return [];
 }
 
+function boundedText(value: string, limit = 240) {
+  return value.replace(/\s+/g, " ").trim().slice(0, limit);
+}
+
+async function collectSoftswitchRuntimeInventory(config: AgentConfig, nodeUUID: string | null) {
+  if (!nodeUUID || !config.capabilities["voip.softswitch.manage"]) return undefined;
+  const osRelease = await optionalRead("/etc/os-release");
+  const osField = (name: string) => {
+    const match = osRelease?.match(new RegExp(`^${name}=(?:\"([^\"]*)\"|([^\\n]*))$`, "m"));
+    return boundedText(match?.[1] ?? match?.[2] ?? "", 120) || null;
+  };
+  const [kamailioVersion, kernelVersion, architecture, service] = await Promise.all([
+    runLocalCommand("kamailio", ["-V"], Math.min(config.commandTimeoutMs, 10_000)).catch(() => ({
+      stdout: "",
+      stderr: "",
+      code: 127,
+    })),
+    runLocalCommand("uname", ["-r"], Math.min(config.commandTimeoutMs, 10_000)).catch(() => ({
+      stdout: "",
+      stderr: "",
+      code: 127,
+    })),
+    runLocalCommand("uname", ["-m"], Math.min(config.commandTimeoutMs, 10_000)).catch(() => ({
+      stdout: "",
+      stderr: "",
+      code: 127,
+    })),
+    runLocalCommand(
+      "systemctl",
+      ["is-active", "kamailio"],
+      Math.min(config.commandTimeoutMs, 10_000),
+    ).catch(() => ({ stdout: "", stderr: "", code: 127 })),
+  ]);
+  const rpc = await runLocalCommand(
+    "kamcmd",
+    ["system.listMethods"],
+    Math.min(config.commandTimeoutMs, 10_000),
+  ).catch(() => ({ stdout: "", stderr: "", code: 127 }));
+  const methods = rpc.stdout;
+  const hasRpc = (name: string) =>
+    new RegExp(`(^|\\s)${name.replace(".", "\\.")}(\\s|$)`, "m").test(methods);
+  return {
+    schemaVersion: 1,
+    nodeUUID,
+    engine: "kamailio",
+    engineVersion: kamailioVersion.code === 0 ? boundedText(kamailioVersion.stdout, 240) : null,
+    distribution: osField("ID"),
+    osName: osField("NAME"),
+    osVersion: osField("VERSION_ID"),
+    kernelVersion: kernelVersion.code === 0 ? boundedText(kernelVersion.stdout, 120) : null,
+    architecture: architecture.code === 0 ? boundedText(architecture.stdout, 80) : null,
+    serviceStatus: service.code === 0 ? boundedText(service.stdout, 32) : "inactive",
+    uacRpc: {
+      regInfo: hasRpc("uac.reg_info"),
+      regAdd: hasRpc("uac.reg_add"),
+      regRegister: hasRpc("uac.reg_register"),
+      regReload: hasRpc("uac.reg_reload"),
+    },
+    observedAt: new Date().toISOString(),
+  };
+}
+
 async function heartbeat(
   config: AgentConfig,
   agentUUID: string,
@@ -851,6 +913,7 @@ async function heartbeat(
   const softswitchRuntimeConfig = softswitchNodeUUID
     ? await optionalRead(config.softswitchRuntimeConfigFile)
     : "";
+  const softswitchInventory = await collectSoftswitchRuntimeInventory(config, softswitchNodeUUID);
   await jsonRequest(config, "/agent/heartbeat", agentToken, agentUUID, {
     name: config.name,
     hostname: config.hostname,
@@ -878,6 +941,7 @@ async function heartbeat(
         nodeUUID: softswitchNodeUUID,
         engine: "kamailio",
         needsSync: !softswitchRuntimeConfig,
+        inventory: softswitchInventory,
       }
       : undefined,
     pabxRegistrations,
