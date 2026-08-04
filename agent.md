@@ -374,8 +374,9 @@ With a compatible assignment and capability, the Agent can:
 - remove local recordings after confirmed upload;
 - sync offline media files;
 - report live SIP registrations from FreeSWITCH heartbeats for dashboard/runtime status;
-- report sanitized Softswitch runtime inventory from Kamailio hosts, including engine version, OS
-  distribution, kernel, architecture, systemd service state, and UAC RPC method availability;
+- report sanitized Softswitch runtime inventory from Kamailio hosts for the API to store in the
+  central Monitoring resource inventory, including engine version, OS distribution, kernel,
+  architecture, systemd service state, and UAC RPC method availability;
 - run typed local commands allowed by jobs;
 - use local AMI/ESL when configured, or local CLI as fallback.
 
