@@ -374,10 +374,10 @@ the application when that identity should no longer be used.
   read-only diagnostic is requested, so an unavailable diagnostic never blocks provisioning or
   synchronization. Its heartbeat includes the node UUID, sanitized runtime-state presence, and a
   bounded Softswitch runtime inventory with engine version, OS distribution, kernel, architecture,
-  service state, and Kamailio UAC RPC availability. This allows the API to maintain the
-  `voip.softswitch.server` assignment and queue a platform-scoped `voip.softswitch.sync` bootstrap
-  job without inventing a tenant scope for the server, and gives operators a safe view of whether
-  the runtime can execute UAC registration diagnostics. The Agent invokes the local reconciliation
+  service state, and Kamailio UAC RPC availability. The API stores that sanitized observation in the
+  central Monitoring resource inventory, keeps metric/event history there, maintains the
+  `voip.softswitch.server` assignment, and queues a platform-scoped `voip.softswitch.sync` bootstrap
+  job without inventing a tenant scope for the server. The Agent invokes the local reconciliation
   script; Kamailio's UAC module owns registration renewal between synchronizations.
 - TURN/STUN edge management is enabled on `mnscloud-turn` hosts when `[turn_edge].sync_command`
   points to an executable local runtime script.
