@@ -97,6 +97,18 @@ command_path_from_capability() {
     realtime.media.manage) config_value "realtime_media_edge" "sync_command" "/opt/mnscloud/media/scripts/update-media.sh" ;;
     mnscloud.api.update) printf '%s\n' "/opt/mnscloud/mnscloud-api/scripts/update-api.sh" ;;
     mnscloud.app.update) printf '%s\n' "/opt/mnscloud/mnscloud-app/scripts/update-nginx-runtime.sh" ;;
+    mnscloud.kamailio-softswitch.update) printf '%s\n' "/opt/mnscloud/mnscloud-kamailio-softswitch/scripts/update-kamailio-softswitch.sh" ;;
+    mnscloud.nginx.update) printf '%s\n' "/opt/mnscloud/mnscloud-nginx/scripts/update-nginx.sh" ;;
+    mnscloud.rabbitmq.update) printf '%s\n' "/opt/mnscloud/mnscloud-rabbitmq/scripts/update-rabbitmq.sh" ;;
+    mnscloud.workers.update) printf '%s\n' "/opt/mnscloud/mnscloud-workers/scripts/update-workers.sh" ;;
+    mnscloud.freeradius.update) printf '%s\n' "/opt/mnscloud/mnscloud-freeradius/scripts/update-freeradius.sh" ;;
+    mnscloud.freeswitch.update) printf '%s\n' "/opt/mnscloud/mnscloud-freeswitch/scripts/update-freeswitch.sh" ;;
+    mnscloud.opensips-sbc.update) printf '%s\n' "/opt/mnscloud/mnscloud-opensips-sbc/scripts/update-opensips-sbc.sh" ;;
+    mnscloud.kamailio-webrtc.update) printf '%s\n' "/opt/mnscloud/mnscloud-kamailio-webrtc/scripts/update-kamailio-webrtc.sh" ;;
+    mnscloud.turn.update) printf '%s\n' "/opt/mnscloud/mnscloud-turn/scripts/update-turn.sh" ;;
+    mnscloud.media.update) printf '%s\n' "/opt/mnscloud/mnscloud-media/scripts/update-media.sh" ;;
+    mnscloud.devsecops.update) printf '%s\n' "/opt/mnscloud/mnscloud-devsecops/scripts/update-devsecops.sh" ;;
+    mnscloud.webapps.update) printf '%s\n' "/opt/mnscloud/mnscloud-webapps/scripts/update-webapps.sh" ;;
     *) return 1 ;;
   esac
 }
