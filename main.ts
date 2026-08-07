@@ -202,6 +202,9 @@ async function applyRuntimeCapabilities(config: AgentConfig) {
   config.capabilities["mnscloud.freeswitch.update"] = await isExecutableFile(
     "/opt/mnscloud/mnscloud-freeswitch/scripts/update-freeswitch.sh",
   );
+  config.capabilities["mnscloud.asterisk.update"] = await isExecutableFile(
+    "/opt/mnscloud/mnscloud-asterisk/scripts/update-asterisk.sh",
+  );
   config.capabilities["mnscloud.opensips-sbc.update"] = await isExecutableFile(
     "/opt/mnscloud/mnscloud-opensips-sbc/scripts/update-opensips-sbc.sh",
   );
@@ -651,6 +654,12 @@ async function collectRuntimeVersions(config: AgentConfig) {
       "mnscloud-freeswitch",
       "mnscloud.freeswitch.update",
       "/opt/mnscloud/mnscloud-freeswitch",
+      config,
+    ),
+    runtimeVersionReport(
+      "mnscloud-asterisk",
+      "mnscloud.asterisk.update",
+      "/opt/mnscloud/mnscloud-asterisk",
       config,
     ),
     runtimeVersionReport(
@@ -3002,6 +3011,12 @@ function runtimeUpdateTarget(product: string) {
       capability: "mnscloud.freeswitch.update",
       repoDir: "/opt/mnscloud/mnscloud-freeswitch",
       command: (targetRef) => ["bash", "scripts/update-freeswitch.sh", "--ref", targetRef],
+    },
+    "mnscloud-asterisk": {
+      label: "Asterisk PABX",
+      capability: "mnscloud.asterisk.update",
+      repoDir: "/opt/mnscloud/mnscloud-asterisk",
+      command: (targetRef) => ["bash", "scripts/update-asterisk.sh", "--ref", targetRef],
     },
     "mnscloud-opensips-sbc": {
       label: "OpenSIPS SBC",
