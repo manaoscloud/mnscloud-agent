@@ -187,6 +187,39 @@ async function applyRuntimeCapabilities(config: AgentConfig) {
   config.capabilities["mnscloud.kamailio-softswitch.update"] = await isExecutableFile(
     "/opt/mnscloud/mnscloud-kamailio-softswitch/scripts/update-kamailio-softswitch.sh",
   );
+  config.capabilities["mnscloud.nginx.update"] = await isExecutableFile(
+    "/opt/mnscloud/mnscloud-nginx/scripts/update-nginx.sh",
+  );
+  config.capabilities["mnscloud.rabbitmq.update"] = await isExecutableFile(
+    "/opt/mnscloud/mnscloud-rabbitmq/scripts/update-rabbitmq.sh",
+  );
+  config.capabilities["mnscloud.workers.update"] = await isExecutableFile(
+    "/opt/mnscloud/mnscloud-workers/scripts/update-workers.sh",
+  );
+  config.capabilities["mnscloud.freeradius.update"] = await isExecutableFile(
+    "/opt/mnscloud/mnscloud-freeradius/scripts/update-freeradius.sh",
+  );
+  config.capabilities["mnscloud.freeswitch.update"] = await isExecutableFile(
+    "/opt/mnscloud/mnscloud-freeswitch/scripts/update-freeswitch.sh",
+  );
+  config.capabilities["mnscloud.opensips-sbc.update"] = await isExecutableFile(
+    "/opt/mnscloud/mnscloud-opensips-sbc/scripts/update-opensips-sbc.sh",
+  );
+  config.capabilities["mnscloud.kamailio-webrtc.update"] = await isExecutableFile(
+    "/opt/mnscloud/mnscloud-kamailio-webrtc/scripts/update-kamailio-webrtc.sh",
+  );
+  config.capabilities["mnscloud.turn.update"] = await isExecutableFile(
+    "/opt/mnscloud/mnscloud-turn/scripts/update-turn.sh",
+  );
+  config.capabilities["mnscloud.media.update"] = await isExecutableFile(
+    "/opt/mnscloud/mnscloud-media/scripts/update-media.sh",
+  );
+  config.capabilities["mnscloud.devsecops.update"] = await isExecutableFile(
+    "/opt/mnscloud/mnscloud-devsecops/scripts/update-devsecops.sh",
+  );
+  config.capabilities["mnscloud.webapps.update"] = await isExecutableFile(
+    "/opt/mnscloud/mnscloud-webapps/scripts/update-webapps.sh",
+  );
   config.capabilities["realtime.webrtc.manage"] = await isExecutableFile(
     config.webrtcEdgeSyncCommand,
   );
@@ -588,6 +621,72 @@ async function collectRuntimeVersions(config: AgentConfig) {
       "mnscloud-app",
       "mnscloud.app.update",
       "/opt/mnscloud/mnscloud-app",
+      config,
+    ),
+    runtimeVersionReport(
+      "mnscloud-nginx",
+      "mnscloud.nginx.update",
+      "/opt/mnscloud/mnscloud-nginx",
+      config,
+    ),
+    runtimeVersionReport(
+      "mnscloud-rabbitmq",
+      "mnscloud.rabbitmq.update",
+      "/opt/mnscloud/mnscloud-rabbitmq",
+      config,
+    ),
+    runtimeVersionReport(
+      "mnscloud-workers",
+      "mnscloud.workers.update",
+      "/opt/mnscloud/mnscloud-workers",
+      config,
+    ),
+    runtimeVersionReport(
+      "mnscloud-freeradius",
+      "mnscloud.freeradius.update",
+      "/opt/mnscloud/mnscloud-freeradius",
+      config,
+    ),
+    runtimeVersionReport(
+      "mnscloud-freeswitch",
+      "mnscloud.freeswitch.update",
+      "/opt/mnscloud/mnscloud-freeswitch",
+      config,
+    ),
+    runtimeVersionReport(
+      "mnscloud-opensips-sbc",
+      "mnscloud.opensips-sbc.update",
+      "/opt/mnscloud/mnscloud-opensips-sbc",
+      config,
+    ),
+    runtimeVersionReport(
+      "mnscloud-kamailio-webrtc",
+      "mnscloud.kamailio-webrtc.update",
+      "/opt/mnscloud/mnscloud-kamailio-webrtc",
+      config,
+    ),
+    runtimeVersionReport(
+      "mnscloud-turn",
+      "mnscloud.turn.update",
+      "/opt/mnscloud/mnscloud-turn",
+      config,
+    ),
+    runtimeVersionReport(
+      "mnscloud-media",
+      "mnscloud.media.update",
+      "/opt/mnscloud/mnscloud-media",
+      config,
+    ),
+    runtimeVersionReport(
+      "mnscloud-devsecops",
+      "mnscloud.devsecops.update",
+      "/opt/mnscloud/mnscloud-devsecops",
+      config,
+    ),
+    runtimeVersionReport(
+      "mnscloud-webapps",
+      "mnscloud.webapps.update",
+      "/opt/mnscloud/mnscloud-webapps",
       config,
     ),
   ]);
@@ -2849,6 +2948,128 @@ function runtimeUpdateTarget(product: string) {
       capability: "mnscloud.kamailio-softswitch.update",
       repoDir: "/opt/mnscloud/mnscloud-kamailio-softswitch",
       command: (targetRef) => ["bash", "scripts/update-kamailio-softswitch.sh", "--ref", targetRef],
+    },
+    "mnscloud-nginx": {
+      label: "Nginx Edge",
+      capability: "mnscloud.nginx.update",
+      repoDir: "/opt/mnscloud/mnscloud-nginx",
+      command: (targetRef) => [
+        "bash",
+        "-lc",
+        `git fetch --tags --prune origin && git checkout ${
+          shellQuote(targetRef)
+        } && MNSCLOUD_SKIP_REPO_SYNC=1 bash scripts/update-nginx.sh --env /etc/mnscloud/nginx.env`,
+      ],
+    },
+    "mnscloud-rabbitmq": {
+      label: "RabbitMQ",
+      capability: "mnscloud.rabbitmq.update",
+      repoDir: "/opt/mnscloud/mnscloud-rabbitmq",
+      command: (targetRef) => [
+        "bash",
+        "-lc",
+        `git fetch --tags --prune origin && git checkout ${
+          shellQuote(targetRef)
+        } && MNSCLOUD_SKIP_REPO_SYNC=1 bash scripts/update-rabbitmq.sh --env /etc/mnscloud/rabbitmq.env`,
+      ],
+    },
+    "mnscloud-workers": {
+      label: "Workers",
+      capability: "mnscloud.workers.update",
+      repoDir: "/opt/mnscloud/mnscloud-workers",
+      command: (targetRef) => [
+        "bash",
+        "-lc",
+        `git fetch --tags --prune origin && git checkout ${
+          shellQuote(targetRef)
+        } && MNSCLOUD_SKIP_REPO_SYNC=1 bash scripts/update-workers.sh --env /etc/mnscloud/workers.env`,
+      ],
+    },
+    "mnscloud-freeradius": {
+      label: "FreeRADIUS",
+      capability: "mnscloud.freeradius.update",
+      repoDir: "/opt/mnscloud/mnscloud-freeradius",
+      command: (targetRef) => [
+        "bash",
+        "-lc",
+        `git fetch --tags --prune origin && git checkout ${
+          shellQuote(targetRef)
+        } && MNSCLOUD_SKIP_REPO_SYNC=1 bash scripts/update-freeradius.sh --env /etc/mnscloud/freeradius.env`,
+      ],
+    },
+    "mnscloud-freeswitch": {
+      label: "FreeSWITCH PABX",
+      capability: "mnscloud.freeswitch.update",
+      repoDir: "/opt/mnscloud/mnscloud-freeswitch",
+      command: (targetRef) => ["bash", "scripts/update-freeswitch.sh", "--ref", targetRef],
+    },
+    "mnscloud-opensips-sbc": {
+      label: "OpenSIPS SBC",
+      capability: "mnscloud.opensips-sbc.update",
+      repoDir: "/opt/mnscloud/mnscloud-opensips-sbc",
+      command: (targetRef) => ["bash", "scripts/update-opensips-sbc.sh", "--ref", targetRef],
+    },
+    "mnscloud-kamailio-webrtc": {
+      label: "Kamailio WebRTC Edge",
+      capability: "mnscloud.kamailio-webrtc.update",
+      repoDir: "/opt/mnscloud/mnscloud-kamailio-webrtc",
+      command: (targetRef) => [
+        "bash",
+        "-lc",
+        `git fetch --tags --prune origin && git checkout ${
+          shellQuote(targetRef)
+        } && bash scripts/update-kamailio-webrtc.sh`,
+      ],
+    },
+    "mnscloud-turn": {
+      label: "TURN Edge",
+      capability: "mnscloud.turn.update",
+      repoDir: "/opt/mnscloud/mnscloud-turn",
+      command: (targetRef) => [
+        "bash",
+        "-lc",
+        `git fetch --tags --prune origin && git checkout ${
+          shellQuote(targetRef)
+        } && bash scripts/update-turn.sh`,
+      ],
+    },
+    "mnscloud-media": {
+      label: "Media Relay",
+      capability: "mnscloud.media.update",
+      repoDir: "/opt/mnscloud/mnscloud-media",
+      command: (targetRef) => [
+        "bash",
+        "-lc",
+        `git fetch --tags --prune origin && git checkout ${
+          shellQuote(targetRef)
+        } && bash scripts/update-media.sh`,
+      ],
+    },
+    "mnscloud-devsecops": {
+      label: "DevSecOps",
+      capability: "mnscloud.devsecops.update",
+      repoDir: "/opt/mnscloud/mnscloud-devsecops",
+      command: (targetRef) => [
+        "bash",
+        "scripts/update-devsecops.sh",
+        "--ref",
+        targetRef,
+        "--env",
+        "/etc/mnscloud/devsecops.env",
+      ],
+    },
+    "mnscloud-webapps": {
+      label: "Webapps Runtime",
+      capability: "mnscloud.webapps.update",
+      repoDir: "/opt/mnscloud/mnscloud-webapps",
+      command: (targetRef) => [
+        "bash",
+        "scripts/update-webapps.sh",
+        "--ref",
+        targetRef,
+        "--env",
+        "/etc/mnscloud/webapps/webapps.env",
+      ],
     },
   };
   return targets[product] ?? null;
