@@ -393,6 +393,7 @@ mnscloud.rabbitmq.update = $(detect_executable_file /opt/mnscloud/mnscloud-rabbi
 mnscloud.workers.update = $(detect_executable_file /opt/mnscloud/mnscloud-workers/scripts/update-workers.sh)
 mnscloud.freeradius.update = $(detect_executable_file /opt/mnscloud/mnscloud-freeradius/scripts/update-freeradius.sh)
 mnscloud.freeswitch.update = $(detect_executable_file /opt/mnscloud/mnscloud-freeswitch/scripts/update-freeswitch.sh)
+mnscloud.asterisk.update = $(detect_executable_file /opt/mnscloud/mnscloud-asterisk/scripts/update-asterisk.sh)
 mnscloud.opensips-sbc.update = $(detect_executable_file /opt/mnscloud/mnscloud-opensips-sbc/scripts/update-opensips-sbc.sh)
 mnscloud.kamailio-webrtc.update = $(detect_executable_file /opt/mnscloud/mnscloud-kamailio-webrtc/scripts/update-kamailio-webrtc.sh)
 mnscloud.turn.update = $(detect_executable_file /opt/mnscloud/mnscloud-turn/scripts/update-turn.sh)
