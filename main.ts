@@ -579,12 +579,29 @@ async function loadBuildMetadata(cwd = Deno.cwd()) {
   const version = typeof build["version"] === "string" && build["version"].trim()
     ? build["version"].trim()
     : versionFile?.trim() || "0.0.0";
-  const buildRef = typeof build["buildRef"] === "string" ? build["buildRef"].trim() : "";
+  const explicitBuildRef = typeof build["buildRef"] === "string" ? build["buildRef"].trim() : "";
+  const buildRef = explicitBuildRef || await gitBuildRef(cwd);
   const buildDate = typeof build["buildDate"] === "string" ? build["buildDate"].trim() : "";
   const updateChannel = typeof build["updateChannel"] === "string" && build["updateChannel"].trim()
     ? build["updateChannel"].trim()
     : "stable";
   return { version, buildRef, buildDate, updateChannel };
+}
+
+async function gitBuildRef(cwd: string) {
+  if (IS_WINDOWS) return "";
+  try {
+    const command = new Deno.Command("git", {
+      args: ["-C", cwd, "rev-parse", "--short=12", "HEAD"],
+      stdout: "piped",
+      stderr: "null",
+    });
+    const output = await command.output();
+    if (!output.success) return "";
+    return new TextDecoder().decode(output.stdout).trim();
+  } catch {
+    return "";
+  }
 }
 
 async function runtimeVersionReport(
