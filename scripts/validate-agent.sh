@@ -108,7 +108,6 @@ command_path_from_capability() {
     mnscloud.kamailio-webrtc.update) printf '%s\n' "/opt/mnscloud/mnscloud-kamailio-webrtc/scripts/update-kamailio-webrtc.sh" ;;
     mnscloud.turn.update) printf '%s\n' "/opt/mnscloud/mnscloud-turn/scripts/update-turn.sh" ;;
     mnscloud.media.update) printf '%s\n' "/opt/mnscloud/mnscloud-media/scripts/update-media.sh" ;;
-    mnscloud.devsecops.update) printf '%s\n' "/opt/mnscloud/mnscloud-devsecops/scripts/update-devsecops.sh" ;;
     mnscloud.webapps.update) printf '%s\n' "/opt/mnscloud/mnscloud-webapps/scripts/update-webapps.sh" ;;
     *) return 1 ;;
   esac

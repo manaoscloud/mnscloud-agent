@@ -217,9 +217,6 @@ async function applyRuntimeCapabilities(config: AgentConfig) {
   config.capabilities["mnscloud.media.update"] = await isExecutableFile(
     "/opt/mnscloud/mnscloud-media/scripts/update-media.sh",
   );
-  config.capabilities["mnscloud.devsecops.update"] = await isExecutableFile(
-    "/opt/mnscloud/mnscloud-devsecops/scripts/update-devsecops.sh",
-  );
   config.capabilities["mnscloud.webapps.update"] = await isExecutableFile(
     "/opt/mnscloud/mnscloud-webapps/scripts/update-webapps.sh",
   );
@@ -701,12 +698,6 @@ async function collectRuntimeVersions(config: AgentConfig) {
       "mnscloud-media",
       "mnscloud.media.update",
       "/opt/mnscloud/mnscloud-media",
-      config,
-    ),
-    runtimeVersionReport(
-      "mnscloud-devsecops",
-      "mnscloud.devsecops.update",
-      "/opt/mnscloud/mnscloud-devsecops",
       config,
     ),
     runtimeVersionReport(
@@ -3075,19 +3066,6 @@ function runtimeUpdateTarget(product: string) {
         `git fetch --tags --prune origin && git checkout ${
           shellQuote(targetRef)
         } && bash scripts/update-media.sh`,
-      ],
-    },
-    "mnscloud-devsecops": {
-      label: "DevSecOps",
-      capability: "mnscloud.devsecops.update",
-      repoDir: "/opt/mnscloud/mnscloud-devsecops",
-      command: (targetRef) => [
-        "bash",
-        "scripts/update-devsecops.sh",
-        "--ref",
-        targetRef,
-        "--env",
-        "/etc/mnscloud/devsecops.env",
       ],
     },
     "mnscloud-webapps": {
