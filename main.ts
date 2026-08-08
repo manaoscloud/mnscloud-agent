@@ -3096,11 +3096,10 @@ function runtimeUpdateTarget(product: string) {
       repoDir: "/opt/mnscloud/mnscloud-webapps",
       command: (targetRef) => [
         "bash",
-        "scripts/update-webapps.sh",
-        "--ref",
-        targetRef,
-        "--env",
-        "/etc/mnscloud/webapps/webapps.env",
+        "-lc",
+        `git fetch --tags --prune origin && git checkout ${
+          shellQuote(targetRef)
+        } && bash scripts/update-webapps.sh --env /etc/mnscloud/webapps/webapps.env`,
       ],
     },
   };
