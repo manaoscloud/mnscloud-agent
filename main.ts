@@ -3188,7 +3188,7 @@ async function executeRuntimeUpdateJob(
       result = await runLocalCommand(
         "/bin/bash",
         ["-lc", command],
-        Math.max(config.commandTimeoutMs, 600_000),
+        Math.max(config.commandTimeoutMs, 3_600_000),
       );
     }
 
