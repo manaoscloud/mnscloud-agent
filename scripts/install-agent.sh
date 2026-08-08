@@ -398,7 +398,6 @@ mnscloud.opensips-sbc.update = $(detect_executable_file /opt/mnscloud/mnscloud-o
 mnscloud.kamailio-webrtc.update = $(detect_executable_file /opt/mnscloud/mnscloud-kamailio-webrtc/scripts/update-kamailio-webrtc.sh)
 mnscloud.turn.update = $(detect_executable_file /opt/mnscloud/mnscloud-turn/scripts/update-turn.sh)
 mnscloud.media.update = $(detect_executable_file /opt/mnscloud/mnscloud-media/scripts/update-media.sh)
-mnscloud.devsecops.update = $(detect_executable_file /opt/mnscloud/mnscloud-devsecops/scripts/update-devsecops.sh)
 mnscloud.webapps.update = $(detect_executable_file /opt/mnscloud/mnscloud-webapps/scripts/update-webapps.sh)
 nginx-edge.manage = $(detect_capability nginx)
 certbot.manage = $(detect_capability certbot)
