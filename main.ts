@@ -778,6 +778,31 @@ async function reportJobProgress(
   }
 }
 
+async function withProgressHeartbeat<T>(
+  operation: Promise<T>,
+  onHeartbeat: () => Promise<void>,
+  intervalMs: number,
+): Promise<T> {
+  let heartbeatRunning = false;
+  const heartbeatTimer = setInterval(() => {
+    if (heartbeatRunning) {
+      return;
+    }
+    heartbeatRunning = true;
+    onHeartbeat()
+      .catch(() => undefined)
+      .finally(() => {
+        heartbeatRunning = false;
+      });
+  }, intervalMs);
+
+  try {
+    return await operation;
+  } finally {
+    clearInterval(heartbeatTimer);
+  }
+}
+
 async function jsonRequest<T>(
   config: AgentConfig,
   path: string,
@@ -3185,10 +3210,32 @@ async function executeRuntimeUpdateJob(
       const command = `cd ${shellQuote(target.repoDir)} && ${
         target.command(targetRef, job).map(shellQuote).join(" ")
       }`;
-      result = await runLocalCommand(
-        "/bin/bash",
-        ["-lc", command],
-        Math.max(config.commandTimeoutMs, 3_600_000),
+      const timeoutMs = Math.max(config.commandTimeoutMs, 3_600_000);
+      let heartbeatCount = 0;
+      result = await withProgressHeartbeat(
+        runLocalCommand(
+          "/bin/bash",
+          ["-lc", command],
+          timeoutMs,
+        ),
+        () =>
+          reportJobProgress(
+            config,
+            job.jobUUID,
+            agentUUID,
+            agentToken,
+            "running",
+            40,
+            `${target.label} update to ${targetRef} is still running.`,
+            {
+              jobType: "runtime.update",
+              product,
+              targetRef,
+              targetVersion,
+              heartbeat: ++heartbeatCount,
+            },
+          ),
+        Math.min(Math.max(Math.floor(timeoutMs / 12), 120_000), 300_000),
       );
     }
 
