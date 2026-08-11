@@ -349,6 +349,9 @@ ssl_archive_dir = /etc/letsencrypt/archive
 ssl_renewal_dir = /etc/letsencrypt/renewal
 app_upstream = \$app_upstream
 api_upstream = \$api_upstream
+webapps_enabled = false
+webapps_upstream = \$webapps_upstream
+webapps_paths = /phoneweb/,/pulse/
 test_command = nginx -t
 reload_command = systemctl reload nginx
 

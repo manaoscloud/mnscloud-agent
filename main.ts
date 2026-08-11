@@ -26,6 +26,9 @@ type AgentConfig = {
   nginxEdgeSslRenewalDir: string;
   nginxEdgeAppUpstream: string;
   nginxEdgeApiUpstream: string;
+  nginxEdgeWebappsEnabled: boolean;
+  nginxEdgeWebappsUpstream: string;
+  nginxEdgeWebappsPaths: string[];
   nginxEdgeTestCommand: string;
   nginxEdgeReloadCommand: string;
   certbotCommand: string;
@@ -415,6 +418,26 @@ async function loadConfig(): Promise<AgentConfig> {
       "nginx.edge",
       "api_upstream",
       "$api_upstream",
+    ),
+    nginxEdgeWebappsEnabled: getBoolean(
+      parsed,
+      "nginx.edge",
+      "webapps_enabled",
+      false,
+    ),
+    nginxEdgeWebappsUpstream: getConfigValue(
+      parsed,
+      "nginx.edge",
+      "webapps_upstream",
+      "$webapps_upstream",
+    ),
+    nginxEdgeWebappsPaths: parseList(
+      getConfigValue(
+        parsed,
+        "nginx.edge",
+        "webapps_paths",
+        "/phoneweb/,/pulse/",
+      ),
     ),
     nginxEdgeTestCommand: getConfigValue(
       parsed,
@@ -2426,6 +2449,20 @@ function assertSafeDomain(domain: string) {
   }
 }
 
+function normalizeNginxLocationPath(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  const withLeadingSlash = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+  const normalized = withLeadingSlash.endsWith("/") ? withLeadingSlash : `${withLeadingSlash}/`;
+  if (!/^\/[a-zA-Z0-9._~!$&'()*+,;=:@/-]+\/$/.test(normalized)) {
+    throw new Error(`Invalid nginx location path: ${value || "empty"}`);
+  }
+  if (normalized.includes("//")) {
+    throw new Error(`Invalid nginx location path: ${value || "empty"}`);
+  }
+  return normalized;
+}
+
 function nginxEdgeConfigPath(config: AgentConfig, domain: string) {
   const filename = `${domain.replace(/[^a-z0-9._-]/g, "_")}.conf`;
   return `${config.nginxEdgeConfigDir.replace(/\/+$/, "")}/${filename}`;
@@ -2498,6 +2535,7 @@ function renderNginxEdgeDomainConfig(
   const acmeRoot = config.nginxEdgeAcmeRoot;
   const appUpstream = config.nginxEdgeAppUpstream;
   const apiUpstream = config.nginxEdgeApiUpstream;
+  const webappsLocations = renderNginxEdgeWebappsLocations(config);
   const envJsBlock = `location = /env.js {
     default_type application/javascript;
     add_header Cache-Control "no-store";
@@ -2554,6 +2592,8 @@ function renderNginxEdgeDomainConfig(
     proxy_pass ${apiUpstream};
   }
 
+  ${webappsLocations}
+
   ${httpAppLocation}
 }
 `;
@@ -2608,6 +2648,8 @@ function renderNginxEdgeDomainConfig(
     proxy_pass ${apiUpstream};
   }
 
+  ${webappsLocations}
+
   location / {
     proxy_http_version 1.1;
     proxy_set_header Host $host;
@@ -2622,6 +2664,34 @@ function renderNginxEdgeDomainConfig(
 `;
 
   return `${httpBlock}\n${httpsBlock}`;
+}
+
+function renderNginxEdgeWebappsLocations(config: AgentConfig) {
+  if (!config.nginxEdgeWebappsEnabled) return "";
+  const rendered: string[] = [];
+  const seen = new Set<string>();
+  for (const rawPath of config.nginxEdgeWebappsPaths) {
+    const path = normalizeNginxLocationPath(rawPath);
+    if (!path || seen.has(path)) continue;
+    seen.add(path);
+    const noSlash = path.replace(/\/+$/, "");
+    rendered.push(`location = ${noSlash} {
+    return 301 ${path};
+  }
+
+  location ^~ ${path} {
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection $connection_upgrade;
+    proxy_set_header X-Forwarded-Prefix ${noSlash};
+    proxy_pass ${config.nginxEdgeWebappsUpstream};
+  }`);
+  }
+  return rendered.join("\n\n  ");
 }
 
 async function activateNginxEdgeDomain(config: AgentConfig, domain: string) {
