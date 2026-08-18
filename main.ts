@@ -3290,9 +3290,13 @@ async function executeRuntimeUpdateJob(
           `${target.label} runtime update command is not configured.`,
         );
       }
-      const command = `cd ${shellQuote(target.repoDir)} && ${
-        target.command(targetRef, job).map(shellQuote).join(" ")
-      }`;
+      const command = [
+        `export MNSCLOUD_RUNTIME_UPDATE_IN_PROGRESS=1`,
+        `export MNSCLOUD_RUNTIME_UPDATE_JOB_UUID=${shellQuote(job.jobUUID)}`,
+        `export MNSCLOUD_RUNTIME_UPDATE_PRODUCT=${shellQuote(product)}`,
+        `cd ${shellQuote(target.repoDir)}`,
+        target.command(targetRef, job).map(shellQuote).join(" "),
+      ].join(" && ");
       const timeoutMs = Math.max(config.commandTimeoutMs, 3_600_000);
       let heartbeatCount = 0;
       result = await withProgressHeartbeat(
