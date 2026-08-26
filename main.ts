@@ -1650,7 +1650,10 @@ function trunkRegistrationStatus(engine: string, output: string, exitCode: numbe
     const status = valueFor("Status");
 
     if (state === "reged" && status === "up") return "registered";
-    if (state === "trying" || state === "registering" || status === "trying") return "registering";
+    if (
+      state === "register" || state === "trying" || state === "registering" ||
+      status === "trying"
+    ) return "registering";
     if (state === "unreged" || status === "down") return "not_registered";
     if (/^\s*-err\b|^\s*error\s*:/im.test(output)) return "failed";
     return "unknown";
@@ -1691,6 +1694,30 @@ async function runPabxTrunkRegistrationDiagnostic(
     };
   }
   throw new Error(`Unsupported PABX engine: ${engine || "empty"}`);
+}
+
+async function runPabxTrunkRegistrationDiagnosticWithConvergence(
+  engine: string,
+  runtimeName: string,
+  config: AgentConfig,
+) {
+  let diagnostic = await runPabxTrunkRegistrationDiagnostic(engine, runtimeName, config);
+  if (engine !== "freeswitch") return diagnostic;
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const stdout = diagnosticOutput(diagnostic.result.stdout);
+    const stderr = diagnosticOutput(diagnostic.result.stderr);
+    const registrationStatus = trunkRegistrationStatus(
+      engine,
+      `${stdout}\n${stderr}`,
+      diagnostic.result.code,
+    );
+    if (registrationStatus !== "registering") return diagnostic;
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+    diagnostic = await runPabxTrunkRegistrationDiagnostic(engine, runtimeName, config);
+  }
+
+  return diagnostic;
 }
 
 type PabxExtensionRuntimeTarget = {
@@ -2273,7 +2300,7 @@ async function executePabxCommandJob(
         }
 
         try {
-          const diagnostic = await runPabxTrunkRegistrationDiagnostic(
+          const diagnostic = await runPabxTrunkRegistrationDiagnosticWithConvergence(
             engine,
             target.runtimeName,
             config,
