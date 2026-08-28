@@ -121,19 +121,14 @@ jobs:
             "$endpoint"
       - name: Queue runtime rollout through MNSCloud Agent
         env:
-          MNSCLOUD_RUNTIME_ROLLOUT_ENABLED: ${{ vars.MNSCLOUD_RUNTIME_ROLLOUT_ENABLED || 'false' }}
-          MNSCLOUD_RUNTIME_ROLLOUT_URL: ${{ vars.MNSCLOUD_RUNTIME_ROLLOUT_URL || vars.MNSCLOUD_RELEASE_SYNC_URL || secrets.MNSCLOUD_RUNTIME_ROLLOUT_URL || secrets.MNSCLOUD_RELEASE_SYNC_URL || '' }}
-          MNSCLOUD_RUNTIME_ROLLOUT_TOKEN: ${{ secrets.MNSCLOUD_RUNTIME_ROLLOUT_TOKEN || secrets.MNSCLOUD_DEPLOY_TOKEN || '' }}
+          MNSCLOUD_RUNTIME_ROLLOUT_URL: ${{ vars.MNSCLOUD_RELEASE_SYNC_URL || secrets.MNSCLOUD_RELEASE_SYNC_URL || '' }}
+          MNSCLOUD_RUNTIME_ROLLOUT_TOKEN: ${{ secrets.MNSCLOUD_DEPLOY_TOKEN || '' }}
           RUNTIME_PRODUCT: ${{ steps.release_cache.outputs.product }}
           RUNTIME_TARGET_REF: ${{ steps.release_cache.outputs.ref }}
         run: |
           set -euo pipefail
-          if [ "$MNSCLOUD_RUNTIME_ROLLOUT_ENABLED" != "true" ]; then
-            echo "MNSCLOUD_RUNTIME_ROLLOUT_ENABLED is not true; runtime rollout is skipped for ${RUNTIME_PRODUCT}."
-            exit 0
-          fi
           if [ -z "$MNSCLOUD_RUNTIME_ROLLOUT_URL" ] || [ -z "$MNSCLOUD_RUNTIME_ROLLOUT_TOKEN" ]; then
-            echo "MNSCLOUD_RUNTIME_ROLLOUT_URL and MNSCLOUD_RUNTIME_ROLLOUT_TOKEN are required when runtime rollout is enabled." >&2
+            echo "MNSCLOUD_RELEASE_SYNC_URL and MNSCLOUD_DEPLOY_TOKEN are required to queue the runtime rollout." >&2
             exit 1
           fi
           base_url="${MNSCLOUD_RUNTIME_ROLLOUT_URL%/}"
