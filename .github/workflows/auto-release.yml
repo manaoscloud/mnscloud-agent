@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Explicit semantic version to promote through the same validated release path.'
+        description: "Explicit semantic version to promote through the same validated release path."
         required: true
         type: string
 
@@ -85,6 +85,7 @@ jobs:
           git checkout --detach "v${RELEASE_VERSION}"
           python3 - <<'PY' > /tmp/mnscloud-release-payload.json
           import json
+          import os
           import subprocess
 
           manifest = json.load(open('releases/manifest.json', encoding='utf-8'))
