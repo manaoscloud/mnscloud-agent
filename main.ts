@@ -2554,6 +2554,17 @@ async function nginxEdgeHasCertificate(config: AgentConfig, domain: string) {
     await fileExists(`${base}/privkey.pem`);
 }
 
+function frontendSecurityHeaders(indent = "    ") {
+  const csp =
+    "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https:; connect-src 'self' https: wss:; form-action 'self'; upgrade-insecure-requests";
+  return [
+    `${indent}add_header Content-Security-Policy "${csp}" always;`,
+    `${indent}add_header X-Content-Type-Options "nosniff" always;`,
+    `${indent}add_header Referrer-Policy "strict-origin-when-cross-origin" always;`,
+    `${indent}add_header Permissions-Policy "geolocation=(), microphone=(), camera=()" always;`,
+  ].join("\n");
+}
+
 function renderNginxEdgeDomainConfig(
   config: AgentConfig,
   domain: string,
@@ -2566,11 +2577,13 @@ function renderNginxEdgeDomainConfig(
   const envJsBlock = `location = /env.js {
     default_type application/javascript;
     add_header Cache-Control "no-store";
+${frontendSecurityHeaders()}
     alias /etc/nginx/mnscloud/runtime/env.js;
   }`;
   const httpAppLocation = sslEnabled
     ? "location / { return 301 https://$host$request_uri; }"
     : `location / {
+${frontendSecurityHeaders()}
     proxy_http_version 1.1;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
@@ -2678,6 +2691,7 @@ function renderNginxEdgeDomainConfig(
   ${webappsLocations}
 
   location / {
+${frontendSecurityHeaders()}
     proxy_http_version 1.1;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
@@ -2707,6 +2721,7 @@ function renderNginxEdgeWebappsLocations(config: AgentConfig) {
   }
 
   location ^~ ${path} {
+${frontendSecurityHeaders()}
     proxy_http_version 1.1;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
