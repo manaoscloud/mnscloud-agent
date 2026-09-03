@@ -345,10 +345,10 @@ the application when that identity should no longer be used.
 - Communication is always outbound to the API.
 - There is one Agent runtime; limits are enforced through OS permissions, capabilities, assignments,
   and jobs.
-- Capabilities are declared by the host and synchronized on heartbeat. API/App update capabilities
-  and realtime runtime capabilities are also derived from executable local runtime commands before
-  each heartbeat, so hosts publish the effective capability only when the local runtime command
-  exists and is executable.
+- Capabilities are declared by the host and synchronized on heartbeat. API/App/OpenVault update
+  capabilities and realtime runtime capabilities are also derived from executable local runtime
+  commands before each heartbeat, so hosts publish the effective capability only when the local
+  runtime command exists and is executable.
 - Linux install/reinstall explicitly restarts `mnscloud-agent` after rewriting runtime files,
   `agent.conf`, and the systemd unit. Runtime installers may re-run `install-agent.sh` to refresh
   capabilities without requiring an extra operator restart.
