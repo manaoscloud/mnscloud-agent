@@ -4034,6 +4034,37 @@ async function collectCrowdSecSecurityEvents(config: AgentConfig) {
   };
 }
 
+async function generateOpenVaultTls(
+  payload: Record<string, unknown> | undefined,
+  rotate: boolean,
+  timeoutMs: number,
+) {
+  const secretServerUUID = typeof payload?.secretServerUUID === "string"
+    ? payload.secretServerUUID
+    : "";
+  const script = "/opt/mnscloud/mnscloud-openvault/scripts/generate-openvault-tls.sh";
+  const args = [script, "--env", "/etc/mnscloud/openvault.env"];
+  if (rotate) args.push("--force");
+  const result = await runLocalCommand(
+    "bash",
+    args,
+    Math.max(timeoutMs, 180_000),
+  );
+  if (result.code !== 0) {
+    throw new Error(result.stderr || result.stdout || "OpenVault TLS generation failed.");
+  }
+  const jsonLine = result.stdout.trim().split(/\r?\n/).reverse().find((line) =>
+    line.trim().startsWith("{")
+  );
+  const parsed = jsonLine ? JSON.parse(jsonLine) as Record<string, unknown> : {};
+  return {
+    ...parsed,
+    secretServerUUID,
+    command: rotate ? "openvault.tls.rotate" : "openvault.tls.generate",
+    status: "success",
+  };
+}
+
 function assertCapability(config: AgentConfig, capability: string) {
   if (!config.capabilities[capability]) {
     throw new Error(`Capability is disabled: ${capability}`);
@@ -5261,6 +5292,32 @@ async function executeCyberSecurityJob(
         },
       );
       log("info", "Cyber Security profile applied.", {
+        jobUUID: job.jobUUID,
+        result,
+      });
+      return;
+    }
+
+    if (
+      leasedCommand === "openvault.tls.generate" ||
+      leasedCommand === "openvault.tls.rotate"
+    ) {
+      const result = await generateOpenVaultTls(
+        job.payload ?? undefined,
+        leasedCommand === "openvault.tls.rotate",
+        config.commandTimeoutMs,
+      );
+      await jsonRequest(
+        config,
+        `/agent/jobs/${job.jobUUID}/complete`,
+        agentToken,
+        agentUUID,
+        {
+          jobType: "cyber.security",
+          result,
+        },
+      );
+      log("info", "OpenVault TLS job completed.", {
         jobUUID: job.jobUUID,
         result,
       });
