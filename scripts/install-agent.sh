@@ -14,11 +14,14 @@ AGENT_RUNTIME_KIT_CHANNEL="${AGENT_RUNTIME_KIT_CHANNEL:-stable}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 AGENT_SOURCE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 LOG_FILE="${LOG_FILE:-/var/log/mnscloud-agent-install.log}"
+INSTALL_CHANNEL="stable"
+SKIP_LATEST=false
+ORIGINAL_ARGS=("$@")
 
 usage() {
   cat <<'TXT'
 Usage:
-  agent/scripts/install-agent.sh [--dry-run] [--api-base URL] [--install-label LABEL] [--enrollment-token TOKEN]
+  agent/scripts/install-agent.sh [--dry-run] [--api-base URL] [--install-label LABEL] [--enrollment-token TOKEN] [--install-channel stable] [--skip-latest]
 
 Installs the single native MNSCloud Agent as a systemd service.
 TXT
@@ -44,6 +47,14 @@ while [[ $# -gt 0 ]]; do
     --enrollment-token)
       ENROLLMENT_TOKEN="${2:-}"
       shift 2
+      ;;
+    --install-channel)
+      INSTALL_CHANNEL="${2:-}"
+      shift 2
+      ;;
+    --skip-latest)
+      SKIP_LATEST=true
+      shift
       ;;
     --help|-h)
       usage
@@ -239,6 +250,15 @@ normalize_url() {
   printf "%s" "$1" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g; s#/*$##'
 }
 
+normalize_api_base() {
+  local base
+  base="$(normalize_url "$1")"
+  if [[ "$base" != */api/v1 ]]; then
+    base="${base}/api/v1"
+  fi
+  printf '%s\n' "$base"
+}
+
 read_config_value() {
   local config_file="$1" section="$2" key="$3"
   [[ -r "$config_file" ]] || return 0
@@ -294,6 +314,53 @@ agent_version() {
 
 agent_build_ref() {
   git -C "${AGENT_SOURCE_DIR}" rev-parse --short=12 'HEAD^{commit}' 2>/dev/null || printf "unknown"
+}
+
+current_git_ref() {
+  git -C "${AGENT_SOURCE_DIR}" describe --tags --exact-match HEAD 2>/dev/null ||
+    git -C "${AGENT_SOURCE_DIR}" rev-parse --short=12 'HEAD^{commit}' 2>/dev/null ||
+    printf "unknown"
+}
+
+resolve_latest_agent_release() {
+  local api_base="$1"
+  local channel="$2"
+  local url payload version ref
+  api_base="$(normalize_api_base "$api_base")"
+  url="${api_base}/runtime/releases/latest?product=mnscloud-agent&channel=${channel}"
+  payload="$(curl -fsS --connect-timeout 10 --max-time 20 "$url")" || return 1
+  version="$(printf '%s\n' "$payload" | sed -n 's/.*"version":"\([^"]*\)".*/\1/p' | head -n1)"
+  ref="$(printf '%s\n' "$payload" | sed -n 's/.*"ref":"\([^"]*\)".*/\1/p' | head -n1)"
+  [[ "$version" =~ ^[0-9]+[.][0-9]+[.][0-9]+$ ]] || return 1
+  [[ "$ref" =~ ^v[0-9]+[.][0-9]+[.][0-9]+([-+][0-9A-Za-z.-]+)?$ ]] || return 1
+  printf '%s %s\n' "$version" "$ref"
+}
+
+bootstrap_latest_agent_release() {
+  if $DRY_RUN; then
+    log DRY-RUN "resolve latest mnscloud-agent release from ${API_BASE:-$DEFAULT_API_BASE}"
+    return 0
+  fi
+  $SKIP_LATEST && return 0
+  [[ -d "${AGENT_SOURCE_DIR}/.git" ]] || return 0
+
+  local api_base latest version ref current_version current_ref
+  api_base="${API_BASE:-$DEFAULT_API_BASE}"
+  latest="$(resolve_latest_agent_release "$api_base" "$INSTALL_CHANNEL" 2>/dev/null)" || {
+    warn "Could not resolve latest mnscloud-agent release from ${api_base}; continuing with checkout version $(agent_version)."
+    return 0
+  }
+  version="${latest%% *}"
+  ref="${latest#* }"
+  current_version="$(agent_version)"
+  current_ref="$(current_git_ref)"
+  if [[ "$current_version" == "$version" && "$current_ref" == "$ref" ]]; then
+    ok "Agent installer already running from latest ${INSTALL_CHANNEL} release ${version} (${ref})."
+    return 0
+  fi
+
+  info "Latest ${INSTALL_CHANNEL} Agent release is ${version} (${ref}); switching installer before install."
+  exec bash "${AGENT_SOURCE_DIR}/scripts/update-agent.sh" --ref "$ref" "${ORIGINAL_ARGS[@]}" --skip-latest
 }
 
 write_agent_build_metadata() {
@@ -643,13 +710,17 @@ main() {
 
   require_root
   ensure_local_hostname
-  ensure_deno
 
   hostname="$(hostname -f 2>/dev/null || hostname)"
   existing_api_base="$(read_config_value "$config_file" "agent" "api_base")"
   existing_install_label="$(read_config_value "$config_file" "agent" "name")"
   api_base="$(normalize_url "${API_BASE:-$(prompt_value "MNSCloud API base URL" "${existing_api_base:-$DEFAULT_API_BASE}")}")"
   install_label="${INSTALL_LABEL:-$(prompt_value "Local install label" "${existing_install_label:-$hostname}")}"
+  if ! $DRY_RUN; then
+    install_packages "$(detect_os)"
+  fi
+  bootstrap_latest_agent_release
+  ensure_deno
   validate_existing_identity "$api_base" "${data_dir}/agent.uuid" "${data_dir}/agent.token" "$hostname"
 
   info "Preparing native mnscloud-agent..."
