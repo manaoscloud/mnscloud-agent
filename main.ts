@@ -223,6 +223,9 @@ async function applyRuntimeCapabilities(config: AgentConfig) {
   config.capabilities["mnscloud.webapps.update"] = await isExecutableFile(
     "/opt/mnscloud/mnscloud-webapps/scripts/update-webapps.sh",
   );
+  config.capabilities["mnscloud.openvault.update"] = await isExecutableFile(
+    "/opt/mnscloud/mnscloud-openvault/scripts/update-openvault.sh",
+  );
   config.capabilities["realtime.webrtc.manage"] = await isExecutableFile(
     config.webrtcEdgeSyncCommand,
   );
@@ -727,6 +730,12 @@ async function collectRuntimeVersions(config: AgentConfig) {
       "mnscloud-webapps",
       "mnscloud.webapps.update",
       "/opt/mnscloud/mnscloud-webapps",
+      config,
+    ),
+    runtimeVersionReport(
+      "mnscloud-openvault",
+      "mnscloud.openvault.update",
+      "/opt/mnscloud/mnscloud-openvault",
       config,
     ),
   ]);
@@ -3229,6 +3238,20 @@ function runtimeUpdateTarget(product: string) {
           } && bash scripts/update-webapps.sh ${updateArgs.map(shellQuote).join(" ")}`,
         ];
       },
+    },
+    "mnscloud-openvault": {
+      label: "OpenVault",
+      capability: "mnscloud.openvault.update",
+      repoDir: "/opt/mnscloud/mnscloud-openvault",
+      command: (targetRef) => [
+        "bash",
+        "-lc",
+        `git fetch --tags --prune origin && git checkout ${
+          shellQuote(targetRef)
+        } && bash scripts/update-openvault.sh --ref ${
+          shellQuote(targetRef)
+        } --env /etc/mnscloud/openvault.env`,
+      ],
     },
   };
   return targets[product] ?? null;

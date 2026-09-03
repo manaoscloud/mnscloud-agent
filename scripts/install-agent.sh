@@ -469,6 +469,7 @@ mnscloud.kamailio-webrtc.update = $(detect_executable_file /opt/mnscloud/mnsclou
 mnscloud.turn.update = $(detect_executable_file /opt/mnscloud/mnscloud-turn/scripts/update-turn.sh)
 mnscloud.media.update = $(detect_executable_file /opt/mnscloud/mnscloud-media/scripts/update-media.sh)
 mnscloud.webapps.update = $(detect_executable_file /opt/mnscloud/mnscloud-webapps/scripts/update-webapps.sh)
+mnscloud.openvault.update = $(detect_executable_file /opt/mnscloud/mnscloud-openvault/scripts/update-openvault.sh)
 nginx-edge.manage = $(detect_capability nginx)
 certbot.manage = $(detect_capability certbot)
 security.nftables.manage = true
