@@ -210,12 +210,22 @@ ssl_archive_dir = /etc/letsencrypt/archive
 ssl_renewal_dir = /etc/letsencrypt/renewal
 app_upstream = $app_upstream
 api_upstream = $api_upstream
+webapps_enabled = false
+webapps_upstream = $webapps_upstream
+webapps_paths = /phoneweb/,/pulse/
 test_command = nginx -t
 reload_command = systemctl reload nginx
 
 [certbot]
 command = certbot
 default_email =
+
+# On Nginx edge hosts, ThemeDomain rendering also reads /etc/mnscloud/nginx.env.
+# If MNSCLOUD_ENABLE_WEBAPPS_PROXY=true is configured there, generated
+# ThemeDomain HTTP/HTTPS server blocks include the WebApps locations even when
+# older agent config files still contain webapps_enabled = false. This keeps
+# /phoneweb/ and /pulse/ from falling through to the main Angular app.
+# /webphone redirects to /phoneweb/ when PhoneWeb is enabled.
 
 [realtime.webrtc.edge]
 sync_command = /opt/mnscloud/kamailio-webrtc/scripts/update-kamailio-webrtc.sh
