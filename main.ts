@@ -2768,18 +2768,6 @@ function renderNginxEdgeWebappsLocations(config: AgentConfig) {
   if (!config.nginxEdgeWebappsEnabled) return "";
   const rendered: string[] = [];
   const seen = new Set<string>();
-  const normalizedPaths = config.nginxEdgeWebappsPaths
-    .map((rawPath) => normalizeNginxLocationPath(rawPath))
-    .filter((path) => path.length > 0);
-  if (normalizedPaths.includes("/phoneweb/") && !normalizedPaths.includes("/webphone/")) {
-    rendered.push(`location = /webphone {
-    return 301 /phoneweb/;
-  }
-
-  location ^~ /webphone/ {
-    rewrite ^/webphone/(.*)$ /phoneweb/$1 permanent;
-  }`);
-  }
   for (const rawPath of config.nginxEdgeWebappsPaths) {
     const path = normalizeNginxLocationPath(rawPath);
     if (!path || seen.has(path)) continue;

@@ -225,7 +225,6 @@ default_email =
 # ThemeDomain HTTP/HTTPS server blocks include the WebApps locations even when
 # older agent config files still contain webapps_enabled = false. This keeps
 # /phoneweb/ and /pulse/ from falling through to the main Angular app.
-# /webphone redirects to /phoneweb/ when PhoneWeb is enabled.
 
 [realtime.webrtc.edge]
 sync_command = /opt/mnscloud/kamailio-webrtc/scripts/update-kamailio-webrtc.sh
