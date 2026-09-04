@@ -284,9 +284,57 @@ function getBoolean(
   return fallback;
 }
 
+function parseEnvValue(value: string) {
+  const trimmed = value.trim();
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    return trimmed.slice(1, -1);
+  }
+  return trimmed;
+}
+
+async function loadKeyValueEnv(path: string): Promise<Record<string, string>> {
+  try {
+    const content = await Deno.readTextFile(path);
+    const values: Record<string, string> = {};
+    for (const rawLine of content.split(/\r?\n/)) {
+      const line = rawLine.trim();
+      if (!line || line.startsWith("#") || !line.includes("=")) continue;
+      const [rawKey, ...rawValueParts] = line.split("=");
+      const key = rawKey.trim();
+      if (!key) continue;
+      values[key] = parseEnvValue(rawValueParts.join("="));
+    }
+    return values;
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) return {};
+    throw error;
+  }
+}
+
+function envBoolean(value: string | undefined, fallback: boolean) {
+  const normalized = (value ?? "").trim().toLowerCase();
+  if (["1", "true", "yes", "y", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "n", "off"].includes(normalized)) return false;
+  return fallback;
+}
+
+function nginxWebappsPathsFromEnv(values: Record<string, string>) {
+  return parseList(
+    [
+      values.MNSCLOUD_PHONEWEB_PATH,
+      values.MNSCLOUD_PULSE_PATH,
+      values.MNSCLOUD_WEBAPPS_PATHS,
+    ].filter(Boolean).join(","),
+  );
+}
+
 async function loadConfig(): Promise<AgentConfig> {
   const parsed = parseIni(await Deno.readTextFile(CONFIG_PATH));
   const build = await loadBuildMetadata();
+  const nginxRuntimeEnv = await loadKeyValueEnv("/etc/mnscloud/nginx.env");
   const defaultStateDir = IS_WINDOWS
     ? `${PROGRAM_DATA}\\MNSCloud\\Agent`
     : "/var/lib/mnscloud/agent";
@@ -426,20 +474,20 @@ async function loadConfig(): Promise<AgentConfig> {
       parsed,
       "nginx.edge",
       "webapps_enabled",
-      false,
-    ),
+      envBoolean(nginxRuntimeEnv.MNSCLOUD_ENABLE_WEBAPPS_PROXY, false),
+    ) || envBoolean(nginxRuntimeEnv.MNSCLOUD_ENABLE_WEBAPPS_PROXY, false),
     nginxEdgeWebappsUpstream: getConfigValue(
       parsed,
       "nginx.edge",
       "webapps_upstream",
-      "$webapps_upstream",
+      nginxRuntimeEnv.MNSCLOUD_WEBAPPS_UPSTREAM ?? "$webapps_upstream",
     ),
     nginxEdgeWebappsPaths: parseList(
       getConfigValue(
         parsed,
         "nginx.edge",
         "webapps_paths",
-        "/phoneweb/,/pulse/",
+        nginxWebappsPathsFromEnv(nginxRuntimeEnv).join(",") || "/phoneweb/,/pulse/",
       ),
     ),
     nginxEdgeTestCommand: getConfigValue(
@@ -2720,6 +2768,18 @@ function renderNginxEdgeWebappsLocations(config: AgentConfig) {
   if (!config.nginxEdgeWebappsEnabled) return "";
   const rendered: string[] = [];
   const seen = new Set<string>();
+  const normalizedPaths = config.nginxEdgeWebappsPaths
+    .map((rawPath) => normalizeNginxLocationPath(rawPath))
+    .filter((path) => path.length > 0);
+  if (normalizedPaths.includes("/phoneweb/") && !normalizedPaths.includes("/webphone/")) {
+    rendered.push(`location = /webphone {
+    return 301 /phoneweb/;
+  }
+
+  location ^~ /webphone/ {
+    rewrite ^/webphone/(.*)$ /phoneweb/$1 permanent;
+  }`);
+  }
   for (const rawPath of config.nginxEdgeWebappsPaths) {
     const path = normalizeNginxLocationPath(rawPath);
     if (!path || seen.has(path)) continue;
