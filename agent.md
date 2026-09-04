@@ -225,6 +225,11 @@ default_email =
 # ThemeDomain HTTP/HTTPS server blocks include the WebApps locations even when
 # older agent config files still contain webapps_enabled = false. This keeps
 # /phoneweb/ and /pulse/ from falling through to the main Angular app.
+#
+# ThemeDomain frontend CSP must keep Flutter Web runtime support for WebApps:
+# WebAssembly evaluation and CanvasKit loaded from https://www.gstatic.com are
+# required by current PhoneWeb/Pulse builds. Keep this explicit instead of
+# opening script-src broadly.
 
 [realtime.webrtc.edge]
 sync_command = /opt/mnscloud/kamailio-webrtc/scripts/update-kamailio-webrtc.sh
