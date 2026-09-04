@@ -2613,7 +2613,7 @@ async function nginxEdgeHasCertificate(config: AgentConfig, domain: string) {
 
 function frontendSecurityHeaders(indent = "    ") {
   const csp =
-    "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https:; connect-src 'self' https: wss:; form-action 'self'; upgrade-insecure-requests";
+    "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://www.gstatic.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https:; connect-src 'self' https: wss:; form-action 'self'; upgrade-insecure-requests";
   return [
     `${indent}add_header Content-Security-Policy "${csp}" always;`,
     `${indent}add_header X-Content-Type-Options "nosniff" always;`,
