@@ -1,5 +1,11 @@
 # mnscloud-agent
 
+Linux installs and updates preserve an existing stable Deno >= 2.8.1 by default,
+including newer runtimes required by other services on the same host. Missing or
+older runtimes are installed through `mnscloud-runtime-kit`. Only an explicit
+`MNSCLOUD_DENO_VERSION` override requests replacement of a compatible runtime;
+verify the other host services before choosing a lower version.
+
 Standalone native MNSCloud Agent.
 
 The Agent runs as a native service and communicates with the MNSCloud API through outbound HTTPS.

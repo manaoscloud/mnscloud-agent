@@ -235,6 +235,17 @@ resolve_runtime_kit_ref() {
 }
 
 ensure_deno() {
+  # Other services may require a newer shared runtime. Only an explicit operator
+  # override may replace an already compatible version with an older one.
+  local installed=""
+  if [[ -z "${MNSCLOUD_DENO_VERSION:-}" ]] && command -v deno >/dev/null 2>&1; then
+    installed="$(deno --version | awk 'NR == 1 { print $2 }')"
+    if [[ "$installed" =~ ^[0-9]+[.][0-9]+[.][0-9]+$ ]] &&
+      [[ "$(printf '%s\n' 2.8.1 "$installed" | sort -V | head -1)" == "2.8.1" ]]; then
+      ok "Preserving compatible shared Deno ${installed}"
+      return 0
+    fi
+  fi
   if $DRY_RUN; then
     log DRY-RUN "install Deno ${MNSCLOUD_DENO_VERSION:-2.8.1} via mnscloud-runtime-kit"
     return 0

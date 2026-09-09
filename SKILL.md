@@ -24,6 +24,14 @@ Use this contract when changing the `agent/` module.
 
 ## Supported Systems
 
+The Linux installer preserves an existing stable Deno version >= 2.8.1 when no
+`MNSCLOUD_DENO_VERSION` override is supplied. The host runtime may be shared with
+other services that require a newer version. Install a missing/older runtime through
+`mnscloud-runtime-kit`; never silently downgrade a compatible host runtime during
+Agent install, update or rollback. An explicit version override remains an operator
+decision and must respect the other services on that host.
+Run `bash scripts/test-deno-selection.sh` when changing this lifecycle behavior.
+
 - Linux: Debian 12/13, RHEL 9/10, Rocky Linux 9/10, AlmaLinux 9/10.
 - Windows: Windows Server 2019/2022/2025 and Windows 10/11 Pro/Enterprise.
 - Other systems are experimental and must be documented as best-effort only.
