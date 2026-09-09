@@ -383,6 +383,9 @@ write_agent_build_metadata() {
 
 write_agent_config() {
   local config_file="$1" install_label="$2" hostname="$3" api_base="$4"
+  local metrics_enabled metrics_interval
+  metrics_enabled="$(read_config_value "$config_file" agent host_metrics_enabled)"
+  metrics_interval="$(read_config_value "$config_file" agent host_metrics_interval_ms)"
   write_file "$config_file" "# MNSCloud Agent configuration
 # Managed by agent/scripts/install-agent.sh
 
@@ -393,6 +396,8 @@ api_base = ${api_base}
 update_repo_dir = ${AGENT_SOURCE_DIR}
 poll_interval_ms = 15000
 heartbeat_interval_ms = 60000
+host_metrics_enabled = ${metrics_enabled:-true}
+host_metrics_interval_ms = ${metrics_interval:-60000}
 cyber_security_sync_interval_ms = 60000
 
 [identity]

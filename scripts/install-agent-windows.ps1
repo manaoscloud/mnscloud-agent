@@ -78,6 +78,16 @@ function Ensure-Deno {
 }
 
 function Write-AgentConfig([string]$DenoPath) {
+  $metricsEnabled = "true"
+  $metricsInterval = "60000"
+  if (Test-Path $ConfigFile) {
+    $existingConfig = Get-Content $ConfigFile -Raw
+    $agentSection = [regex]::Match($existingConfig, '(?ms)^\[agent\]\s*\r?\n(.*?)(?=^\[|\z)').Groups[1].Value
+    $enabledMatch = [regex]::Match($agentSection, '(?m)^host_metrics_enabled\s*=\s*([^\r\n]+)')
+    $intervalMatch = [regex]::Match($agentSection, '(?m)^host_metrics_interval_ms\s*=\s*([^\r\n]+)')
+    if ($enabledMatch.Success) { $metricsEnabled = $enabledMatch.Groups[1].Value.Trim() }
+    if ($intervalMatch.Success) { $metricsInterval = $intervalMatch.Groups[1].Value.Trim() }
+  }
   $content = @"
 # MNSCloud Agent configuration
 # Managed by scripts/install-agent-windows.ps1
@@ -89,6 +99,8 @@ api_base = $DefaultApiBase
 update_repo_dir = $RepoDir
 poll_interval_ms = 15000
 heartbeat_interval_ms = 60000
+host_metrics_enabled = $metricsEnabled
+host_metrics_interval_ms = $metricsInterval
 cyber_security_sync_interval_ms = 60000
 
 [identity]

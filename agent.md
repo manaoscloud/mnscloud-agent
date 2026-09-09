@@ -531,3 +531,10 @@ Agent executes local runtime sync.
 Dedicated RTP/media hosts expose `realtime.media.manage` when `[realtime_media_edge].sync_command`
 points to an executable `mnscloud-media` runtime script. Media jobs must stay typed and API/DB-owned
 before the Agent executes local rtpengine runtime sync.
+
+## Host observations
+
+Optional `hostMetrics` in `/agent/heartbeat` carries CPU usage, physical RAM and system-filesystem
+capacity/availability. See README for units, Linux/Windows semantics, null first CPU sample,
+configuration and deployment order. The same master/tenant identity and browser-origin enrollment
+contract applies; do not replace the Agent API domain with a fleet-wide infrastructure domain.
