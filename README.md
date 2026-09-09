@@ -427,3 +427,6 @@ ignores the optional field; it cannot persist telemetry until upgraded.
 Validation: `deno test --allow-all host-metrics_test.ts` exercises CPU deltas, reset handling, Linux
 memory/filesystem parsing and local collection on Linux. Windows CIM collection needs a Windows host
 for runtime validation.
+
+Windows CIM collection has a 15-second deadline to accommodate cold provider startup. A timeout
+omits that observation and leaves heartbeat active.

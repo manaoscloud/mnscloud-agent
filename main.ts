@@ -1188,7 +1188,7 @@ $o=Get-CimInstance Win32_OperatingSystem;
 $c=Get-CimInstance Win32_PerfFormattedData_PerfOS_Processor -Filter "Name='_Total'";
 $d=Get-CimInstance Win32_LogicalDisk | Where-Object { $_.DeviceID -eq $o.SystemDrive };
 @{cpuUsagePercent=[double]$c.PercentProcessorTime;memoryTotalBytes=[double]$o.TotalVisibleMemorySize*1024;memoryAvailableBytes=[double]$o.FreePhysicalMemory*1024;diskTotalBytes=[double]$d.Size;diskAvailableBytes=[double]$d.FreeSpace} | ConvertTo-Json -Compress`,
-        5000,
+        15000,
       );
       if (result.code !== 0) throw new Error("Windows host metrics query failed");
       return { ...JSON.parse(result.stdout), observedAt: new Date().toISOString() };
