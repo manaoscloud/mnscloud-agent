@@ -207,3 +207,8 @@ heartbeat data, not an authorization source. Keep collection bounded and typed o
 never expose generic remote commands, and leave owner resolution, validation, metric definitions and
 retention in DB/API. Changes to host telemetry require parser tests plus API/SQL scope and ingestion
 tests.
+
+Linux host counters are read by bounded local `cat` commands with fixed `/proc/stat` and
+`/proc/meminfo` paths. Keep the existing service permission flags: direct Deno reads of
+these pseudo-files require broader permission and must not be used here. CI also starts
+a collector subprocess with the exact service permission flags on Linux and Windows.

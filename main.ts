@@ -1194,19 +1194,20 @@ $d=Get-CimInstance Win32_LogicalDisk | Where-Object { $_.DeviceID -eq $o.SystemD
       return { ...JSON.parse(result.stdout), observedAt: new Date().toISOString() };
     }
     if (Deno.build.os !== "linux") return null;
-    const [cpuText, memoryText, disk] = await Promise.all([
-      Deno.readTextFile("/proc/stat"),
-      Deno.readTextFile("/proc/meminfo"),
+    const [counters, disk] = await Promise.all([
+      // Deno guards /proc behind --allow-all. Use the existing bounded local-command
+      // permission with fixed paths rather than broadening the service permissions.
+      runLocalCommand("cat", ["/proc/stat", "/proc/meminfo"], 5000),
       runLocalCommand("df", ["-Pk", "/"], 5000),
     ]);
-    if (disk.code !== 0) throw new Error("System filesystem query failed");
-    const current = parseLinuxCpu(cpuText);
+    if (counters.code !== 0 || disk.code !== 0) throw new Error("Host counters query failed");
+    const current = parseLinuxCpu(counters.stdout);
     const usage = cpuUsage(current, previousCpu);
     previousCpu = current;
     return {
       observedAt: new Date().toISOString(),
       cpuUsagePercent: usage,
-      ...parseLinuxMemory(memoryText),
+      ...parseLinuxMemory(counters.stdout),
       ...parseRootDisk(disk.stdout),
     };
   } catch {
