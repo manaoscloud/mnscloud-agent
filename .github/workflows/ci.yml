@@ -28,6 +28,8 @@ jobs:
         run: deno test --allow-all host-metrics_test.ts
       - name: Shell syntax check
         run: bash -n scripts/*.sh
+      - name: Shared Deno runtime selection
+        run: bash scripts/test-deno-selection.sh
       - name: Prepare release candidate
         if: github.event_name == 'push'
         run: >-
