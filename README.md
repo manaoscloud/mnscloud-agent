@@ -89,8 +89,8 @@ gateway/domain. `--enrollment-token` is not typed manually from memory; it is ge
 and shown by the app only once.
 
 The installer first resolves the latest approved `stable` Agent release from the MNSCloud runtime
-registry and switches to that immutable tag before installing. This keeps fresh hosts from installing
-an older repository checkout. Then it prepares Deno, creates or reuses
+registry and switches to that immutable tag before installing. This keeps fresh hosts from
+installing an older repository checkout. Then it prepares Deno, creates or reuses
 `/var/lib/mnscloud/agent/agent.uuid`, writes `agent.conf`, installs the systemd unit, restarts
 `mnscloud-agent`, and synchronizes the installed capabilities with the API. The capability sync
 retries briefly before failing so a valid fresh enrollment is not reported as failed during a short
@@ -403,3 +403,27 @@ the application when that identity should no longer be used.
 
 See [agent.md](./agent.md) for the full design and [SKILL.md](./SKILL.md) for the technical
 evolution contract.
+
+## Host CPU, memory and disk observations
+
+The Agent can attach `hostMetrics` to its existing authenticated heartbeat.
+`[agent].host_metrics_enabled` defaults to `true`; `host_metrics_interval_ms` defaults to 60000 and
+is clamped to at least 30000. Older config files use these defaults without changing the configured
+`api_base`, identity or tenant.
+
+Linux samples aggregate CPU counters from `/proc/stat` (first usage sample is null), physical
+`MemTotal`/`MemAvailable`, and available blocks on `/`. Windows uses fixed CIM queries for total
+CPU, visible/available physical memory and the OS system drive. This is host-level telemetry, not
+container limits or an inventory of every mounted filesystem. Bytes are bytes; CPU is a percentage.
+Collection failure skips that observation while keeping heartbeat/job polling active.
+
+The API derives resource ownership from the authenticated Agent. No tenant UUID, resource UUID,
+credentials, mount paths or command payload is accepted from this observation. Canonical SQL defines
+seven metric keys, a minimum 30-second ingestion spacing and seven-day history with bounded cleanup.
+The API exposes latest values through `GET /api/v1/monitoring/agents/:uuid/metrics` with
+master/tenant read checks. Deploy SQL and API support before upgrading Agents. An older API safely
+ignores the optional field; it cannot persist telemetry until upgraded.
+
+Validation: `deno test --allow-all host-metrics_test.ts` exercises CPU deltas, reset handling, Linux
+memory/filesystem parsing and local collection on Linux. Windows CIM collection needs a Windows host
+for runtime validation.

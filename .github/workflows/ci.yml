@@ -24,6 +24,8 @@ jobs:
           deno-version: v2.x
       - name: Type check
         run: deno task check
+      - name: Host metrics tests
+        run: deno test --allow-all host-metrics_test.ts
       - name: Shell syntax check
         run: bash -n scripts/*.sh
       - name: Prepare release candidate
@@ -40,3 +42,22 @@ jobs:
           path: release-candidate/release-candidate.json
           if-no-files-found: error
           retention-days: 7
+
+  windows-metrics:
+    name: Windows host telemetry
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Host metrics tests
+        run: deno test --allow-all host-metrics_test.ts
+      - name: Installer PowerShell syntax
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Join-Path $PWD 'scripts/install-agent-windows.ps1'), [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) { $errors | Write-Error; exit 1 }

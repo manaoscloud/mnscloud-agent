@@ -10,6 +10,8 @@ type AgentConfig = {
   updateRepoDir: string;
   pollIntervalMs: number;
   heartbeatIntervalMs: number;
+  hostMetricsEnabled: boolean;
+  hostMetricsIntervalMs: number;
   cyberSecuritySyncIntervalMs: number;
   agentUUIDFile: string;
   agentTokenFile: string;
@@ -363,6 +365,11 @@ async function loadConfig(): Promise<AgentConfig> {
       "agent",
       "update_repo_dir",
       IS_WINDOWS ? "C:\\mnscloud\\mnscloud-agent" : "/opt/mnscloud/mnscloud-agent",
+    ),
+    hostMetricsEnabled: getBoolean(parsed, "agent", "host_metrics_enabled", true),
+    hostMetricsIntervalMs: Math.max(
+      30000,
+      getNumber(parsed, "agent", "host_metrics_interval_ms", 60000),
     ),
     pollIntervalMs: getNumber(parsed, "agent", "poll_interval_ms", 15_000),
     heartbeatIntervalMs: getNumber(
@@ -1116,12 +1123,109 @@ async function collectSoftswitchRuntimeInventory(config: AgentConfig, nodeUUID: 
   };
 }
 
+export type HostMetrics = {
+  observedAt: string;
+  cpuUsagePercent: number | null;
+  memoryTotalBytes: number;
+  memoryAvailableBytes: number;
+  diskTotalBytes: number;
+  diskAvailableBytes: number;
+};
+
+let previousCpu: { total: number; idle: number } | null = null;
+let lastHostMetricsAt = 0;
+
+export function parseLinuxCpu(value: string) {
+  const fields = value.split("\n")[0].trim().split(/\s+/).slice(1, 9).map(Number);
+  if (fields.length < 4 || fields.some((n) => !Number.isFinite(n) || n < 0)) {
+    throw new Error("Invalid CPU counters");
+  }
+  return { total: fields.reduce((a, b) => a + b, 0), idle: fields[3] + (fields[4] ?? 0) };
+}
+
+export function cpuUsage(
+  current: { total: number; idle: number },
+  previous: { total: number; idle: number } | null,
+) {
+  if (!previous || current.total <= previous.total || current.idle < previous.idle) return null;
+  return Math.max(
+    0,
+    Math.min(100, 100 * (1 - (current.idle - previous.idle) / (current.total - previous.total))),
+  );
+}
+
+export function parseLinuxMemory(value: string) {
+  const fields = new Map(
+    [...value.matchAll(/^(\w+):\s+(\d+) kB/gm)].map((m) => [m[1], Number(m[2]) * 1024]),
+  );
+  const total = fields.get("MemTotal");
+  const available = fields.get("MemAvailable");
+  if (!total || available === undefined || available > total) {
+    throw new Error("Invalid memory counters");
+  }
+  return { memoryTotalBytes: total, memoryAvailableBytes: available };
+}
+
+export function parseRootDisk(value: string) {
+  const line = value.trim().split("\n").at(-1) ?? "";
+  const fields = line.trim().split(/\s+/);
+  const total = Number(fields[1]) * 1024;
+  const available = Number(fields[3]) * 1024;
+  if (
+    !Number.isFinite(total) || total <= 0 || !Number.isFinite(available) || available < 0 ||
+    available > total
+  ) throw new Error("Invalid filesystem counters");
+  return { diskTotalBytes: total, diskAvailableBytes: available };
+}
+
+export async function collectHostMetrics(): Promise<HostMetrics | null> {
+  try {
+    if (IS_WINDOWS) {
+      // Fixed local queries only. Never execute a script supplied by a remote payload.
+      const result = await runPowerShell(
+        `$ErrorActionPreference='Stop';
+$o=Get-CimInstance Win32_OperatingSystem;
+$c=Get-CimInstance Win32_PerfFormattedData_PerfOS_Processor -Filter "Name='_Total'";
+$d=Get-CimInstance Win32_LogicalDisk | Where-Object { $_.DeviceID -eq $o.SystemDrive };
+@{cpuUsagePercent=[double]$c.PercentProcessorTime;memoryTotalBytes=[double]$o.TotalVisibleMemorySize*1024;memoryAvailableBytes=[double]$o.FreePhysicalMemory*1024;diskTotalBytes=[double]$d.Size;diskAvailableBytes=[double]$d.FreeSpace} | ConvertTo-Json -Compress`,
+        5000,
+      );
+      if (result.code !== 0) throw new Error("Windows host metrics query failed");
+      return { ...JSON.parse(result.stdout), observedAt: new Date().toISOString() };
+    }
+    if (Deno.build.os !== "linux") return null;
+    const [cpuText, memoryText, disk] = await Promise.all([
+      Deno.readTextFile("/proc/stat"),
+      Deno.readTextFile("/proc/meminfo"),
+      runLocalCommand("df", ["-Pk", "/"], 5000),
+    ]);
+    if (disk.code !== 0) throw new Error("System filesystem query failed");
+    const current = parseLinuxCpu(cpuText);
+    const usage = cpuUsage(current, previousCpu);
+    previousCpu = current;
+    return {
+      observedAt: new Date().toISOString(),
+      cpuUsagePercent: usage,
+      ...parseLinuxMemory(memoryText),
+      ...parseRootDisk(disk.stdout),
+    };
+  } catch {
+    log("warn", "Host metrics collection unavailable; heartbeat remains enabled.");
+    return null;
+  }
+}
+
 async function heartbeat(
   config: AgentConfig,
   agentUUID: string,
   agentToken: string,
   cyberSecurityStatus?: Record<string, unknown> | null,
 ) {
+  let hostMetrics: HostMetrics | null = null;
+  if (config.hostMetricsEnabled && Date.now() - lastHostMetricsAt >= config.hostMetricsIntervalMs) {
+    hostMetrics = await collectHostMetrics();
+    lastHostMetricsAt = Date.now();
+  }
   const pabxRegistrations = await collectPabxRegistrations(config);
   const runtimeVersions = await collectRuntimeVersions(config);
   const sbcNodeUUID = config.capabilities["voip.sbc.manage"]
@@ -1167,6 +1271,7 @@ async function heartbeat(
       : undefined,
     pabxRegistrations,
     cyberSecurityStatus: cyberSecurityStatus ?? undefined,
+    hostMetrics: hostMetrics ?? undefined,
   });
 }
 

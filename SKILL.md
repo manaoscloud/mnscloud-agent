@@ -199,3 +199,11 @@ identity.
   and is never implied by opening a Pull Request.
 - Keep security-sensitive decisions, tenant scope, billing, authorization,
   routing ownership, and secret resolution in the MNSCloud API/control plane.
+
+## Host metric collection
+
+Preserve the Agent's configured API origin and canonical identity. Host observations are optional
+heartbeat data, not an authorization source. Keep collection bounded and typed on Linux and Windows,
+never expose generic remote commands, and leave owner resolution, validation, metric definitions and
+retention in DB/API. Changes to host telemetry require parser tests plus API/SQL scope and ingestion
+tests.
