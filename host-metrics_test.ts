@@ -40,3 +40,35 @@ Deno.test({
     assert(sample.diskAvailableBytes <= sample.diskTotalBytes);
   },
 });
+
+Deno.test({
+  name: "Host collection works with the service permission flags",
+  ignore: !["linux", "windows"].includes(Deno.build.os),
+  async fn() {
+    const child = new Deno.Command(Deno.execPath(), {
+      args: [
+        "run",
+        "--allow-read",
+        "--allow-write",
+        "--allow-net",
+        "--allow-run",
+        "--allow-env",
+        "-",
+      ],
+      stdin: "piped",
+      stdout: "piped",
+      stderr: "piped",
+    }).spawn();
+    const writer = child.stdin.getWriter();
+    const moduleURL = new URL("./main.ts", import.meta.url).href;
+    await writer.write(new TextEncoder().encode(
+      `import { collectHostMetrics } from ${
+        JSON.stringify(moduleURL)
+      }; const m=await collectHostMetrics(); if(!m || m.memoryTotalBytes<=0 || m.diskTotalBytes<=0) Deno.exit(1); console.log("collection-ok");`,
+    ));
+    await writer.close();
+    const result = await child.output();
+    assertEquals(result.code, 0, new TextDecoder().decode(result.stderr));
+    assert(new TextDecoder().decode(result.stdout).includes("collection-ok"));
+  },
+});

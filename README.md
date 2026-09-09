@@ -430,3 +430,8 @@ for runtime validation.
 
 Windows CIM collection has a 15-second deadline to accommodate cold provider startup. A timeout
 omits that observation and leaves heartbeat active.
+
+Linux host counters are read by bounded local `cat` commands with fixed `/proc/stat` and
+`/proc/meminfo` paths. Keep the existing service permission flags: direct Deno reads of these
+pseudo-files require broader permission and must not be used here. CI also starts a collector
+subprocess with the exact service permission flags on Linux and Windows.
