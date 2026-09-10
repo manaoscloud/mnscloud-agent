@@ -743,6 +743,7 @@ main() {
   info "Preparing native mnscloud-agent..."
   run "mkdir -p '${install_dir}' '${config_dir}' '${data_dir}' '${logs_dir}' /var/lib/mnscloud/files /etc/nginx/mnscloud/theme-domains /var/www/certbot"
   run "cp '${AGENT_SOURCE_DIR}/main.ts' '${install_dir}/main.ts'"
+  run "cp '${AGENT_SOURCE_DIR}/host-resources.ts' '${install_dir}/host-resources.ts'"
   run "cp '${AGENT_SOURCE_DIR}/deno.jsonc' '${install_dir}/deno.jsonc'"
   write_agent_build_metadata "$install_dir" "$(agent_version)" "$(agent_build_ref)"
 

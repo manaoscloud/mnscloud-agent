@@ -441,3 +441,44 @@ Linux host counters are read by bounded local `cat` commands with fixed `/proc/s
 `/proc/meminfo` paths. Keep the existing service permission flags: direct Deno reads of these
 pseudo-files require broader permission and must not be used here. CI also starts a collector
 subprocess with the exact service permission flags on Linux and Windows.
+
+## Resource telemetry visualization
+
+The Agent monitoring panel is available as a shared dialog and full page, with a
+paginated fleet overview. API/DB enforce effective master authority or tenant Agent
+read permission and persisted ownership; resource names are private scoped data.
+Network counter deltas provide receive/send bits per second, packets per second,
+errors/drops per second and optional Linux interface link state. Warmup, counter
+reset, interface recreation and gaps over five minutes omit rates instead of
+fabricating zero. The Linux collector reads fixed local commands only, excludes
+loopback, and bounds discovery to 32 interfaces and 32 local filesystem mounts.
+The first version adds resource observations on Linux; other platforms retain their
+existing host CPU/memory/system-disk measurements and report no resource series.
+Link capacity, active latency/loss probes, SNMP, disk I/O throughput and alert rules
+are not implemented by this collector. Link state is optional when `ip` is missing
+or the OS reports unknown. Filesystem observations are space usage, not block I/O.
+
+Canonical SQL owns twelve resource metric seeds and four new procedures. Existing
+production DBs apply the `agent-resource-metrics` scope via `scripts/update-schema.py`
+from mnscloud-db, using reviewed plan/apply and backup. DB must precede API and Agent;
+the App follows after endpoint validation. Catalog promotion never applies SQL.
+There is no separate persistent migration definition.
+
+Per-Agent active network/filesystem resources are capped at 64. New resource names
+beyond the cap require administrator review; resources are not automatically deleted.
+Ingestion is serialized on the Agent row and throttled to 30 seconds per resource.
+History accepts only 1,24,168 hours, groups on read into approximately 120 buckets
+per series and returns at most 2048 points for one owned resource. A seven-day filter
+bounds reads. Cleanup remains bounded per resource on ingestion; disconnected
+resources do not trigger cleanup. A global retention worker and persistent rollups
+remain future work; do not claim unlimited scale or offline-resource cleanup.
+
+Fleet pages contain at most 25 Agents; the App requests 12 in one SQL-backed request.
+Latest host observations older than three minutes are visibly stale; samples older
+than 15 minutes are omitted in the fleet view. Interface sums use recent observations
+and may count traffic on both physical and virtual interfaces. Network/detail history
+supports both directions on one scale, missing intervals stay gaps, and a measurement
+table is available for accessibility. Read polling pauses in hidden tabs, stops on
+component destruction and backs off after failures. No SSH or runtime jobs are sent
+when opening a visualization. Raw measurements remain authoritative; displayed bucket
+averages are not claimed as instantaneous values.

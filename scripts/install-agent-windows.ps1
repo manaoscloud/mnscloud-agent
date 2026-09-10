@@ -254,6 +254,7 @@ Write-Step "Copying agent runtime"
 Invoke-Step {
   Copy-Item -Path $DenoSource -Destination $DenoPath -Force
   Copy-Item -Path "$PSScriptRoot\..\main.ts" -Destination "$InstallDir\main.ts" -Force
+  Copy-Item -Path "$PSScriptRoot\..\host-resources.ts" -Destination "$InstallDir\host-resources.ts" -Force
   Copy-Item -Path "$PSScriptRoot\..\deno.jsonc" -Destination "$InstallDir\deno.jsonc" -Force
 }
 Write-AgentBuildMetadata
