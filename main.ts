@@ -1,3 +1,9 @@
+import {
+  parseFilesystems,
+  parseNetworkCounters,
+  parseNetworkLinks,
+  type ResourceSample,
+} from "./host-resources.ts";
 type AgentConfig = {
   os: "linux" | "windows" | "other";
   apiBase: string;
@@ -1124,6 +1130,7 @@ async function collectSoftswitchRuntimeInventory(config: AgentConfig, nodeUUID: 
 }
 
 export type HostMetrics = {
+  resources?: ResourceSample[];
   observedAt: string;
   cpuUsagePercent: number | null;
   memoryTotalBytes: number;
@@ -1194,11 +1201,25 @@ $d=Get-CimInstance Win32_LogicalDisk | Where-Object { $_.DeviceID -eq $o.SystemD
       return { ...JSON.parse(result.stdout), observedAt: new Date().toISOString() };
     }
     if (Deno.build.os !== "linux") return null;
-    const [counters, disk] = await Promise.all([
+    const [counters, disk, network, filesystems, links] = await Promise.all([
       // Deno guards /proc behind --allow-all. Use the existing bounded local-command
       // permission with fixed paths rather than broadening the service permissions.
       runLocalCommand("cat", ["/proc/stat", "/proc/meminfo"], 5000),
       runLocalCommand("df", ["-Pk", "/"], 5000),
+      runLocalCommand("cat", ["/proc/net/dev"], 5000),
+      runLocalCommand("df", [
+        "-Pk",
+        "-l",
+        "-x",
+        "tmpfs",
+        "-x",
+        "devtmpfs",
+        "-x",
+        "overlay",
+        "-x",
+        "squashfs",
+      ], 5000),
+      runLocalCommand("ip", ["-j", "link", "show"], 5000).catch(() => ({ code: 1, stdout: "" })),
     ]);
     if (counters.code !== 0 || disk.code !== 0) throw new Error("Host counters query failed");
     const current = parseLinuxCpu(counters.stdout);
@@ -1207,6 +1228,17 @@ $d=Get-CimInstance Win32_LogicalDisk | Where-Object { $_.DeviceID -eq $o.SystemD
     return {
       observedAt: new Date().toISOString(),
       cpuUsagePercent: usage,
+      resources: [
+        ...(network.code === 0
+          ? parseNetworkCounters(
+            network.stdout,
+            performance.now(),
+            undefined,
+            parseNetworkLinks(links.stdout),
+          )
+          : []),
+        ...(filesystems.code === 0 ? parseFilesystems(filesystems.stdout) : []),
+      ],
       ...parseLinuxMemory(counters.stdout),
       ...parseRootDisk(disk.stdout),
     };
