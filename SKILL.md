@@ -261,3 +261,19 @@ table is available for accessibility. Read polling pauses in hidden tabs, stops 
 component destruction and backs off after failures. No SSH or runtime jobs are sent
 when opening a visualization. Raw measurements remain authoritative; displayed bucket
 averages are not claimed as instantaneous values.
+
+## Bounded resource lifecycle
+
+Follow `agent.md` under "Resident resource budget and validation". Runtime helpers
+`bounded-io.ts` and `scheduler.ts` must ship with `main.ts` on Linux and Windows.
+Subprocess output must use bounded BYOB readers; do not restore repeated read-all
+`output()` calls in the resident runtime. Transfers must remain streaming with byte
+budgets, deadlines and cleanup. Preserve independent serial heartbeat/job lanes and
+single-flight heartbeat behavior. Run `deno test --allow-all bounded-io_test.ts
+host-metrics_test.ts host-resources_test.ts` and both platform CI jobs. New local
+resource observations must not expose secrets or silently expand the API/SQL contract.
+A development soak is required before production promotion; do not claim a short
+accelerated benchmark completes the 24–72-hour validation.
+
+Run `python3 scripts/test-runtime-package.py` to validate the imported runtime files
+actually declared by each installer before release.

@@ -1,3 +1,5 @@
+import { runLane } from "./scheduler.ts";
+import { byteBudget, captureCommand, readJson, uploadStream, withResponse } from "./bounded-io.ts";
 import {
   parseFilesystems,
   parseNetworkCounters,
@@ -14,6 +16,9 @@ type AgentConfig = {
   buildDate: string;
   updateChannel: string;
   updateRepoDir: string;
+  requestTimeoutMs: number;
+  transferTimeoutMs: number;
+  transferMaxBytes: number;
   pollIntervalMs: number;
   heartbeatIntervalMs: number;
   hostMetricsEnabled: boolean;
@@ -377,6 +382,18 @@ async function loadConfig(): Promise<AgentConfig> {
       30000,
       getNumber(parsed, "agent", "host_metrics_interval_ms", 60000),
     ),
+    requestTimeoutMs: Math.min(
+      120000,
+      Math.max(1000, getNumber(parsed, "agent", "request_timeout_ms", 30000)),
+    ),
+    transferTimeoutMs: Math.min(
+      3600000,
+      Math.max(1000, getNumber(parsed, "agent", "transfer_timeout_ms", 900000)),
+    ),
+    transferMaxBytes: Math.min(
+      16 * 1024 ** 3,
+      Math.max(1, getNumber(parsed, "agent", "transfer_max_bytes", 1024 ** 3)),
+    ),
     pollIntervalMs: getNumber(parsed, "agent", "poll_interval_ms", 15_000),
     heartbeatIntervalMs: getNumber(
       parsed,
@@ -675,14 +692,12 @@ async function loadBuildMetadata(cwd = Deno.cwd()) {
 async function gitBuildRef(cwd: string) {
   if (IS_WINDOWS) return "";
   try {
-    const command = new Deno.Command("git", {
-      args: ["-C", cwd, "rev-parse", "--short=12", "HEAD"],
-      stdout: "piped",
-      stderr: "null",
-    });
-    const output = await command.output();
-    if (!output.success) return "";
-    return new TextDecoder().decode(output.stdout).trim();
+    const output = await runLocalCommand(
+      "git",
+      ["-C", cwd, "rev-parse", "--short=12", "HEAD"],
+      5000,
+    );
+    return output.code === 0 ? output.stdout : "";
   } catch {
     return "";
   }
@@ -706,7 +721,11 @@ async function runtimeVersionReport(
   } satisfies RuntimeVersionReport;
 }
 
+let runtimeVersionCache: { at: number; reports: RuntimeVersionReport[] } | null = null;
 async function collectRuntimeVersions(config: AgentConfig) {
+  if (runtimeVersionCache && Date.now() - runtimeVersionCache.at < 300000) {
+    return runtimeVersionCache.reports;
+  }
   if (config.os !== "linux") return [];
   const reports = await Promise.all([
     runtimeVersionReport(
@@ -800,7 +819,9 @@ async function collectRuntimeVersions(config: AgentConfig) {
       config,
     ),
   ]);
-  return reports.filter((item): item is RuntimeVersionReport => item !== null);
+  const items = reports.filter((item): item is RuntimeVersionReport => item !== null);
+  runtimeVersionCache = { at: Date.now(), reports: items };
+  return items;
 }
 
 function log(
@@ -903,26 +924,32 @@ async function jsonRequest<T>(
   agentUUID: string,
   body: Record<string, unknown>,
 ) {
-  const response = await fetch(apiUrl(config, path), {
-    method: "POST",
-    headers: bearerHeaders(token, agentUUID),
-    body: JSON.stringify(body),
-  });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const record = payload && typeof payload === "object" && !Array.isArray(payload)
-      ? payload as Record<string, unknown>
-      : {};
-    const diagnostics = [record["code"], record["error"], record["detail"]]
-      .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
-      .map((value) => value.replace(/\s+/g, " ").trim().slice(0, 300));
-    throw new Error(
-      `${path} returned HTTP ${response.status}${
-        diagnostics.length ? `: ${diagnostics.join(" | ")}` : ""
-      }`,
-    );
-  }
-  return payload as T;
+  return await withResponse(
+    apiUrl(config, path),
+    {
+      method: "POST",
+      headers: bearerHeaders(token, agentUUID),
+      body: JSON.stringify(body),
+    },
+    config.requestTimeoutMs,
+    async (response) => {
+      const payload = await readJson(response);
+      if (!response.ok) {
+        const record = payload && typeof payload === "object" && !Array.isArray(payload)
+          ? payload as Record<string, unknown>
+          : {};
+        const diagnostics = [record["code"], record["error"], record["detail"]]
+          .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+          .map((value) => value.replace(/\s+/g, " ").trim().slice(0, 300));
+        throw new Error(
+          `${path} returned HTTP ${response.status}${
+            diagnostics.length ? `: ${diagnostics.join(" | ")}` : ""
+          }`,
+        );
+      }
+      return payload as T;
+    },
+  );
 }
 
 function recordString(
@@ -1248,7 +1275,23 @@ $d=Get-CimInstance Win32_LogicalDisk | Where-Object { $_.DeviceID -eq $o.SystemD
   }
 }
 
-async function heartbeat(
+let heartbeatInFlight: Promise<void> | null = null;
+function heartbeat(
+  config: AgentConfig,
+  agentUUID: string,
+  agentToken: string,
+  cyberSecurityStatus?: Record<string, unknown> | null,
+) {
+  if (!heartbeatInFlight) {
+    heartbeatInFlight = performHeartbeat(config, agentUUID, agentToken, cyberSecurityStatus)
+      .finally(() => {
+        heartbeatInFlight = null;
+      });
+  }
+  return heartbeatInFlight;
+}
+
+async function performHeartbeat(
   config: AgentConfig,
   agentUUID: string,
   agentToken: string,
@@ -1415,35 +1458,33 @@ async function uploadJob(
     return;
   }
 
-  let file: Uint8Array;
+  let size = 0;
   try {
-    file = await Deno.readFile(readablePath);
-  } catch (error) {
-    await failJob(
-      config,
-      job.jobUUID,
-      agentUUID,
-      agentToken,
-      "FILE_NOT_FOUND",
-      String(error),
+    using file = await Deno.open(readablePath, { read: true });
+    const stat = await file.stat();
+    if (!stat.isFile || stat.size > config.transferMaxBytes) {
+      throw new Error("Upload is not a regular file within the transfer budget.");
+    }
+    size = await uploadStream(
+      job.uploadUrl,
+      file,
+      stat.size,
+      job.uploadMethod || "PUT",
+      new Headers(job.uploadHeaders ?? {}),
+      config.transferTimeoutMs,
     );
-    return;
-  }
-
-  const uploadBody = new Uint8Array(file).buffer;
-  const response = await fetch(job.uploadUrl, {
-    method: job.uploadMethod || "PUT",
-    headers: job.uploadHeaders ?? {},
-    body: uploadBody,
-  });
-  if (!response.ok) {
+    const after = await file.stat();
+    if (after.size !== stat.size || after.mtime?.getTime() !== stat.mtime?.getTime()) {
+      throw new Error("Upload file changed during transfer.");
+    }
+  } catch {
     await failJob(
       config,
       job.jobUUID,
       agentUUID,
       agentToken,
       "UPLOAD_FAILED",
-      `HTTP ${response.status}`,
+      "Upload failed or exceeded its time/size budget; local file preserved.",
     );
     return;
   }
@@ -1454,7 +1495,7 @@ async function uploadJob(
     agentToken,
     agentUUID,
     {
-      size: file.byteLength,
+      size,
     },
   );
 
@@ -1549,40 +1590,54 @@ async function syncMediaFileJob(
     Object.assign(headers, bearerHeaders(agentToken, agentUUID));
   }
 
-  const response = await fetch(downloadUrl, {
-    method: job.downloadMethod || "GET",
-    headers,
-  });
-  if (!response.ok) {
+  let size = 0;
+  const tmpPath = `${localPath}.tmp-${crypto.randomUUID()}`;
+  try {
+    await ensureParentDirectory(localPath);
+    await withResponse(
+      downloadUrl,
+      {
+        method: job.downloadMethod || "GET",
+        headers,
+      },
+      config.transferTimeoutMs,
+      async (response) => {
+        if (!response.ok || !response.body) throw new Error("Download failed.");
+        const length = Number(response.headers.get("content-length"));
+        if (length > config.transferMaxBytes) throw new Error("Download exceeds its size budget.");
+        using file = await Deno.open(tmpPath, { write: true, createNew: true });
+        await response.body.pipeThrough(byteBudget(config.transferMaxBytes, (bytes) => {
+          size = bytes;
+        }))
+          .pipeTo(file.writable);
+      },
+    );
+    await Deno.rename(tmpPath, localPath);
+  } catch {
+    await Deno.remove(tmpPath).catch(() => undefined);
     await failJob(
       config,
       job.jobUUID,
       agentUUID,
       agentToken,
       "DOWNLOAD_FAILED",
-      `HTTP ${response.status}`,
+      "Download failed or exceeded its time/size budget; destination preserved.",
       "media.file.sync",
     );
     return;
   }
-
-  const bytes = new Uint8Array(await response.arrayBuffer());
-  await ensureParentDirectory(localPath);
-  const tmpPath = `${localPath}.tmp-${crypto.randomUUID()}`;
-  await Deno.writeFile(tmpPath, bytes);
-  await Deno.rename(tmpPath, localPath);
 
   await jsonRequest(
     config,
     `/agent/jobs/${job.jobUUID}/complete`,
     agentToken,
     agentUUID,
-    { jobType: "media.file.sync", action: "sync", size: bytes.byteLength },
+    { jobType: "media.file.sync", action: "sync", size },
   );
   log("info", "Offline media file synced.", {
     jobUUID: job.jobUUID,
     path: localPath,
-    size: bytes.byteLength,
+    size,
   });
 }
 
@@ -1591,71 +1646,24 @@ async function runLocalCommand(
   args: string[],
   timeoutMs: number,
 ) {
-  if (IS_WINDOWS) {
-    const process = new Deno.Command(command, {
-      args,
-      stdout: "piped",
-      stderr: "piped",
-    }).spawn();
-    let timedOut = false;
-    const timeout = setTimeout(() => {
-      timedOut = true;
-      try {
-        process.kill("SIGKILL");
-      } catch {
-        // Process may already have exited.
-      }
-    }, timeoutMs);
-    try {
-      const output = await process.output();
-      const stderr = new TextDecoder().decode(output.stderr).trim();
-      return {
-        code: output.code,
-        stdout: new TextDecoder().decode(output.stdout).trim(),
-        stderr: timedOut
-          ? [stderr, `Command timed out after ${timeoutMs}ms.`].filter(Boolean)
-            .join("\n")
-          : stderr,
-      };
-    } finally {
-      clearTimeout(timeout);
-    }
-  }
-
-  const script = `exec setsid ${[command, ...args].map(shellQuote).join(" ")}`;
-  const process = new Deno.Command("sh", {
-    args: ["-lc", script],
+  const process = new Deno.Command(IS_WINDOWS ? command : "sh", {
+    args: IS_WINDOWS
+      ? args
+      : ["-lc", `exec setsid ${[command, ...args].map(shellQuote).join(" ")}`],
+    stdin: "null",
     stdout: "piped",
     stderr: "piped",
   }).spawn();
-  let timedOut = false;
-  const timeout = setTimeout(() => {
-    timedOut = true;
-    try {
-      Deno.kill(-process.pid, "SIGKILL");
-    } catch {
-      // The command may not be a process-group leader anymore.
+  return await captureCommand(process, timeoutMs, () => {
+    if (!IS_WINDOWS) {
+      try {
+        Deno.kill(-process.pid, "SIGKILL");
+      } catch { /* Group already exited. */ }
     }
     try {
       process.kill("SIGKILL");
-    } catch {
-      // Process may already have exited.
-    }
-  }, timeoutMs);
-  try {
-    const output = await process.output();
-    const stderr = new TextDecoder().decode(output.stderr).trim();
-    return {
-      code: output.code,
-      stdout: new TextDecoder().decode(output.stdout).trim(),
-      stderr: timedOut
-        ? [stderr, `Command timed out after ${timeoutMs}ms.`].filter(Boolean)
-          .join("\n")
-        : stderr,
-    };
-  } finally {
-    clearTimeout(timeout);
-  }
+    } catch { /* Process already exited. */ }
+  });
 }
 
 async function readFromConnection(
@@ -3598,6 +3606,7 @@ async function executeRuntimeUpdateJob(
       return;
     }
 
+    runtimeVersionCache = null;
     const installedRuntime = product !== "mnscloud-agent" && target.repoDir
       ? await runtimeVersionReport(
         product,
@@ -5767,37 +5776,60 @@ async function main() {
 
   let lastHeartbeat = 0;
   let lastCyberSecuritySync = 0;
-  while (true) {
-    try {
-      const agentToken = await optionalRead(config.agentTokenFile);
-      if (!agentToken) {
-        log("warn", "Agent is installed but not activated.", {
-          agentUUID,
-          tokenFile: config.agentTokenFile,
-        });
-        await new Promise((resolve) => setTimeout(resolve, config.heartbeatIntervalMs));
-        continue;
-      }
-
-      const now = Date.now();
-      await applyRuntimeCapabilities(config);
-      if (now - lastHeartbeat >= config.heartbeatIntervalMs) {
+  let lastCapabilitiesRefresh = Date.now();
+  let lastSelfObservation = 0;
+  let jobPolling = false;
+  const reportError = (lane: string) => (error: unknown) =>
+    log("warn", `Agent ${lane} failed.`, String(error));
+  await Promise.all([
+    runLane(
+      async () => {
+        const now = Date.now();
+        if (now - lastSelfObservation >= 300000) {
+          const usage = Deno.memoryUsage();
+          log("info", "Agent resource usage.", {
+            rssBytes: usage.rss,
+            heapUsedBytes: usage.heapUsed,
+            heapTotalBytes: usage.heapTotal,
+            externalBytes: usage.external,
+            jobPolling,
+            uptimeSeconds: Math.floor(performance.now() / 1000),
+          });
+          lastSelfObservation = now;
+        }
+        if (now - lastCapabilitiesRefresh >= 300000) {
+          await applyRuntimeCapabilities(config);
+          lastCapabilitiesRefresh = now;
+        }
+        const agentToken = await optionalRead(config.agentTokenFile);
+        if (!agentToken) return;
+        if (now - lastHeartbeat < config.heartbeatIntervalMs) return;
         let cyberSecurityStatus: Record<string, unknown> | null = null;
-        if (
-          now - lastCyberSecuritySync >= config.cyberSecuritySyncIntervalMs
-        ) {
+        if (now - lastCyberSecuritySync >= config.cyberSecuritySyncIntervalMs) {
           cyberSecurityStatus = await collectCyberSecurityStatus(config);
           lastCyberSecuritySync = now;
         }
         await heartbeat(config, agentUUID, agentToken, cyberSecurityStatus);
         lastHeartbeat = now;
-      }
-      await pollJobs(config, agentUUID, agentToken);
-    } catch (error) {
-      log("warn", "Agent loop failed.", String(error));
-    }
-    await new Promise((resolve) => setTimeout(resolve, config.pollIntervalMs));
-  }
+      },
+      Math.max(1000, Math.min(config.pollIntervalMs, config.heartbeatIntervalMs)),
+      reportError("heartbeat"),
+    ),
+    runLane(
+      async () => {
+        const agentToken = await optionalRead(config.agentTokenFile);
+        if (!agentToken) return;
+        jobPolling = true;
+        try {
+          await pollJobs(config, agentUUID, agentToken);
+        } finally {
+          jobPolling = false;
+        }
+      },
+      Math.max(1000, config.pollIntervalMs),
+      reportError("jobs"),
+    ),
+  ]);
 }
 
 if (import.meta.main) {

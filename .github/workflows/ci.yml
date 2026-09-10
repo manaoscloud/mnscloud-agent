@@ -24,8 +24,10 @@ jobs:
           deno-version: v2.x
       - name: Type check
         run: deno task check
+      - name: Installed runtime package
+        run: python scripts/test-runtime-package.py
       - name: Host metrics tests
-        run: deno test --allow-all host-metrics_test.ts host-resources_test.ts
+        run: deno test --allow-all host-metrics_test.ts host-resources_test.ts bounded-io_test.ts
       - name: Shell syntax check
         run: bash -n scripts/*.sh
       - name: Shared Deno runtime selection
@@ -53,8 +55,10 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
+      - name: Installed runtime package
+        run: python scripts/test-runtime-package.py
       - name: Host metrics tests
-        run: deno test --allow-all host-metrics_test.ts host-resources_test.ts
+        run: deno test --allow-all host-metrics_test.ts host-resources_test.ts bounded-io_test.ts
       - name: Installer PowerShell syntax
         shell: pwsh
         run: |

@@ -394,9 +394,12 @@ write_agent_build_metadata() {
 
 write_agent_config() {
   local config_file="$1" install_label="$2" hostname="$3" api_base="$4"
-  local metrics_enabled metrics_interval
+  local metrics_enabled metrics_interval request_timeout transfer_timeout transfer_max
   metrics_enabled="$(read_config_value "$config_file" agent host_metrics_enabled)"
   metrics_interval="$(read_config_value "$config_file" agent host_metrics_interval_ms)"
+  request_timeout="$(read_config_value "$config_file" agent request_timeout_ms)"
+  transfer_timeout="$(read_config_value "$config_file" agent transfer_timeout_ms)"
+  transfer_max="$(read_config_value "$config_file" agent transfer_max_bytes)"
   write_file "$config_file" "# MNSCloud Agent configuration
 # Managed by agent/scripts/install-agent.sh
 
@@ -405,6 +408,9 @@ name = ${install_label}
 hostname = ${hostname}
 api_base = ${api_base}
 update_repo_dir = ${AGENT_SOURCE_DIR}
+request_timeout_ms = ${request_timeout:-30000}
+transfer_timeout_ms = ${transfer_timeout:-900000}
+transfer_max_bytes = ${transfer_max:-1073741824}
 poll_interval_ms = 15000
 heartbeat_interval_ms = 60000
 host_metrics_enabled = ${metrics_enabled:-true}
@@ -527,7 +533,7 @@ Type=simple
 User=${AGENT_USER}
 Group=${AGENT_GROUP}
 WorkingDirectory=${agent_dir}
-ExecStart=$(command -v deno) task start --config ${agent_dir}/deno.jsonc
+ExecStart=$(command -v deno) run --config ${agent_dir}/deno.jsonc --allow-read --allow-write --allow-net --allow-run --allow-env ${agent_dir}/main.ts
 Environment=MNSCLOUD_AGENT_CONFIG=${config_file}
 Restart=always
 RestartSec=5
@@ -744,6 +750,8 @@ main() {
   run "mkdir -p '${install_dir}' '${config_dir}' '${data_dir}' '${logs_dir}' /var/lib/mnscloud/files /etc/nginx/mnscloud/theme-domains /var/www/certbot"
   run "cp '${AGENT_SOURCE_DIR}/main.ts' '${install_dir}/main.ts'"
   run "cp '${AGENT_SOURCE_DIR}/host-resources.ts' '${install_dir}/host-resources.ts'"
+  run "cp '${AGENT_SOURCE_DIR}/bounded-io.ts' '${install_dir}/bounded-io.ts'"
+  run "cp '${AGENT_SOURCE_DIR}/scheduler.ts' '${install_dir}/scheduler.ts'"
   run "cp '${AGENT_SOURCE_DIR}/deno.jsonc' '${install_dir}/deno.jsonc'"
   write_agent_build_metadata "$install_dir" "$(agent_version)" "$(agent_build_ref)"
 
