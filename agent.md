@@ -538,3 +538,64 @@ Optional `hostMetrics` in `/agent/heartbeat` carries CPU usage, physical RAM and
 capacity/availability. See README for units, Linux/Windows semantics, null first CPU sample,
 configuration and deployment order. The same master/tenant identity and browser-origin enrollment
 contract applies; do not replace the Agent API domain with a fleet-wide infrastructure domain.
+
+## Resident resource budget and validation
+
+The Agent keeps its existing capabilities and wire contract. Heartbeat/telemetry and
+job polling run in separate serial lanes: a long job does not block periodic host
+observations, and jobs are not leased concurrently by multiple local pollers.
+Heartbeat calls share one in-flight request. Failed lanes use bounded exponential
+backoff with jitter; mutating job operations are not automatically replayed by the
+HTTP helper. The API still owns leases, authorization and retry decisions.
+
+Subprocess output uses reusable 8 KiB BYOB buffers and is limited to 4 MiB per pipe.
+Both streams drain concurrently. Overflow fails the command and terminates its
+process group on Linux; timeout returns status 124. Windows retains direct-child
+termination behavior. Output is never silently truncated into a successful result.
+Inventory probes use the same bounded command helper. Capabilities and runtime
+versions refresh at most every five minutes; a completed runtime update invalidates
+the version cache immediately.
+
+HTTP deadlines cover response bodies as well as headers. Control-plane JSON responses
+are capped at 4 MiB before decoding. File transfers stream through a byte budget,
+close handles/bodies on error, and never load the entire file into memory. Downloads
+use a sibling temporary file and rename only after a successful transfer. Upload
+failure preserves the local file; configured deletion still requires successful job
+completion. Signed upload authorization and existing path policies remain unchanged. Uploads
+use a lazily loaded HTTP(S) transport to preserve Content-Length for signed object
+storage; TLS verification remains enabled and redirects are not replayed.
+
+The `[agent]` configuration supports these settings, preserved by both installers:
+
+| Key | Default | Accepted range |
+| --- | --- | --- |
+| `request_timeout_ms` | 30000 | 1000–120000 ms |
+| `transfer_timeout_ms` | 900000 | 1000–3600000 ms |
+| `transfer_max_bytes` | 1073741824 | 1 byte–16 GiB |
+
+Values outside those ranges are clamped. Operators with larger legitimate transfers
+must review the configured budget before scheduling them. Linux starts Deno directly,
+without a persistent `deno task` wrapper. Both installers distribute every imported
+runtime module. No shared Deno upgrade/downgrade is part of this resource change.
+
+Every five minutes the Agent emits a numeric `Agent resource usage.` observation:
+`rssBytes`, `heapUsedBytes`, `heapTotalBytes`, `externalBytes`, `jobPolling` and
+`uptimeSeconds`. `jobPolling` covers leasing and execution, not a job-count metric.
+No credentials or file contents are included. These are local diagnostic observations,
+not new persisted API/SQL metrics. Resident memory and installer/child-process peaks
+must be assessed separately using operating-system cgroup/process measurements.
+
+Development acceptance requires 24–72 hours after warmup with regular samples,
+no unexplained sustained RSS/PSS growth, no OOM, stable heartbeat, and successful
+transfer/timeout/update/rollback tests. Use a provisional basic-load resident RSS P95
+budget of 150 MiB as an engineering target, not a universal `MemoryMax` value.
+Record version, uptime, jobs and available host memory with each sample. A restart
+resets the observation baseline; do not count that as memory recovery by the fix.
+
+Calibrate service/job memory ceilings only after the observation window. An arbitrary
+hard cap can kill an installer or cause restart loops. Independent scheduler lanes do
+not create separate OS memory cgroups; per-job OS containment remains a subsequent
+lifecycle change requiring measured job peaks. If the optimized implementation fails
+the agreed budget, benchmark a native Go collector against the same workload before
+migration. Production promotion remains a separate operator decision after development
+acceptance. Do not use periodic restarts or forced GC as the acceptance mechanism.

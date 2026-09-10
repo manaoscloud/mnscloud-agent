@@ -80,11 +80,16 @@ function Ensure-Deno {
 function Write-AgentConfig([string]$DenoPath) {
   $metricsEnabled = "true"
   $metricsInterval = "60000"
+  $ioSettings = @{ request_timeout_ms = "30000"; transfer_timeout_ms = "900000"; transfer_max_bytes = "1073741824" }
   if (Test-Path $ConfigFile) {
     $existingConfig = Get-Content $ConfigFile -Raw
     $agentSection = [regex]::Match($existingConfig, '(?ms)^\[agent\]\s*\r?\n(.*?)(?=^\[|\z)').Groups[1].Value
     $enabledMatch = [regex]::Match($agentSection, '(?m)^host_metrics_enabled\s*=\s*([^\r\n]+)')
     $intervalMatch = [regex]::Match($agentSection, '(?m)^host_metrics_interval_ms\s*=\s*([^\r\n]+)')
+    foreach ($key in @($ioSettings.Keys)) {
+      $match = [regex]::Match($agentSection, "(?m)^$key\s*=\s*([^\r\n]+)")
+      if ($match.Success) { $ioSettings[$key] = $match.Groups[1].Value.Trim() }
+    }
     if ($enabledMatch.Success) { $metricsEnabled = $enabledMatch.Groups[1].Value.Trim() }
     if ($intervalMatch.Success) { $metricsInterval = $intervalMatch.Groups[1].Value.Trim() }
   }
@@ -97,6 +102,9 @@ name = $AgentInstallLabel
 hostname = $env:COMPUTERNAME
 api_base = $DefaultApiBase
 update_repo_dir = $RepoDir
+request_timeout_ms = $($ioSettings.request_timeout_ms)
+transfer_timeout_ms = $($ioSettings.transfer_timeout_ms)
+transfer_max_bytes = $($ioSettings.transfer_max_bytes)
 poll_interval_ms = 15000
 heartbeat_interval_ms = 60000
 host_metrics_enabled = $metricsEnabled
@@ -255,6 +263,8 @@ Invoke-Step {
   Copy-Item -Path $DenoSource -Destination $DenoPath -Force
   Copy-Item -Path "$PSScriptRoot\..\main.ts" -Destination "$InstallDir\main.ts" -Force
   Copy-Item -Path "$PSScriptRoot\..\host-resources.ts" -Destination "$InstallDir\host-resources.ts" -Force
+  Copy-Item -Path "$PSScriptRoot\..\bounded-io.ts" -Destination "$InstallDir\bounded-io.ts" -Force
+  Copy-Item -Path "$PSScriptRoot\..\scheduler.ts" -Destination "$InstallDir\scheduler.ts" -Force
   Copy-Item -Path "$PSScriptRoot\..\deno.jsonc" -Destination "$InstallDir\deno.jsonc" -Force
 }
 Write-AgentBuildMetadata
