@@ -83,6 +83,7 @@ type LeaseJob = {
     | "voip.sbc.runtime"
     | "voip.softswitch.runtime"
     | "runtime.update"
+    | "database.schema.reconcile"
     | string
     | null;
   action?: "sync" | "delete" | string | null;
@@ -107,6 +108,11 @@ type LeaseJob = {
   product?: string | null;
   capability?: string | null;
   channel?: string | null;
+  stage?: string | null;
+  schemaSha256?: string | null;
+  dbReleaseTag?: string | null;
+  scopesJson?: string | null;
+  secretDelivery?: Record<string, unknown> | null;
 };
 
 type RuntimeVersionReport = {
@@ -239,6 +245,10 @@ async function applyRuntimeCapabilities(config: AgentConfig) {
   config.capabilities["mnscloud.openvault.update"] = await isExecutableFile(
     "/opt/mnscloud/mnscloud-openvault/scripts/update-openvault.sh",
   );
+  config.capabilities["mnscloud.database.schema.reconcile.v1"] = await isExecutableFile(
+    "/opt/mnscloud/mnscloud-db/scripts/reconcile-database-schema.py",
+  );
+
   config.capabilities["realtime.webrtc.manage"] = await isExecutableFile(
     config.webrtcEdgeSyncCommand,
   );
@@ -5783,6 +5793,186 @@ async function executeSoftswitchRuntimeJob(
   }
 }
 
+
+async function executeDatabaseSchemaReconcileJob(
+  job: LeaseJob,
+  config: AgentConfig,
+  agentUUID: string,
+  agentToken: string,
+) {
+  const capability = "mnscloud.database.schema.reconcile.v1";
+  const script = "/opt/mnscloud/mnscloud-db/scripts/reconcile-database-schema.py";
+  try {
+    if (!config.capabilities[capability]) {
+      throw new Error(`Agent capability is disabled: ${capability}.`);
+    }
+    if (IS_WINDOWS) {
+      throw new Error("database.schema.reconcile is supported on Linux DB hosts only.");
+    }
+    const payload = job.payload && typeof job.payload === "object" ? job.payload : {};
+    const stage = String(job.stage ?? payload.stage ?? "inspect");
+    const schemaSha256 = String(job.schemaSha256 ?? payload.schemaSha256 ?? "");
+    const scopesJson = job.scopesJson ?? payload.scopesJson ?? null;
+    const scopes = Array.isArray(payload.scopes)
+      ? payload.scopes.map((item) => String(item))
+      : typeof scopesJson === "string"
+      ? JSON.parse(scopesJson)
+      : ["schema-reconcile"];
+    const scope = String(scopes[0] ?? "schema-reconcile");
+    const secretDelivery = (job.secretDelivery && typeof job.secretDelivery === "object"
+      ? job.secretDelivery
+      : payload.secretDelivery && typeof payload.secretDelivery === "object"
+      ? payload.secretDelivery
+      : { delivery: "local-env", path: "/etc/mnscloud/db-migration.env" }) as Record<
+        string,
+        unknown
+      >;
+    const migrationEnvPath = String(
+      secretDelivery.path ?? payload.migrationEnvPath ?? "/etc/mnscloud/db-migration.env",
+    );
+    if (
+      migrationEnvPath !== "/etc/mnscloud/db-migration.env" &&
+      migrationEnvPath !== "/etc/mnscloud/db.env"
+    ) {
+      throw new Error("Migration env path is not allowlisted.");
+    }
+    if (String(secretDelivery.delivery ?? secretDelivery.mode ?? "local-env") === "openvault") {
+      // OpenVault unwrap is job-bound and never logged. Until unwrap streaming is enrolled,
+      // require the ceremony-staged local migration env at the allowlisted path.
+      throw new Error(
+        "OpenVault unwrap for schema migration is not active on this Agent; use local-env delivery at /etc/mnscloud/db-migration.env.",
+      );
+    }
+    if (!schemaSha256 || !/^[a-fA-F0-9]{64}$/.test(schemaSha256)) {
+      throw new Error("Valid schemaSha256 is required.");
+    }
+
+    await reportJobProgress(
+      config,
+      job.jobUUID,
+      agentUUID,
+      agentToken,
+      "running",
+      10,
+      `Schema reconcile ${stage} started.`,
+      { jobType: "database.schema.reconcile", stage, schemaSha256, scope },
+    );
+
+    const planDir = `/var/backups/schema-reconcile-agent-${job.jobUUID}`;
+    const planPath = `${planDir}/plan.json`;
+    const resultPath = `${planDir}/result.json`;
+    const prepare = await runLocalCommand(
+      "/bin/bash",
+      ["-lc", `mkdir -p ${shellQuote(planDir)} && chmod 700 ${shellQuote(planDir)}`],
+      Math.max(config.commandTimeoutMs, 30_000),
+    );
+    if (prepare.code !== 0) {
+      throw new Error(`Unable to create schema reconcile work directory: ${prepare.stderr}`);
+    }
+
+    const command = [
+      "python3",
+      shellQuote(script),
+      "--stage",
+      shellQuote(stage),
+      "--scope",
+      shellQuote(scope),
+      "--env",
+      shellQuote(migrationEnvPath),
+      "--expected-schema-sha256",
+      shellQuote(schemaSha256),
+      "--plan",
+      shellQuote(planPath),
+      "--result-json",
+      shellQuote(resultPath),
+    ].join(" ");
+
+    let heartbeatCount = 0;
+    const timeoutMs = Math.max(config.commandTimeoutMs, 3_600_000);
+    const result = await withProgressHeartbeat(
+      runLocalCommand("/bin/bash", ["-lc", command], timeoutMs),
+      () =>
+        reportJobProgress(
+          config,
+          job.jobUUID,
+          agentUUID,
+          agentToken,
+          "running",
+          40,
+          `Schema reconcile ${stage} is still running.`,
+          {
+            jobType: "database.schema.reconcile",
+            stage,
+            schemaSha256,
+            heartbeat: ++heartbeatCount,
+          },
+        ),
+      Math.min(Math.max(Math.floor(timeoutMs / 12), 120_000), 300_000),
+    );
+
+    if (result.code !== 0) {
+      const message = [
+        `Schema reconcile ${stage} exited with code ${result.code}.`,
+        result.stdout ? `stdout:\n${diagnosticOutput(result.stdout)}` : "",
+        result.stderr ? `stderr:\n${diagnosticOutput(result.stderr)}` : "",
+      ].filter(Boolean).join("\n");
+      await failJob(
+        config,
+        job.jobUUID,
+        agentUUID,
+        agentToken,
+        "SCHEMA_RECONCILE_FAILED",
+        message,
+        "database.schema.reconcile",
+      );
+      return;
+    }
+
+    let parsed: Record<string, unknown> = {
+      stage,
+      schemaSha256,
+      scopes,
+      status: "ok",
+      dbReleaseTag: job.dbReleaseTag ?? payload.dbReleaseTag ?? null,
+      clusterKey: payload.clusterKey ?? "primary",
+      stdout: diagnosticOutput(result.stdout),
+    };
+    try {
+      const raw = await Deno.readTextFile(resultPath);
+      parsed = { ...parsed, ...JSON.parse(raw) };
+    } catch {
+      // Result file is optional when inspect prints JSON to stdout.
+    }
+
+    await jsonRequest(
+      config,
+      `/agent/jobs/${job.jobUUID}/complete`,
+      agentToken,
+      agentUUID,
+      {
+        jobType: "database.schema.reconcile",
+        result: parsed,
+      },
+    );
+    log("info", "Database schema reconcile completed.", {
+      jobUUID: job.jobUUID,
+      stage,
+      schemaSha256,
+      status: parsed.status ?? null,
+    });
+  } catch (error) {
+    await failJob(
+      config,
+      job.jobUUID,
+      agentUUID,
+      agentToken,
+      "SCHEMA_RECONCILE_FAILED",
+      error instanceof Error ? error.message : String(error),
+      "database.schema.reconcile",
+    );
+  }
+}
+
 async function pollJobs(
   config: AgentConfig,
   agentUUID: string,
@@ -5814,6 +6004,8 @@ async function pollJobs(
       await executeSoftswitchRuntimeJob(job, config, agentUUID, agentToken);
     } else if (job.jobType === "runtime.update") {
       await executeRuntimeUpdateJob(job, config, agentUUID, agentToken);
+    } else if (job.jobType === "database.schema.reconcile") {
+      await executeDatabaseSchemaReconcileJob(job, config, agentUUID, agentToken);
     } else {
       await uploadJob(job, config, agentUUID, agentToken);
     }
