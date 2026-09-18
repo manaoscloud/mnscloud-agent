@@ -5881,6 +5881,8 @@ async function executeDatabaseSchemaReconcileJob(
       shellQuote(migrationEnvPath),
       "--expected-schema-sha256",
       shellQuote(schemaSha256),
+      "--job-uuid",
+      shellQuote(job.jobUUID),
       "--plan",
       shellQuote(planPath),
       "--result-json",
