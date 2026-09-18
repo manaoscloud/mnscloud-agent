@@ -5858,9 +5858,11 @@ async function executeDatabaseSchemaReconcileJob(
       { jobType: "database.schema.reconcile", stage, schemaSha256, scope },
     );
 
-    const planDir = `/var/backups/schema-reconcile-agent-${job.jobUUID}`;
+    // Plan/apply are separate jobs; keep the reviewed plan artifact keyed by schema
+    // SHA so apply can load the plan produced by the prior plan stage.
+    const planDir = `/var/backups/schema-reconcile-${schemaSha256.toLowerCase()}`;
     const planPath = `${planDir}/plan.json`;
-    const resultPath = `${planDir}/result.json`;
+    const resultPath = `${planDir}/result-${job.jobUUID}.json`;
     const prepare = await runLocalCommand(
       "/bin/bash",
       ["-lc", `mkdir -p ${shellQuote(planDir)} && chmod 700 ${shellQuote(planDir)}`],
@@ -5868,6 +5870,22 @@ async function executeDatabaseSchemaReconcileJob(
     );
     if (prepare.code !== 0) {
       throw new Error(`Unable to create schema reconcile work directory: ${prepare.stderr}`);
+    }
+    if (stage === "plan") {
+      try {
+        await Deno.remove(planPath);
+      } catch {
+        // Plan may not exist yet.
+      }
+    }
+    if (stage === "apply") {
+      try {
+        await Deno.stat(planPath);
+      } catch {
+        throw new Error(
+          `Reviewed plan is missing at ${planPath}; queue and complete a plan stage for this schema SHA first.`,
+        );
+      }
     }
 
     const command = [
@@ -5881,6 +5899,8 @@ async function executeDatabaseSchemaReconcileJob(
       shellQuote(migrationEnvPath),
       "--expected-schema-sha256",
       shellQuote(schemaSha256),
+      "--job-uuid",
+      shellQuote(job.jobUUID),
       "--plan",
       shellQuote(planPath),
       "--result-json",
