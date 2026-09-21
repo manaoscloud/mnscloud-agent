@@ -277,3 +277,21 @@ accelerated benchmark completes the 24–72-hour validation.
 
 Run `python3 scripts/test-runtime-package.py` to validate the imported runtime files
 actually declared by each installer before release.
+
+## Database schema release checkout
+
+A leased `database.schema.reconcile` job with an explicit `dbReleaseTag` selects
+a detached worktree of the canonical `manaoscloud/mnscloud-db` origin. Tags must
+be `vX.Y.Z`; moved tags, dirty release worktrees and schema digest mismatches
+fail closed before any schema script executes. The existing installation checkout
+is preserved. Inspect, plan, apply and verify use the same approved release source.
+Schema convergence remains the specialized schema capability, never generic
+`runtime.update`. Completion still requires the API-recorded applied revision.
+An omitted tag retains the installed-checkout contract for existing jobs.
+
+The shared Linux/Windows runtime package includes `schema-release.ts`; execution
+is Linux DB hosts only. Validate with `deno test --allow-all schema-release_test.ts`
+and `python3 scripts/test-runtime-package.py`. Install/update and Agent rollback
+continue through the existing tagged lifecycle; rolling back Agent code does not
+roll back an applied database schema. Release worktrees are retained for reviewed
+plans and diagnostics, without storing migration credentials in them.
