@@ -752,6 +752,7 @@ main() {
   run "cp '${AGENT_SOURCE_DIR}/host-resources.ts' '${install_dir}/host-resources.ts'"
   run "cp '${AGENT_SOURCE_DIR}/bounded-io.ts' '${install_dir}/bounded-io.ts'"
   run "cp '${AGENT_SOURCE_DIR}/scheduler.ts' '${install_dir}/scheduler.ts'"
+  run "cp '${AGENT_SOURCE_DIR}/schema-release.ts' '${install_dir}/schema-release.ts'"
   run "cp '${AGENT_SOURCE_DIR}/deno.jsonc' '${install_dir}/deno.jsonc'"
   write_agent_build_metadata "$install_dir" "$(agent_version)" "$(agent_build_ref)"
 

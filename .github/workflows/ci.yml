@@ -27,7 +27,7 @@ jobs:
       - name: Installed runtime package
         run: python scripts/test-runtime-package.py
       - name: Host metrics tests
-        run: deno test --allow-all host-metrics_test.ts host-resources_test.ts bounded-io_test.ts
+        run: deno test --allow-all host-metrics_test.ts host-resources_test.ts bounded-io_test.ts schema-release_test.ts
       - name: Shell syntax check
         run: bash -n scripts/*.sh
       - name: Shared Deno runtime selection
@@ -58,7 +58,7 @@ jobs:
       - name: Installed runtime package
         run: python scripts/test-runtime-package.py
       - name: Host metrics tests
-        run: deno test --allow-all host-metrics_test.ts host-resources_test.ts bounded-io_test.ts
+        run: deno test --allow-all host-metrics_test.ts host-resources_test.ts bounded-io_test.ts schema-release_test.ts
       - name: Installer PowerShell syntax
         shell: pwsh
         run: |

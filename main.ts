@@ -1,3 +1,4 @@
+import { prepareSchemaRelease } from "./schema-release.ts";
 import { runLane } from "./scheduler.ts";
 import { byteBudget, captureCommand, readJson, uploadStream, withResponse } from "./bounded-io.ts";
 import {
@@ -5801,7 +5802,7 @@ async function executeDatabaseSchemaReconcileJob(
   agentToken: string,
 ) {
   const capability = "mnscloud.database.schema.reconcile.v1";
-  const script = "/opt/mnscloud/mnscloud-db/scripts/reconcile-database-schema.py";
+  let script = "/opt/mnscloud/mnscloud-db/scripts/reconcile-database-schema.py";
   try {
     if (!config.capabilities[capability]) {
       throw new Error(`Agent capability is disabled: ${capability}.`);
@@ -5857,6 +5858,15 @@ async function executeDatabaseSchemaReconcileJob(
       `Schema reconcile ${stage} started.`,
       { jobType: "database.schema.reconcile", stage, schemaSha256, scope },
     );
+
+    const dbReleaseTag = String(job.dbReleaseTag ?? payload.dbReleaseTag ?? "");
+    if (dbReleaseTag) {
+      const releaseDirectory = await prepareSchemaRelease(
+        "/opt/mnscloud/mnscloud-db", dbReleaseTag, schemaSha256,
+        (args) => runLocalCommand("git", args, Math.max(config.commandTimeoutMs, 180_000)),
+      );
+      script = `${releaseDirectory}/scripts/reconcile-database-schema.py`;
+    }
 
     // Plan/apply are separate jobs; keep the reviewed plan artifact keyed by schema
     // SHA so apply can load the plan produced by the prior plan stage.
