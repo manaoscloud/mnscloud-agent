@@ -111,6 +111,10 @@ installer consumes it, and the API returns the long-lived Agent runtime token di
 server. The browser never receives the runtime token. The token is stored in
 `/var/lib/mnscloud/agent/agent.token`.
 
+Right after boot, `unattended-upgrades`/apt-daily often hold the dpkg or apt lists lock. The
+Linux installer waits for those locks before any apt/dpkg command (up to 600s, override with
+`MNSCLOUD_APT_LOCK_TIMEOUT`) and logs progress every 30s, instead of failing with exit 100.
+
 ## Windows Installation
 
 Run from an elevated PowerShell session:

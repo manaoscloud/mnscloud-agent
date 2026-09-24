@@ -32,6 +32,8 @@ jobs:
         run: bash -n scripts/*.sh
       - name: Shared Deno runtime selection
         run: bash scripts/test-deno-selection.sh
+      - name: apt/dpkg lock wait
+        run: bash scripts/test-apt-lock-wait.sh
       - name: Prepare release candidate
         if: github.event_name == 'push'
         run: >-
