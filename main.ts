@@ -1,3 +1,4 @@
+import { collectOpenVaultStatus } from "./openvault-status.ts";
 import { prepareSchemaRelease } from "./schema-release.ts";
 import { runLane } from "./scheduler.ts";
 import { byteBudget, captureCommand, readJson, uploadStream, withResponse } from "./bounded-io.ts";
@@ -1326,6 +1327,10 @@ async function performHeartbeat(
     ? await optionalRead(config.softswitchRuntimeConfigFile)
     : "";
   const softswitchInventory = await collectSoftswitchRuntimeInventory(config, softswitchNodeUUID);
+  // OpenVault hosts report the local OpenBao seal state so the platform can alert on it.
+  const openvaultStatus = config.capabilities["mnscloud.openvault.update"]
+    ? await collectOpenVaultStatus()
+    : null;
   await jsonRequest(config, "/agent/heartbeat", agentToken, agentUUID, {
     name: config.name,
     hostname: config.hostname,
@@ -1359,6 +1364,7 @@ async function performHeartbeat(
     pabxRegistrations,
     cyberSecurityStatus: cyberSecurityStatus ?? undefined,
     hostMetrics: hostMetrics ?? undefined,
+    openvaultStatus: openvaultStatus ?? undefined,
   });
 }
 
@@ -5794,7 +5800,6 @@ async function executeSoftswitchRuntimeJob(
   }
 }
 
-
 async function executeDatabaseSchemaReconcileJob(
   job: LeaseJob,
   config: AgentConfig,
@@ -5862,8 +5867,11 @@ async function executeDatabaseSchemaReconcileJob(
     const dbReleaseTag = String(job.dbReleaseTag ?? payload.dbReleaseTag ?? "");
     if (dbReleaseTag) {
       const releaseDirectory = await prepareSchemaRelease(
-        "/opt/mnscloud/mnscloud-db", dbReleaseTag, schemaSha256,
-        (args) => runLocalCommand("git", args, Math.max(config.commandTimeoutMs, 180_000)),
+        "/opt/mnscloud/mnscloud-db",
+        dbReleaseTag,
+        schemaSha256,
+        (args) =>
+          runLocalCommand("git", args, Math.max(config.commandTimeoutMs, 180_000)),
       );
       script = `${releaseDirectory}/scripts/reconcile-database-schema.py`;
     }

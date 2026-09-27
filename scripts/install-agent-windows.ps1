@@ -266,6 +266,7 @@ Invoke-Step {
   Copy-Item -Path "$PSScriptRoot\..\bounded-io.ts" -Destination "$InstallDir\bounded-io.ts" -Force
   Copy-Item -Path "$PSScriptRoot\..\scheduler.ts" -Destination "$InstallDir\scheduler.ts" -Force
   Copy-Item -Path "$PSScriptRoot\..\schema-release.ts" -Destination "$InstallDir\schema-release.ts" -Force
+  Copy-Item -Path "$PSScriptRoot\..\openvault-status.ts" -Destination "$InstallDir\openvault-status.ts" -Force
   Copy-Item -Path "$PSScriptRoot\..\deno.jsonc" -Destination "$InstallDir\deno.jsonc" -Force
 }
 Write-AgentBuildMetadata
