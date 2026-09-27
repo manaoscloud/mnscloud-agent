@@ -93,9 +93,15 @@ export async function collectOpenVaultStatus(
   } catch {
     return null;
   }
-  const address = env.OPENVAULT_API_ADDR;
+  // Same derivation as mnscloud-openvault normalize_openvault_env: most hosts only set
+  // OPENVAULT_PRIVATE_HOST and the installer builds the API address from it.
+  const tlsDisabled = env.OPENVAULT_TLS_DISABLE === "true" || env.OPENVAULT_TLS_MODE === "disabled";
+  const address = env.OPENVAULT_API_ADDR ||
+    (env.OPENVAULT_PRIVATE_HOST
+      ? `${tlsDisabled ? "http" : "https"}://${env.OPENVAULT_PRIVATE_HOST}:8200`
+      : "");
   if (!address || !/^https?:\/\/[^\s/]+$/.test(address.replace(/\/+$/, ""))) return null;
-  const tls = env.OPENVAULT_TLS_DISABLE !== "true" && address.startsWith("https://");
+  const tls = !tlsDisabled && address.startsWith("https://");
   const certFile = env.OPENVAULT_TLS_CERT_FILE || "/etc/mnscloud/openvault/tls/server.crt";
   const caFile = env.OPENVAULT_TLS_CA_FILE || certFile;
   let caPEM: string | null = null;
