@@ -104,6 +104,23 @@ When either capability is active, the heartbeat also reports the installed local
 that product. The API compares this host inventory against the published release manifest before
 exposing an update action in the App. A release alone is not enough to mark API/App as updateable.
 
+## Database Table Maintenance
+
+On Linux database hosts the Agent declares `mnscloud.database.table.maintenance.v1` when the
+host-local migration env `/etc/mnscloud/db-migration.env` and the `mariadb` client exist. A Master
+queues `database.table.maintenance` jobs through `POST /api/v1/system/database/maintenance/jobs`:
+
+- `inspect` reports, per allowlisted table, rows, data/index size, reclaimable space (`DATA_FREE`),
+  `.ibd` file size and the free disk of the MariaDB data directory.
+- `optimize` rebuilds each allowlisted table online (`OPTIMIZE TABLE`, InnoDB recreate + analyze) so
+  space freed by retention purges returns to the filesystem. A table is skipped when free disk is
+  below 1.2x its file size; the job fails when nothing could be rebuilt.
+
+Only the fixed table allowlist in `database-maintenance.ts` can be touched; the job payload can only
+narrow it. The credential is read on the host and passed to `mariadb` through the child environment,
+never argv, logs or job results. An expired lease fails the job; rebuilds are never retried
+automatically.
+
 ## Local Uninstall
 
 Agent lifecycle scripts are intentionally symmetric:
