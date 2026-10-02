@@ -3,6 +3,16 @@ import { prepareSchemaRelease } from "./schema-release.ts";
 import { runLane } from "./scheduler.ts";
 import { byteBudget, captureCommand, readJson, uploadStream, withResponse } from "./bounded-io.ts";
 import {
+  DATABASE_MAINTENANCE_CAPABILITY,
+  DATABASE_MAINTENANCE_ENV_PATH,
+  hasRebuildDiskSpace,
+  optimizeSucceeded,
+  parseBatchRows,
+  parseDfAvailable,
+  parseMaintenanceEnv,
+  selectMaintenanceTables,
+} from "./database-maintenance.ts";
+import {
   parseFilesystems,
   parseNetworkCounters,
   parseNetworkLinks,
@@ -86,6 +96,7 @@ type LeaseJob = {
     | "voip.softswitch.runtime"
     | "runtime.update"
     | "database.schema.reconcile"
+    | "database.table.maintenance"
     | string
     | null;
   action?: "sync" | "delete" | string | null;
@@ -250,6 +261,11 @@ async function applyRuntimeCapabilities(config: AgentConfig) {
   config.capabilities["mnscloud.database.schema.reconcile.v1"] = await isExecutableFile(
     "/opt/mnscloud/mnscloud-db/scripts/reconcile-database-schema.py",
   );
+  // Table maintenance reuses the host-local migration credential of the DB host.
+  config.capabilities[DATABASE_MAINTENANCE_CAPABILITY] = !IS_WINDOWS &&
+    await fileExists(DATABASE_MAINTENANCE_ENV_PATH) &&
+    (await isExecutableFile("/usr/bin/mariadb") ||
+      await isExecutableFile("/usr/local/bin/mariadb"));
 
   config.capabilities["realtime.webrtc.manage"] = await isExecutableFile(
     config.webrtcEdgeSyncCommand,
@@ -6011,6 +6027,206 @@ async function executeDatabaseSchemaReconcileJob(
   }
 }
 
+async function runMaintenanceSql(
+  env: { password: string; database: string },
+  sql: string,
+  timeoutMs: number,
+) {
+  const mariadb = await isExecutableFile("/usr/bin/mariadb")
+    ? "/usr/bin/mariadb"
+    : "/usr/local/bin/mariadb";
+  // The password travels only through the child environment, never argv or logs.
+  const process = new Deno.Command(mariadb, {
+    args: ["-uroot", "--protocol=socket", "-N", "--batch", "--raw", env.database, "-e", sql],
+    env: { MYSQL_PWD: env.password },
+    stdin: "null",
+    stdout: "piped",
+    stderr: "piped",
+  }).spawn();
+  const result = await captureCommand(process, timeoutMs, () => {
+    try {
+      process.kill("SIGKILL");
+    } catch { /* Process already exited. */ }
+  });
+  if (result.code !== 0) {
+    throw new Error(`mariadb exited with code ${result.code}: ${diagnosticOutput(result.stderr)}`);
+  }
+  return parseBatchRows(result.stdout);
+}
+
+async function datadirFreeBytes(datadir: string) {
+  const result = await runLocalCommand("df", ["-B1", "--output=avail", datadir], 30_000);
+  return result.code === 0 ? parseDfAvailable(result.stdout) : Number.NaN;
+}
+
+async function tableFileBytes(datadir: string, database: string, table: string) {
+  try {
+    return (await Deno.stat(`${datadir.replace(/\/+$/, "")}/${database}/${table}.ibd`)).size;
+  } catch {
+    return null;
+  }
+}
+
+async function executeDatabaseTableMaintenanceJob(
+  job: LeaseJob,
+  config: AgentConfig,
+  agentUUID: string,
+  agentToken: string,
+) {
+  const jobType = "database.table.maintenance";
+  try {
+    if (!config.capabilities[DATABASE_MAINTENANCE_CAPABILITY]) {
+      throw new Error(`Agent capability is disabled: ${DATABASE_MAINTENANCE_CAPABILITY}.`);
+    }
+    const action = String(job.action ?? "inspect");
+    if (action !== "inspect" && action !== "optimize") {
+      throw new Error("Unsupported database maintenance action.");
+    }
+    const tables = selectMaintenanceTables((job as Record<string, unknown>).tables);
+    const env = parseMaintenanceEnv(await Deno.readTextFile(DATABASE_MAINTENANCE_ENV_PATH));
+    await reportJobProgress(
+      config,
+      job.jobUUID,
+      agentUUID,
+      agentToken,
+      "inspect",
+      5,
+      `Database ${action} started.`,
+      { jobType },
+    );
+
+    const datadir = (await runMaintenanceSql(env, "SELECT @@datadir", 60_000))[0]?.[0] ?? "";
+    const list = tables.map((table) => `'${table}'`).join(",");
+    const statsRows = await runMaintenanceSql(
+      env,
+      `SELECT TABLE_NAME, IFNULL(TABLE_ROWS,0), IFNULL(DATA_LENGTH,0), IFNULL(INDEX_LENGTH,0), IFNULL(DATA_FREE,0) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN (${list})`,
+      120_000,
+    );
+    const freeBefore = await datadirFreeBytes(datadir);
+    const results: Array<Record<string, unknown>> = [];
+    for (const row of statsRows) {
+      const table = row[0];
+      results.push({
+        table,
+        estimatedRows: Number(row[1]),
+        dataBytes: Number(row[2]),
+        indexBytes: Number(row[3]),
+        reclaimableBytes: Number(row[4]),
+        fileBytes: await tableFileBytes(datadir, env.database, table),
+        status: action === "inspect" ? "inspected" : "pending",
+      });
+    }
+
+    if (action === "optimize") {
+      let index = 0;
+      for (const item of results) {
+        index++;
+        const table = String(item.table);
+        const before = Number(item.fileBytes ?? Number(item.dataBytes) + Number(item.indexBytes));
+        const free = await datadirFreeBytes(datadir);
+        if (!hasRebuildDiskSpace(free, before)) {
+          item.status = "skipped";
+          item.message = `Not enough free disk: ${free} bytes free, ${before} bytes table.`;
+          continue;
+        }
+        const percent = Math.min(95, 10 + Math.round((index - 1) / results.length * 85));
+        await reportJobProgress(
+          config,
+          job.jobUUID,
+          agentUUID,
+          agentToken,
+          "optimize",
+          percent,
+          `Rebuilding ${table} (${index}/${results.length}).`,
+          { jobType },
+        );
+        const started = Date.now();
+        try {
+          const rows = await withProgressHeartbeat(
+            runMaintenanceSql(
+              env,
+              `OPTIMIZE TABLE \`${env.database}\`.\`${table}\``,
+              Math.max(config.commandTimeoutMs, 6 * 3_600_000),
+            ),
+            () =>
+              reportJobProgress(
+                config,
+                job.jobUUID,
+                agentUUID,
+                agentToken,
+                "optimize",
+                percent,
+                `Still rebuilding ${table}.`,
+                { jobType },
+              ),
+            300_000,
+          );
+          const outcome = optimizeSucceeded(rows);
+          const after = await tableFileBytes(datadir, env.database, table);
+          item.status = outcome.ok ? "optimized" : "failed";
+          item.message = outcome.message;
+          item.fileBytesAfter = after;
+          item.reclaimedBytes = after === null ? null : Math.max(0, before - after);
+          item.durationMs = Date.now() - started;
+        } catch (error) {
+          item.status = "failed";
+          item.message = error instanceof Error ? error.message.slice(0, 500) : String(error);
+        }
+      }
+    }
+
+    const optimized = results.filter((item) => item.status === "optimized");
+    const freeAfter = await datadirFreeBytes(datadir);
+    const result = {
+      action,
+      database: env.database,
+      datadir,
+      freeBytesBefore: Number.isFinite(freeBefore) ? freeBefore : null,
+      freeBytesAfter: Number.isFinite(freeAfter) ? freeAfter : null,
+      totalReclaimedBytes: optimized.reduce(
+        (sum, item) => sum + Number(item.reclaimedBytes ?? 0),
+        0,
+      ),
+      tables: results,
+    };
+    if (action === "optimize" && results.length && !optimized.length) {
+      const reasons = results.map((item) => `${item.table}: ${item.message ?? item.status}`);
+      await failJob(
+        config,
+        job.jobUUID,
+        agentUUID,
+        agentToken,
+        "DATABASE_MAINTENANCE_NOTHING_OPTIMIZED",
+        reasons.join("; ").slice(0, 2000),
+        jobType,
+      );
+      return;
+    }
+    await jsonRequest(
+      config,
+      `/agent/jobs/${job.jobUUID}/complete`,
+      agentToken,
+      agentUUID,
+      { jobType, result },
+    );
+    log("info", "Database table maintenance completed.", {
+      jobUUID: job.jobUUID,
+      action,
+      optimized: optimized.length,
+    });
+  } catch (error) {
+    await failJob(
+      config,
+      job.jobUUID,
+      agentUUID,
+      agentToken,
+      "DATABASE_MAINTENANCE_FAILED",
+      error instanceof Error ? error.message : String(error),
+      jobType,
+    );
+  }
+}
+
 async function pollJobs(
   config: AgentConfig,
   agentUUID: string,
@@ -6044,6 +6260,8 @@ async function pollJobs(
       await executeRuntimeUpdateJob(job, config, agentUUID, agentToken);
     } else if (job.jobType === "database.schema.reconcile") {
       await executeDatabaseSchemaReconcileJob(job, config, agentUUID, agentToken);
+    } else if (job.jobType === "database.table.maintenance") {
+      await executeDatabaseTableMaintenanceJob(job, config, agentUUID, agentToken);
     } else {
       await uploadJob(job, config, agentUUID, agentToken);
     }

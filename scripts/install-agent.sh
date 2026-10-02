@@ -791,6 +791,7 @@ main() {
   run "cp '${AGENT_SOURCE_DIR}/scheduler.ts' '${install_dir}/scheduler.ts'"
   run "cp '${AGENT_SOURCE_DIR}/schema-release.ts' '${install_dir}/schema-release.ts'"
   run "cp '${AGENT_SOURCE_DIR}/openvault-status.ts' '${install_dir}/openvault-status.ts'"
+  run "cp '${AGENT_SOURCE_DIR}/database-maintenance.ts' '${install_dir}/database-maintenance.ts'"
   run "cp '${AGENT_SOURCE_DIR}/deno.jsonc' '${install_dir}/deno.jsonc'"
   write_agent_build_metadata "$install_dir" "$(agent_version)" "$(agent_build_ref)"
 
