@@ -23,6 +23,16 @@ export const RUNTIME_RECONCILE_PRODUCTS: Record<string, RuntimeReconcileProduct>
   },
 };
 
+/** A product is available when its checkout (`.git` directory or worktree file) and env exist. */
+export async function runtimeReconcileProductAvailable(
+  product: RuntimeReconcileProduct,
+): Promise<boolean> {
+  const stat = async (path: string) => await Deno.stat(path).catch(() => null);
+  const git = await stat(`${product.repo}/.git`);
+  const env = await stat(product.envPath);
+  return Boolean(git && (git.isDirectory || git.isFile) && env?.isFile);
+}
+
 export type RuntimeReconcileRequest = {
   product: string;
   releaseTag: string;
