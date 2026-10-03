@@ -121,6 +121,28 @@ narrow it. The credential is read on the host and passed to `mariadb` through th
 never argv, logs or job results. An expired lease fails the job; rebuilds are never retried
 automatically.
 
+## Runtime Configuration Reconcile
+
+The Agent declares `mnscloud.runtime.reconcile.v1` on Linux when `python3` exists and at least one
+registered module (`runtime-reconcile.ts`, currently `mnscloud-db` at `/opt/mnscloud/mnscloud-db`
+with `/etc/mnscloud/db-migration.env`) is installed. A Master queues `runtime.reconcile` jobs
+through `POST /api/v1/system/runtime/reconcile-jobs` with a product, an explicit module release
+tag, a logical resource (for example `mariadb.server`) and a stage:
+
+- `inspect` reports managed values, the last applied baseline and the running values;
+- `plan` runs a three-way comparison and records a plan digest (`blocked` on conflicts unless the
+  `adopt-desired` resolution is given);
+- `apply` is accepted only with the digest of a successful unblocked plan; the adapter re-checks
+  the file, writes atomically, restarts once, verifies live values and rolls back on failure.
+
+The Agent prepares a clean detached checkout of the exact module tag from the canonical origin and
+runs the module-owned adapter (`scripts/reconcile-runtime-config.py`) with discrete arguments. The
+job never supplies paths or commands; the release owns files, fields, validators and services.
+Only non-secret fields are managed. The completion acknowledgement is retried because an apply may
+restart the database behind the API. An expired lease fails the job; applies are never retried
+automatically. See `docs/agent-managed-reconciliation.md` in the workspace and
+`docs/runtime-reconcile.md` in mnscloud-db.
+
 ## Local Uninstall
 
 Agent lifecycle scripts are intentionally symmetric:

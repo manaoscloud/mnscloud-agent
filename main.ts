@@ -1,5 +1,13 @@
 import { collectOpenVaultStatus } from "./openvault-status.ts";
 import { prepareSchemaRelease } from "./schema-release.ts";
+import {
+  adapterArgs,
+  parseRuntimeReconcileJob,
+  prepareModuleRelease,
+  RUNTIME_RECONCILE_CAPABILITY,
+  RUNTIME_RECONCILE_JOB_TYPE,
+  RUNTIME_RECONCILE_PRODUCTS,
+} from "./runtime-reconcile.ts";
 import { runLane } from "./scheduler.ts";
 import { byteBudget, captureCommand, readJson, uploadStream, withResponse } from "./bounded-io.ts";
 import {
@@ -97,6 +105,7 @@ type LeaseJob = {
     | "runtime.update"
     | "database.schema.reconcile"
     | "database.table.maintenance"
+    | "runtime.reconcile"
     | string
     | null;
   action?: "sync" | "delete" | string | null;
@@ -126,6 +135,11 @@ type LeaseJob = {
   dbReleaseTag?: string | null;
   scopesJson?: string | null;
   secretDelivery?: Record<string, unknown> | null;
+  releaseTag?: string | null;
+  resource?: string | null;
+  desiredJson?: string | null;
+  resolution?: string | null;
+  planDigest?: string | null;
 };
 
 type RuntimeVersionReport = {
@@ -266,6 +280,15 @@ async function applyRuntimeCapabilities(config: AgentConfig) {
     await fileExists(DATABASE_MAINTENANCE_ENV_PATH) &&
     (await isExecutableFile("/usr/bin/mariadb") ||
       await isExecutableFile("/usr/local/bin/mariadb"));
+
+  // Configuration reconcile runs a release-owned adapter of a module installed on this host.
+  config.capabilities[RUNTIME_RECONCILE_CAPABILITY] = !IS_WINDOWS &&
+    (await commandAvailable("python3")) !== null &&
+    (await Promise.all(
+      Object.values(RUNTIME_RECONCILE_PRODUCTS).map(async (product) =>
+        await fileExists(`${product.repo}/.git`) && await fileExists(product.envPath)
+      ),
+    )).some(Boolean);
 
   config.capabilities["realtime.webrtc.manage"] = await isExecutableFile(
     config.webrtcEdgeSyncCommand,
@@ -6227,6 +6250,134 @@ async function executeDatabaseTableMaintenanceJob(
   }
 }
 
+async function completeRuntimeReconcileJob(
+  config: AgentConfig,
+  jobUUID: string,
+  agentUUID: string,
+  agentToken: string,
+  result: Record<string, unknown>,
+) {
+  // An apply may have restarted the database behind the API; retry the acknowledgement.
+  let lastError: unknown = null;
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    try {
+      await jsonRequest(config, `/agent/jobs/${jobUUID}/complete`, agentToken, agentUUID, {
+        jobType: RUNTIME_RECONCILE_JOB_TYPE,
+        result,
+      });
+      return;
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, attempt * 5_000));
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
+async function executeRuntimeReconcileJob(
+  job: LeaseJob,
+  config: AgentConfig,
+  agentUUID: string,
+  agentToken: string,
+) {
+  const jobType = RUNTIME_RECONCILE_JOB_TYPE;
+  let workDir: string | null = null;
+  try {
+    if (!config.capabilities[RUNTIME_RECONCILE_CAPABILITY]) {
+      throw new Error(`Agent capability is disabled: ${RUNTIME_RECONCILE_CAPABILITY}.`);
+    }
+    const request = parseRuntimeReconcileJob(job as unknown as Record<string, unknown>);
+    const registry = RUNTIME_RECONCILE_PRODUCTS[request.product];
+    const context = {
+      jobType,
+      stage: request.stage,
+      product: request.product,
+      resource: request.resource,
+    };
+    await reportJobProgress(
+      config,
+      job.jobUUID,
+      agentUUID,
+      agentToken,
+      "prepare",
+      10,
+      `Runtime reconcile ${request.stage} started for ${request.resource}.`,
+      context,
+    );
+    const release = await prepareModuleRelease(
+      registry,
+      request.releaseTag,
+      (args) => runLocalCommand("git", args, Math.max(config.commandTimeoutMs, 180_000)),
+    );
+    workDir = await Deno.makeTempDir({ prefix: "mns-runtime-reconcile-" });
+    await Deno.chmod(workDir, 0o700);
+    let desiredPath: string | null = null;
+    if (request.desired) {
+      desiredPath = `${workDir}/desired.json`;
+      await Deno.writeTextFile(desiredPath, JSON.stringify(request.desired), { mode: 0o600 });
+    }
+    const resultPath = `${workDir}/result.json`;
+    const args = adapterArgs(
+      request,
+      registry,
+      `${release}/${registry.adapter}`,
+      desiredPath,
+      resultPath,
+    );
+    const run = await withProgressHeartbeat(
+      runLocalCommand("python3", args, Math.max(config.commandTimeoutMs, 900_000)),
+      () =>
+        reportJobProgress(
+          config,
+          job.jobUUID,
+          agentUUID,
+          agentToken,
+          request.stage,
+          50,
+          `Runtime reconcile ${request.stage} is running.`,
+          context,
+        ),
+      60_000,
+    );
+    let output: Record<string, unknown> | null = null;
+    try {
+      output = JSON.parse(await Deno.readTextFile(resultPath));
+    } catch {
+      output = null;
+    }
+    if (!output || output.ok !== true) {
+      await failJob(
+        config,
+        job.jobUUID,
+        agentUUID,
+        agentToken,
+        String(output?.errorCode ?? "RUNTIME_RECONCILE_FAILED"),
+        String(output?.message ?? run.stderr ?? "Runtime reconcile adapter failed.").slice(0, 2000),
+        jobType,
+      );
+      return;
+    }
+    await completeRuntimeReconcileJob(config, job.jobUUID, agentUUID, agentToken, {
+      ...output,
+      product: request.product,
+      releaseTag: request.releaseTag,
+    });
+    log("info", "Runtime reconcile completed.", { jobUUID: job.jobUUID, ...context });
+  } catch (error) {
+    await failJob(
+      config,
+      job.jobUUID,
+      agentUUID,
+      agentToken,
+      "RUNTIME_RECONCILE_FAILED",
+      error instanceof Error ? error.message : String(error),
+      jobType,
+    );
+  } finally {
+    if (workDir) await Deno.remove(workDir, { recursive: true }).catch(() => undefined);
+  }
+}
+
 async function pollJobs(
   config: AgentConfig,
   agentUUID: string,
@@ -6262,6 +6413,8 @@ async function pollJobs(
       await executeDatabaseSchemaReconcileJob(job, config, agentUUID, agentToken);
     } else if (job.jobType === "database.table.maintenance") {
       await executeDatabaseTableMaintenanceJob(job, config, agentUUID, agentToken);
+    } else if (job.jobType === RUNTIME_RECONCILE_JOB_TYPE) {
+      await executeRuntimeReconcileJob(job, config, agentUUID, agentToken);
     } else {
       await uploadJob(job, config, agentUUID, agentToken);
     }
