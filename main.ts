@@ -7,6 +7,7 @@ import {
   RUNTIME_RECONCILE_CAPABILITY,
   RUNTIME_RECONCILE_JOB_TYPE,
   RUNTIME_RECONCILE_PRODUCTS,
+  runtimeReconcileProductAvailable,
 } from "./runtime-reconcile.ts";
 import { runLane } from "./scheduler.ts";
 import { byteBudget, captureCommand, readJson, uploadStream, withResponse } from "./bounded-io.ts";
@@ -285,9 +286,7 @@ async function applyRuntimeCapabilities(config: AgentConfig) {
   config.capabilities[RUNTIME_RECONCILE_CAPABILITY] = !IS_WINDOWS &&
     (await commandAvailable("python3")) !== null &&
     (await Promise.all(
-      Object.values(RUNTIME_RECONCILE_PRODUCTS).map(async (product) =>
-        await fileExists(`${product.repo}/.git`) && await fileExists(product.envPath)
-      ),
+      Object.values(RUNTIME_RECONCILE_PRODUCTS).map(runtimeReconcileProductAvailable),
     )).some(Boolean);
 
   config.capabilities["realtime.webrtc.manage"] = await isExecutableFile(

@@ -10,6 +10,7 @@ import {
   prepareModuleRelease,
   RUNTIME_RECONCILE_PRODUCTS,
   type RuntimeReconcileProduct,
+  runtimeReconcileProductAvailable,
 } from "./runtime-reconcile.ts";
 
 const base = {
@@ -115,5 +116,23 @@ Deno.test("module release checkout requires canonical origin, exact tag, clean t
   await Deno.remove(`${registry.repo}-releases`, { recursive: true });
   withAdapter = false;
   await assertRejects(() => prepareModuleRelease(registry, "v0.1.400", run), Error, "adapter");
+  await Deno.remove(root, { recursive: true });
+});
+
+Deno.test("runtime reconcile product detection accepts a .git directory or worktree file", async () => {
+  const root = await Deno.makeTempDir();
+  const product: RuntimeReconcileProduct = {
+    ...RUNTIME_RECONCILE_PRODUCTS["mnscloud-db"],
+    repo: `${root}/mnscloud-db`,
+    envPath: `${root}/db-migration.env`,
+  };
+  assertEquals(await runtimeReconcileProductAvailable(product), false);
+  await Deno.mkdir(`${product.repo}/.git`, { recursive: true });
+  assertEquals(await runtimeReconcileProductAvailable(product), false);
+  await Deno.writeTextFile(product.envPath, "DB_NAME=clouddb\n");
+  assertEquals(await runtimeReconcileProductAvailable(product), true);
+  await Deno.remove(`${product.repo}/.git`, { recursive: true });
+  await Deno.writeTextFile(`${product.repo}/.git`, "gitdir: /elsewhere\n");
+  assertEquals(await runtimeReconcileProductAvailable(product), true);
   await Deno.remove(root, { recursive: true });
 });
