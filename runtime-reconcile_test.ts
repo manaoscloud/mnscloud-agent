@@ -136,3 +136,18 @@ Deno.test("runtime reconcile product detection accepts a .git directory or workt
   assertEquals(await runtimeReconcileProductAvailable(product), true);
   await Deno.remove(root, { recursive: true });
 });
+
+Deno.test("Workers reconcile selects the module-owned adapter and fixed env", () => {
+  const request = parseRuntimeReconcileJob({
+    product: "mnscloud-workers",
+    releaseTag: "v0.1.28",
+    resource: "workers.handlers",
+    stage: "plan",
+    desired: { WORKER_HANDLERS: "dns" },
+  });
+  const registry = RUNTIME_RECONCILE_PRODUCTS[request.product];
+  assertEquals(registry.repo, "/opt/mnscloud/mnscloud-workers");
+  assertEquals(registry.envPath, "/etc/mnscloud/workers.env");
+  assertEquals(registry.adapter, "scripts/reconcile-runtime-config.py");
+  assertThrows(() => parseRuntimeReconcileJob({ ...request, resource: "arbitrary.command" }));
+});

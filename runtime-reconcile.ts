@@ -14,6 +14,13 @@ export type RuntimeReconcileProduct = {
 };
 
 export const RUNTIME_RECONCILE_PRODUCTS: Record<string, RuntimeReconcileProduct> = {
+  "mnscloud-workers": {
+    repo: "/opt/mnscloud/mnscloud-workers",
+    origin: /^https:\/\/github\.com\/manaoscloud\/mnscloud-workers(?:\.git)?\/?$/,
+    adapter: "scripts/reconcile-runtime-config.py",
+    envPath: "/etc/mnscloud/workers.env",
+    resources: ["workers.handlers"],
+  },
   "mnscloud-db": {
     repo: "/opt/mnscloud/mnscloud-db",
     origin: /^https:\/\/github\.com\/manaoscloud\/mnscloud-db(?:\.git)?\/?$/,
