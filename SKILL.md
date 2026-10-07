@@ -295,3 +295,7 @@ and `python3 scripts/test-runtime-package.py`. Install/update and Agent rollback
 continue through the existing tagged lifecycle; rolling back Agent code does not
 roll back an applied database schema. Release worktrees are retained for reviewed
 plans and diagnostics, without storing migration credentials in them.
+
+Workers DNS enablement uses the existing `runtime.reconcile` executor with the fixed
+`mnscloud-workers` / `workers.handlers` registry entry. Do not add a generic shell or env-write job.
+Validate `runtime-reconcile_test.ts` when changing registry/capability behavior.
