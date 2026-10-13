@@ -246,8 +246,8 @@ async function applyRuntimeCapabilities(config: AgentConfig) {
   config.capabilities["mnscloud.workers.update"] = await isExecutableFile(
     "/opt/mnscloud/mnscloud-workers/scripts/update-workers.sh",
   );
-  config.capabilities["mnscloud.freeradius.update"] = await isExecutableFile(
-    "/opt/mnscloud/mnscloud-freeradius/scripts/update-freeradius.sh",
+  config.capabilities["mnscloud.authentication.update"] = await isExecutableFile(
+    "/opt/mnscloud/mnscloud-authentication/scripts/update-authentication.sh",
   );
   config.capabilities["mnscloud.freeswitch.update"] = await isExecutableFile(
     "/opt/mnscloud/mnscloud-freeswitch/scripts/update-freeswitch.sh",
@@ -815,9 +815,9 @@ async function collectRuntimeVersions(config: AgentConfig) {
       config,
     ),
     runtimeVersionReport(
-      "mnscloud-freeradius",
-      "mnscloud.freeradius.update",
-      "/opt/mnscloud/mnscloud-freeradius",
+      "mnscloud-authentication",
+      "mnscloud.authentication.update",
+      "/opt/mnscloud/mnscloud-authentication",
       config,
     ),
     runtimeVersionReport(
@@ -3453,16 +3453,16 @@ function runtimeUpdateTarget(product: string) {
         } && MNSCLOUD_SKIP_REPO_SYNC=1 bash scripts/update-workers.sh --env /etc/mnscloud/workers.env`,
       ],
     },
-    "mnscloud-freeradius": {
-      label: "FreeRADIUS",
-      capability: "mnscloud.freeradius.update",
-      repoDir: "/opt/mnscloud/mnscloud-freeradius",
+    "mnscloud-authentication": {
+      label: "Authentication",
+      capability: "mnscloud.authentication.update",
+      repoDir: "/opt/mnscloud/mnscloud-authentication",
       command: (targetRef) => [
         "bash",
         "-lc",
         `git fetch --tags --prune origin && git checkout ${
           shellQuote(targetRef)
-        } && MNSCLOUD_SKIP_REPO_SYNC=1 bash scripts/update-freeradius.sh --env /etc/mnscloud/freeradius.env`,
+        } && MNSCLOUD_SKIP_REPO_SYNC=1 bash scripts/update-authentication.sh --env /etc/mnscloud/authentication.env`,
       ],
     },
     "mnscloud-freeswitch": {

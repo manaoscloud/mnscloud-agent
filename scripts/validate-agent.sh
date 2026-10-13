@@ -101,7 +101,7 @@ command_path_from_capability() {
     mnscloud.nginx.update) printf '%s\n' "/opt/mnscloud/mnscloud-nginx/scripts/update-nginx.sh" ;;
     mnscloud.rabbitmq.update) printf '%s\n' "/opt/mnscloud/mnscloud-rabbitmq/scripts/update-rabbitmq.sh" ;;
     mnscloud.workers.update) printf '%s\n' "/opt/mnscloud/mnscloud-workers/scripts/update-workers.sh" ;;
-    mnscloud.freeradius.update) printf '%s\n' "/opt/mnscloud/mnscloud-freeradius/scripts/update-freeradius.sh" ;;
+    mnscloud.authentication.update) printf '%s\n' "/opt/mnscloud/mnscloud-authentication/scripts/update-authentication.sh" ;;
     mnscloud.freeswitch.update) printf '%s\n' "/opt/mnscloud/mnscloud-freeswitch/scripts/update-freeswitch.sh" ;;
     mnscloud.asterisk.update) printf '%s\n' "/opt/mnscloud/mnscloud-asterisk/scripts/update-asterisk.sh" ;;
     mnscloud.opensips-sbc.update) printf '%s\n' "/opt/mnscloud/mnscloud-opensips-sbc/scripts/update-opensips-sbc.sh" ;;
