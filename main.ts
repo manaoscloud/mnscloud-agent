@@ -10,7 +10,14 @@ import {
   runtimeReconcileProductAvailable,
 } from "./runtime-reconcile.ts";
 import { runLane } from "./scheduler.ts";
-import { byteBudget, captureCommand, readJson, uploadStream, withResponse } from "./bounded-io.ts";
+import {
+  byteBudget,
+  captureCommand,
+  readCommandOutput,
+  readJson,
+  uploadStream,
+  withResponse,
+} from "./bounded-io.ts";
 import {
   DATABASE_MAINTENANCE_CAPABILITY,
   DATABASE_MAINTENANCE_ENV_PATH,
@@ -273,6 +280,13 @@ async function applyRuntimeCapabilities(config: AgentConfig) {
   config.capabilities["mnscloud.openvault.update"] = await isExecutableFile(
     "/opt/mnscloud/mnscloud-openvault/scripts/update-openvault.sh",
   );
+  config.capabilities["mnscloud.authentication.lifecycle.v1"] = !IS_WINDOWS &&
+    await isExecutableFile(
+      "/opt/mnscloud/mnscloud-authentication/scripts/lifecycle-authentication.py",
+    );
+  config.capabilities["mnscloud.database.authentication.principal.v1"] = !IS_WINDOWS &&
+    await isExecutableFile("/opt/mnscloud/mnscloud-db/scripts/reconcile-database-schema.py") &&
+    await fileExists("/etc/mnscloud/db.env");
   config.capabilities["mnscloud.database.schema.reconcile.v1"] = await isExecutableFile(
     "/opt/mnscloud/mnscloud-db/scripts/reconcile-database-schema.py",
   );
@@ -6273,6 +6287,137 @@ async function completeRuntimeReconcileJob(
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
+/** Dedicated database executor: secret material is fetched just in time and travels over stdin.
+ * No request value can choose a command, path, environment file or SQL statement.
+ */
+async function executeAuthenticationLifecycleJob(
+  job: LeaseJob,
+  config: AgentConfig,
+  agentUUID: string,
+  agentToken: string,
+) {
+  const payload = job.payload ?? {};
+  if (!["rotate", "uninstall"].includes(String(payload.action))) return;
+  try {
+    const child = new Deno.Command("python3", {
+      args: ["/opt/mnscloud/mnscloud-authentication/scripts/lifecycle-authentication.py"],
+      stdin: "piped",
+      stdout: "null",
+      stderr: "null",
+    }).spawn();
+    const timer = setTimeout(() => {
+      try {
+        child.kill("SIGKILL");
+      } catch { /* exited */ }
+    }, 900_000);
+    try {
+      const writer = child.stdin.getWriter();
+      await writer.write(
+        new TextEncoder().encode(
+          JSON.stringify({
+            api: config.apiBase,
+            serverUUID: payload.serverUUID,
+            installationUUID: job.jobUUID,
+            leaseUUID: payload.leaseUUID,
+            action: payload.action,
+          }),
+        ),
+      );
+      await writer.close();
+      if (!(await child.status).success) throw new Error("Lifecycle adapter failed");
+    } finally {
+      clearTimeout(timer);
+    }
+    log("info", "Authentication lifecycle operation completed.", { jobUUID: job.jobUUID });
+  } catch {
+    await jsonRequest(
+      config,
+      `/authentication/runtime/installations/${job.jobUUID}/report`,
+      agentToken,
+      agentUUID,
+      { state: "failed", leaseUUID: payload.leaseUUID },
+    ).catch(() => undefined);
+    log("warn", "Authentication lifecycle operation failed.", { jobUUID: job.jobUUID });
+  }
+}
+
+async function executeAuthenticationDatabaseJob(
+  job: LeaseJob,
+  config: AgentConfig,
+  agentUUID: string,
+  agentToken: string,
+) {
+  const leaseUUID = String(job.payload?.leaseUUID ?? "");
+  const identifier = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$|^[a-f0-9]{32}$/i;
+  if (!identifier.test(job.jobUUID) || !identifier.test(leaseUUID)) return;
+  const base = `/authentication/runtime/database-operations/${job.jobUUID}`;
+  try {
+    if (!config.capabilities["mnscloud.database.authentication.principal.v1"]) {
+      throw new Error("Capability unavailable");
+    }
+    const material = await jsonRequest<{ data: Record<string, unknown> }>(
+      config,
+      `${base}/material`,
+      agentToken,
+      agentUUID,
+      { leaseUUID },
+    );
+    const releaseDirectory = await prepareSchemaRelease(
+      "/opt/mnscloud/mnscloud-db",
+      String(material.data.dbReleaseTag ?? ""),
+      String(material.data.schemaSha256 ?? ""),
+      (args) => runLocalCommand("git", args, Math.max(config.commandTimeoutMs, 180_000)),
+    );
+    const child = new Deno.Command("python3", {
+      args: [`${releaseDirectory}/scripts/authentication-principal.py`],
+      stdin: "piped",
+      stdout: "piped",
+      stderr: "null",
+    }).spawn();
+    const timer = setTimeout(() => {
+      try {
+        child.kill("SIGKILL");
+      } catch { /* already exited */ }
+    }, 180_000);
+    let output;
+    try {
+      const writer = child.stdin.getWriter();
+      await writer.write(new TextEncoder().encode(JSON.stringify(material.data)));
+      await writer.close();
+      const [stdout, status] = await Promise.all([
+        readCommandOutput(child.stdout, 70000),
+        child.status,
+      ]);
+      output = { success: status.success, stdout };
+    } catch (error) {
+      try {
+        child.kill("SIGKILL");
+      } catch { /* exited */ }
+      await child.status;
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!output.success || output.stdout.length > 70000) {
+      throw new Error("Provisioning adapter failed");
+    }
+    const result = JSON.parse(output.stdout);
+    if (result.ok !== true) throw new Error("Provisioning adapter failed");
+    await jsonRequest(config, `${base}/result`, agentToken, agentUUID, {
+      leaseUUID,
+      ...(result.caPem ? { caPem: result.caPem } : {}),
+    });
+    log("info", "Authentication database operation completed.", { jobUUID: job.jobUUID });
+  } catch {
+    // Do not forward adapter stderr, secret transport errors, SQL or response bodies.
+    await jsonRequest(config, `${base}/result`, agentToken, agentUUID, {
+      leaseUUID,
+      errorCode: "AUTHENTICATION_DATABASE_PROVISION_FAILED",
+    }).catch(() => undefined);
+    log("warn", "Authentication database operation failed.", { jobUUID: job.jobUUID });
+  }
+}
+
 async function executeRuntimeReconcileJob(
   job: LeaseJob,
   config: AgentConfig,
@@ -6408,6 +6553,10 @@ async function pollJobs(
       await executeSoftswitchRuntimeJob(job, config, agentUUID, agentToken);
     } else if (job.jobType === "runtime.update") {
       await executeRuntimeUpdateJob(job, config, agentUUID, agentToken);
+    } else if (job.jobType === "authentication.server.lifecycle") {
+      await executeAuthenticationLifecycleJob(job, config, agentUUID, agentToken);
+    } else if (job.jobType === "authentication.database.principal") {
+      await executeAuthenticationDatabaseJob(job, config, agentUUID, agentToken);
     } else if (job.jobType === "database.schema.reconcile") {
       await executeDatabaseSchemaReconcileJob(job, config, agentUUID, agentToken);
     } else if (job.jobType === "database.table.maintenance") {
