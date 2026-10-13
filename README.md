@@ -486,3 +486,18 @@ table is available for accessibility. Read polling pauses in hidden tabs, stops 
 component destruction and backs off after failures. No SSH or runtime jobs are sent
 when opening a visualization. Raw measurements remain authoritative; displayed bucket
 averages are not claimed as instantaneous values.
+
+## Authentication installation lifecycle
+
+The Agent remains installed/enrolled before Authentication bootstrap. Installing or removing that
+module never replaces Agent identity. The DB host advertises
+`mnscloud.database.authentication.principal.v1` when its schema-release executor and private DB environment exist. It resolves the adapter from
+the control plane's recorded applied DB tag/schema digest using an immutable verified release
+worktree, preserving the DB base checkout. `authentication.database.principal` jobs carry identifiers/leases only; the Agent
+fetches material over its authenticated channel and passes it through stdin to the fixed adapter.
+Sensitive stdout is captured only for the authenticated result callback, never logged.
+
+Installed Authentication hosts advertise `mnscloud.authentication.lifecycle.v1` and execute
+`authentication.server.lifecycle` through the fixed release-owned lifecycle adapter. Rotation and
+uninstall are authorized in the control plane and fenced by host leases; no payload selects a shell
+command or filesystem path. The module preserves Agent configuration, identity and service.
