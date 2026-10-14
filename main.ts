@@ -40,6 +40,7 @@ import {
   parseFilesystems,
   parseNetworkCounters,
   parseNetworkLinks,
+  parsePrivateAddresses,
   type ResourceSample,
 } from "./host-resources.ts";
 type AgentConfig = {
@@ -1346,6 +1347,20 @@ $d=Get-CimInstance Win32_LogicalDisk | Where-Object { $_.DeviceID -eq $o.SystemD
   }
 }
 
+let privateAddressCache: { at: number; addresses: string[] } | null = null;
+/** Private host addresses for prefilling private endpoints; refreshed every 5 minutes. */
+async function collectPrivateAddresses(config: AgentConfig) {
+  if (config.os !== "linux") return undefined;
+  if (privateAddressCache && Date.now() - privateAddressCache.at < 300000) {
+    return privateAddressCache.addresses;
+  }
+  const result = await runLocalCommand("ip", ["-j", "addr", "show"], 5000)
+    .catch(() => ({ code: 1, stdout: "" }));
+  if (result.code !== 0) return undefined;
+  privateAddressCache = { at: Date.now(), addresses: parsePrivateAddresses(result.stdout) };
+  return privateAddressCache.addresses;
+}
+
 let heartbeatInFlight: Promise<void> | null = null;
 function heartbeat(
   config: AgentConfig,
@@ -1429,6 +1444,7 @@ async function performHeartbeat(
     cyberSecurityStatus: cyberSecurityStatus ?? undefined,
     hostMetrics: hostMetrics ?? undefined,
     openvaultStatus: openvaultStatus ?? undefined,
+    privateAddresses: await collectPrivateAddresses(config),
   });
 }
 
@@ -6363,6 +6379,7 @@ async function executeAuthenticationDatabaseJob(
   const identifier = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$|^[a-f0-9]{32}$/i;
   if (!identifier.test(job.jobUUID) || !identifier.test(leaseUUID)) return;
   const base = `/authentication/runtime/database-operations/${job.jobUUID}`;
+  let adapterErrorCode: string | null = null;
   try {
     if (!config.capabilities["mnscloud.database.authentication.principal.v1"]) {
       throw new Error("Capability unavailable");
@@ -6410,11 +6427,18 @@ async function executeAuthenticationDatabaseJob(
     } finally {
       clearTimeout(timer);
     }
-    if (!output.success || output.stdout.length > 70000) {
+    if (output.stdout.length > 70000) throw new Error("Provisioning adapter failed");
+    let result: Record<string, unknown> = {};
+    try {
+      result = JSON.parse(output.stdout);
+    } catch { /* treated as a generic failure below */ }
+    if (!output.success || result.ok !== true) {
+      // Only fixed adapter codes are forwarded; never adapter text.
+      adapterErrorCode = result.errorCode === "AUTHENTICATION_DATABASE_HOST_MISMATCH"
+        ? result.errorCode
+        : null;
       throw new Error("Provisioning adapter failed");
     }
-    const result = JSON.parse(output.stdout);
-    if (result.ok !== true) throw new Error("Provisioning adapter failed");
     await jsonRequest(config, `${base}/result`, agentToken, agentUUID, {
       leaseUUID,
       ...(result.caPem ? { caPem: result.caPem } : {}),
@@ -6424,9 +6448,12 @@ async function executeAuthenticationDatabaseJob(
     // Do not forward adapter stderr, secret transport errors, SQL or response bodies.
     await jsonRequest(config, `${base}/result`, agentToken, agentUUID, {
       leaseUUID,
-      errorCode: "AUTHENTICATION_DATABASE_PROVISION_FAILED",
+      errorCode: adapterErrorCode ?? "AUTHENTICATION_DATABASE_PROVISION_FAILED",
     }).catch(() => undefined);
-    log("warn", "Authentication database operation failed.", { jobUUID: job.jobUUID });
+    log("warn", "Authentication database operation failed.", {
+      jobUUID: job.jobUUID,
+      errorCode: adapterErrorCode ?? "AUTHENTICATION_DATABASE_PROVISION_FAILED",
+    });
   }
 }
 
