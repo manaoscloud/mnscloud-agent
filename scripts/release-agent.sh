@@ -100,8 +100,10 @@ PY
   git add VERSION releases/manifest.json
   git commit -m "Release ${PRODUCT} ${tag}"
   git tag -a "$tag" -m "Release ${PRODUCT} ${tag}"
-  git push origin "HEAD:refs/heads/${release_branch}"
-  git push origin "refs/tags/${tag}"
+  # One atomic push: a failed tag push must not leave the per-version release branch behind,
+  # otherwise a rerun's new release commit is rejected as non-fast-forward. The branch only
+  # carries this candidate's VERSION/manifest commit, so replacing it on retry is safe.
+  git push --atomic --force origin "HEAD:refs/heads/${release_branch}" "refs/tags/${tag}"
 fi
 
 if [[ -n "${GH_TOKEN:-${GITHUB_TOKEN:-}}" ]]; then
