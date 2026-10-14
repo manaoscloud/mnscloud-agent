@@ -795,6 +795,7 @@ main() {
   run "cp '${AGENT_SOURCE_DIR}/nginx-webapps.ts' '${install_dir}/nginx-webapps.ts'"
   run "cp '${AGENT_SOURCE_DIR}/database-maintenance.ts' '${install_dir}/database-maintenance.ts'"
   run "cp '${AGENT_SOURCE_DIR}/runtime-reconcile.ts' '${install_dir}/runtime-reconcile.ts'"
+  run "cp '${AGENT_SOURCE_DIR}/pabx-state.ts' '${install_dir}/pabx-state.ts'"
   run "cp '${AGENT_SOURCE_DIR}/deno.jsonc' '${install_dir}/deno.jsonc'"
   write_agent_build_metadata "$install_dir" "$(agent_version)" "$(agent_build_ref)"
 

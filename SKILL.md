@@ -299,3 +299,8 @@ plans and diagnostics, without storing migration credentials in them.
 Workers DNS enablement uses the existing `runtime.reconcile` executor with the fixed
 `mnscloud-workers` / `workers.handlers` registry entry. Do not add a generic shell or env-write job.
 Validate `runtime-reconcile_test.ts` when changing registry/capability behavior.
+
+PABX runtime mutations require `voip.pabx.reconcile.v2` and a fenced renewable lease.
+Keep `pabx-state.ts` in both platform installers; run `pabx-state_test.ts`.
+Configuration application, SIP registration and carrier removal confirmation are distinct facts.
+Never restore the obsolete `UNREGED` retirement wait or an unconditional gateway replacement loop.

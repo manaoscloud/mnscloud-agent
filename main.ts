@@ -1,3 +1,4 @@
+import { trunkRegistrationStatus } from "./pabx-state.ts";
 import { collectOpenVaultStatus } from "./openvault-status.ts";
 import { collectWebappsStatus } from "./webapps-status.ts";
 import {
@@ -19,6 +20,7 @@ import { runLane } from "./scheduler.ts";
 import {
   byteBudget,
   captureCommand,
+  diagnosticExcerpt,
   readCommandOutput,
   readJson,
   uploadStream,
@@ -128,6 +130,8 @@ type LeaseJob = {
   localPath?: string | null;
   engine?: string | null;
   commandType?: string | null;
+  leaseToken?: string | null;
+  attempt?: number;
   payload?: Record<string, unknown> | null;
   downloadUrl?: string | null;
   downloadMethod?: string | null;
@@ -333,6 +337,11 @@ async function applyRuntimeCapabilities(config: AgentConfig) {
   config.capabilities["voip.freeswitch.manage"] =
     (await commandAvailable(config.freeswitchCli)) !== null &&
     await isExecutableFile(config.freeswitchRuntimeSyncCommand);
+  config.capabilities["voip.pabx.reconcile.v2"] = config.capabilities["voip.asterisk.manage"] ||
+    (config.capabilities["voip.freeswitch.manage"] &&
+      await pathExists(
+        config.freeswitchRuntimeSyncCommand.replace(/[^/]+$/, "reconcile-freeswitch-runtime.py"),
+      ));
 }
 
 function getConfigValue(
@@ -1485,6 +1494,7 @@ async function failJob(
   code: string,
   message: string,
   jobType = "recording.upload",
+  leaseToken?: string | null,
 ) {
   await jsonRequest(
     config,
@@ -1493,6 +1503,7 @@ async function failJob(
     agentUUID,
     {
       jobType,
+      leaseToken,
       errorCode: code,
       message,
     },
@@ -1860,10 +1871,10 @@ const PABX_EXTENSION_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9_.+*-]{0,127}$/;
 const MAX_DIAGNOSTIC_OUTPUT_LENGTH = 24_000;
 
 function diagnosticOutput(value: string) {
-  return value
-    .replace(/(password|secret|authorization)\s*[:=]\s*[^\s,;]+/gi, "$1=[REDACTED]")
-    .slice(0, MAX_DIAGNOSTIC_OUTPUT_LENGTH)
-    .trim();
+  return diagnosticExcerpt(
+    value.replace(/(password|secret|authorization)\s*[:=]\s*[^\s,;]+/gi, "$1=[REDACTED]"),
+    MAX_DIAGNOSTIC_OUTPUT_LENGTH,
+  );
 }
 
 function commandOutputFailed(result: { code: number; stdout: string; stderr: string }) {
@@ -1874,74 +1885,6 @@ function commandOutputFailed(result: { code: number; stdout: string; stderr: str
 
 function freeswitchGatewayState(output: string) {
   return output.match(/^\s*State\s+([^\s]+)/mi)?.[1]?.toUpperCase() ?? null;
-}
-
-async function waitForFreeSwitchGatewayUnregistration(
-  config: AgentConfig,
-  runtimeName: string,
-) {
-  const deadline = Date.now() + 30_000;
-  let lastOutput = "";
-
-  while (Date.now() < deadline) {
-    const status = await runLocalCommand(
-      config.freeswitchCli,
-      ["-x", `sofia status gateway ${runtimeName}`],
-      config.commandTimeoutMs,
-    );
-    lastOutput = `${status.stdout}\n${status.stderr}`;
-    const state = freeswitchGatewayState(lastOutput);
-
-    // Sofia reports UNREGISTER while an unregister is queued and UNREGED only
-    // after the gateway has returned to its unregistered state.
-    if (state === "UNREGED") return { state, output: lastOutput };
-    if (/invalid gateway!/i.test(lastOutput)) {
-      throw new Error(
-        `FreeSWITCH gateway ${runtimeName} disappeared before unregistration was confirmed.`,
-      );
-    }
-    await new Promise((resolve) => setTimeout(resolve, 1_000));
-  }
-
-  throw new Error(
-    `Timed out waiting for FreeSWITCH to confirm unregistration of ${runtimeName}. ` +
-      `Last Sofia state: ${freeswitchGatewayState(lastOutput) ?? "unknown"}.`,
-  );
-}
-
-function trunkRegistrationStatus(engine: string, output: string, exitCode: number) {
-  const normalized = output.toLowerCase();
-  if (/invalid gateway!|not found/.test(normalized)) return "not_configured";
-  if (exitCode !== 0) return "failed";
-
-  if (engine === "freeswitch") {
-    // `sofia status gateway` includes counters such as FailedCallsIN even when a
-    // gateway is registered. Read its explicit state fields instead of scanning
-    // the whole command output for generic failure words.
-    const valueFor = (label: string) =>
-      output.match(new RegExp(`^\\s*${label}\\s+(.+?)\\s*$`, "im"))?.[1]?.trim().toLowerCase() ??
-        "";
-    const state = valueFor("State");
-    const status = valueFor("Status");
-
-    if (state === "reged" && status === "up") return "registered";
-    if (
-      state === "register" || state === "trying" || state === "registering" ||
-      status === "trying"
-    ) return "registering";
-    if (state === "unreged" || status === "down") return "not_registered";
-    if (/^\s*-err\b|^\s*error\s*:/im.test(output)) return "failed";
-    return "unknown";
-  }
-
-  if (/error|fail|unreachable|timeout|forbidden|rejected/.test(normalized)) return "failed";
-  if (engine === "asterisk") {
-    if (/unregistered|not registered|rejected|failed|unavailable/.test(normalized)) {
-      return "not_registered";
-    }
-    if (/registered|available|success/.test(normalized)) return "registered";
-  }
-  return "unknown";
 }
 
 async function runPabxTrunkRegistrationDiagnostic(
@@ -2127,6 +2070,41 @@ async function executePabxCommandJob(
   agentUUID: string,
   agentToken: string,
 ) {
+  if (!job.leaseToken && ["runtime.sync", "trunk.unregister"].includes(job.commandType ?? "")) {
+    log("warn", "PABX mutation requires the fenced lease protocol.", { jobUUID: job.jobUUID });
+    return;
+  }
+  const renew = () =>
+    jsonRequest(config, `/agent/jobs/${job.jobUUID}/progress`, agentToken, agentUUID, {
+      jobType: "pabx.command",
+      leaseToken: job.leaseToken,
+      step: "reconciling",
+    });
+  if (job.leaseToken) await renew();
+  let renewal: Promise<unknown> = Promise.resolve();
+  const timer = job.leaseToken
+    ? setInterval(() => {
+      renewal = renewal.then(renew).catch(() => {
+        log("warn", "PABX lease renewal failed; completion remains fenced.", {
+          jobUUID: job.jobUUID,
+        });
+      });
+    }, 30_000)
+    : undefined;
+  try {
+    await executePabxCommandJobInner(job, config, agentUUID, agentToken);
+  } finally {
+    if (timer !== undefined) clearInterval(timer);
+    await renewal;
+  }
+}
+
+async function executePabxCommandJobInner(
+  job: LeaseJob,
+  config: AgentConfig,
+  agentUUID: string,
+  agentToken: string,
+) {
   const engine = String(job.engine ?? "").toLowerCase();
   const commandType = String(job.commandType ?? "");
   if (
@@ -2148,6 +2126,7 @@ async function executePabxCommandJob(
       "COMMAND_NOT_ALLOWED",
       `Unsupported PABX command type: ${commandType || "empty"}`,
       "pabx.command",
+      job.leaseToken,
     );
     return;
   }
@@ -2176,6 +2155,7 @@ async function executePabxCommandJob(
           "COMMAND_FAILED",
           stderr || stdout || `Exit code ${result.code}`,
           "pabx.command",
+          job.leaseToken,
         );
         return;
       }
@@ -2186,6 +2166,7 @@ async function executePabxCommandJob(
         agentUUID,
         {
           jobType: "pabx.command",
+          leaseToken: job.leaseToken,
           result: {
             engine,
             commandType,
@@ -2211,6 +2192,78 @@ async function executePabxCommandJob(
       return;
     }
 
+    if (engine === "freeswitch" && ["runtime.sync", "trunk.unregister"].includes(commandType)) {
+      if (!config.capabilities["voip.freeswitch.manage"]) {
+        throw new Error("FreeSWITCH capability unavailable");
+      }
+      const applied = await runConfiguredShell(config.freeswitchRuntimeSyncCommand, 180_000);
+      const observation = JSON.parse(applied.stdout.trim().split("\n").at(-1) ?? "{}");
+      if (
+        observation.configurationApplied !== true || !Array.isArray(observation.desiredGatewayNames)
+      ) {
+        throw new Error("FreeSWITCH module does not support verified reconciliation");
+      }
+      const runtimeName = payloadString(job.payload, "runtimeName").toLowerCase();
+      if (runtimeName && !PABX_TRUNK_RUNTIME_NAME.test(runtimeName)) {
+        throw new Error("Invalid runtime name");
+      }
+      const desired = observation.desiredGatewayNames.includes(runtimeName);
+      const requestedRemoval = commandType === "trunk.unregister" ||
+        payloadString(job.payload, "runtimeOperation") === "remove";
+      const superseded = Boolean(runtimeName) && requestedRemoval === desired;
+      let registrationStatus = "not_applicable";
+      if (runtimeName && desired) {
+        const deadline = Date.now() + 60_000;
+        do {
+          const status = await runLocalCommand(config.freeswitchCli, [
+            "-x",
+            `sofia status gateway ${runtimeName}`,
+          ], config.commandTimeoutMs);
+          registrationStatus = trunkRegistrationStatus(engine, status.stdout, status.code);
+          if (
+            registrationStatus === "registered" || registrationStatus === "failed" ||
+            registrationStatus === "not_configured"
+          ) break;
+          if (job.payload?.registrationEnabled !== true) break;
+          await new Promise((resolve) => setTimeout(resolve, 1_000));
+        } while (Date.now() < deadline);
+      }
+      const result = {
+        ...observation,
+        engine,
+        commandType,
+        runtimeName,
+        registrationStatus,
+        superseded,
+        remoteRemoval: "unconfirmed",
+        unregistrationConfirmed: false,
+        convergenceStatus: desired && job.payload?.registrationEnabled === true &&
+            registrationStatus !== "registered"
+          ? "registration_pending"
+          : "converged",
+        observedAt: new Date().toISOString(),
+      };
+      // Retrying an acknowledgement never repeats the runtime mutation.
+      for (let attempt = 0;; attempt++) {
+        try {
+          await jsonRequest(config, `/agent/jobs/${job.jobUUID}/complete`, agentToken, agentUUID, {
+            jobType: "pabx.command",
+            leaseToken: job.leaseToken,
+            result,
+          });
+          break;
+        } catch (error) {
+          if (attempt >= 3) throw error;
+          await new Promise((resolve) => setTimeout(resolve, 2_000));
+        }
+      }
+      log("info", "PABX runtime configuration verified.", {
+        jobUUID: job.jobUUID,
+        registrationStatus,
+      });
+      return;
+    }
+
     if (commandType === "trunk.unregister") {
       const runtimeName = payloadString(job.payload, "runtimeName").toLowerCase();
       if (!PABX_TRUNK_RUNTIME_NAME.test(runtimeName)) {
@@ -2226,75 +2279,7 @@ async function executePabxCommandJob(
       let reconcileArgs: string[] = [];
       let unregistrationState: string | null = null;
 
-      if (engine === "freeswitch") {
-        if (!config.capabilities["voip.freeswitch.manage"]) {
-          throw new Error(
-            "FreeSWITCH runtime synchronization capability is unavailable on this Agent.",
-          );
-        }
-
-        const loaded = await runLocalCommand(
-          config.freeswitchCli,
-          ["-x", `sofia status gateway ${runtimeName}`],
-          config.commandTimeoutMs,
-        );
-        if (loaded.code !== 0 || /invalid gateway!/i.test(`${loaded.stdout}\n${loaded.stderr}`)) {
-          throw new Error(
-            `Cannot unregister FreeSWITCH gateway ${runtimeName}: it is not loaded locally. ` +
-              "The carrier registration can only expire unless the trunk is recreated and removed again.",
-          );
-        }
-
-        unregisterCommand = config.freeswitchCli;
-        unregisterArgs = ["-x", `sofia profile external unregister ${runtimeName}`];
-        unregisterResult = await runLocalCommand(
-          unregisterCommand,
-          unregisterArgs,
-          config.commandTimeoutMs,
-        );
-        if (commandOutputFailed(unregisterResult)) {
-          throw new Error(
-            `FreeSWITCH unregistration request failed for ${runtimeName}: ` +
-              `${
-                diagnosticOutput(`${unregisterResult.stdout}\n${unregisterResult.stderr}`) ||
-                "no output"
-              }`,
-          );
-        }
-
-        const unregistration = await waitForFreeSwitchGatewayUnregistration(
-          config,
-          runtimeName,
-        );
-        unregistrationState = unregistration.state;
-
-        reconcileCommand = `MNSCLOUD_FREESWITCH_RETIRE_GATEWAYS=${runtimeName} ` +
-          config.freeswitchRuntimeSyncCommand;
-        reconcileResult = await runConfiguredShell(
-          reconcileCommand,
-          Math.max(config.commandTimeoutMs, 180_000),
-        );
-        if (commandOutputFailed(reconcileResult)) {
-          throw new Error(
-            `FreeSWITCH runtime reconciliation failed after unregistering ${runtimeName}: ` +
-              `${
-                diagnosticOutput(`${reconcileResult.stdout}\n${reconcileResult.stderr}`) ||
-                "no output"
-              }`,
-          );
-        }
-
-        verificationResult = await runLocalCommand(
-          config.freeswitchCli,
-          ["-x", `sofia status gateway ${runtimeName}`],
-          config.commandTimeoutMs,
-        );
-        if (
-          !/invalid gateway!/i.test(`${verificationResult.stdout}\n${verificationResult.stderr}`)
-        ) {
-          throw new Error(`FreeSWITCH gateway ${runtimeName} remains loaded after removal.`);
-        }
-      } else if (engine === "asterisk") {
+      if (engine === "asterisk") {
         if (!config.capabilities["voip.asterisk.manage"]) {
           throw new Error("Asterisk management capability is unavailable on this Agent.");
         }
@@ -2355,12 +2340,14 @@ async function executePabxCommandJob(
 
       await jsonRequest(config, `/agent/jobs/${job.jobUUID}/complete`, agentToken, agentUUID, {
         jobType: "pabx.command",
+        leaseToken: job.leaseToken,
         result: {
           engine,
           commandType,
           runtimeName,
-          unregistrationRequested: true,
-          unregistrationConfirmed: engine === "freeswitch",
+          unregistrationRequested: engine === "asterisk",
+          unregistrationConfirmed: false,
+          remoteRemoval: "unconfirmed",
           unregistrationState,
           runtimeRemoved: true,
           observedAt: new Date().toISOString(),
@@ -2390,15 +2377,7 @@ async function executePabxCommandJob(
       const runtimeOperation = payloadString(job.payload, "runtimeOperation", "upsert");
       const registrationEnabled = job.payload?.["registrationEnabled"] === true ||
         job.payload?.["registrationEnabled"] === 1 || job.payload?.["registrationEnabled"] === "1";
-      if (engine === "freeswitch") {
-        if (!config.capabilities["voip.freeswitch.manage"]) {
-          throw new Error(
-            "FreeSWITCH runtime synchronization capability is unavailable on this Agent.",
-          );
-        }
-        command = config.freeswitchRuntimeSyncCommand;
-        result = await runConfiguredShell(command, Math.max(config.commandTimeoutMs, 180_000));
-      } else if (engine === "asterisk") {
+      if (engine === "asterisk") {
         if (!config.capabilities["voip.asterisk.manage"]) {
           throw new Error("Asterisk management capability is unavailable on this Agent.");
         }
@@ -2420,47 +2399,26 @@ async function executePabxCommandJob(
 
       let verification = "";
       let registrationStatus = "not_applicable";
-      if (runtimeName && engine === "freeswitch") {
-        const gateway = await runLocalCommand(
-          config.freeswitchCli,
-          ["-x", `sofia status gateway ${runtimeName}`],
-          config.commandTimeoutMs,
-        );
-        verification = diagnosticOutput(`${gateway.stdout}\n${gateway.stderr}`);
-        if (runtimeOperation === "remove") {
-          if (!/invalid gateway!/i.test(verification)) {
-            throw new Error(`Removed gateway ${runtimeName} is still loaded.`);
-          }
-        } else {
-          if (gateway.code !== 0 || /invalid gateway!/i.test(verification)) {
-            throw new Error(
-              `Gateway ${runtimeName} was not loaded after runtime synchronization: ${
-                verification || "no output"
-              }`,
-            );
-          }
-          if (registrationEnabled) {
-            const register = await runLocalCommand(
-              config.freeswitchCli,
-              ["-x", `sofia profile external register ${runtimeName}`],
-              config.commandTimeoutMs,
-            );
-            verification = diagnosticOutput(
-              `${verification}\n${register.stdout}\n${register.stderr}`,
-            );
-            if (register.code !== 0 || /-ERR|invalid gateway!/i.test(verification)) {
-              throw new Error(
-                `Gateway ${runtimeName} registration command failed: ${
-                  verification || "no output"
-                }`,
-              );
-            }
-          }
-          registrationStatus = trunkRegistrationStatus("freeswitch", verification, 0);
-        }
+      if (runtimeName) {
+        if (!PABX_TRUNK_RUNTIME_NAME.test(runtimeName)) throw new Error("Invalid runtime name");
+        const deadline = Date.now() + 60_000;
+        do {
+          const observation = await runLocalCommand(config.asteriskCli, [
+            "-rx",
+            `pjsip show registration ${runtimeName}`,
+          ], config.commandTimeoutMs);
+          verification = diagnosticOutput(observation.stdout);
+          registrationStatus = trunkRegistrationStatus("asterisk", verification, observation.code);
+          if (
+            !registrationEnabled || registrationStatus === "registered" ||
+            registrationStatus === "failed" || registrationStatus === "not_configured"
+          ) break;
+          await new Promise((resolve) => setTimeout(resolve, 1_000));
+        } while (Date.now() < deadline);
       }
       await jsonRequest(config, `/agent/jobs/${job.jobUUID}/complete`, agentToken, agentUUID, {
         jobType: "pabx.command",
+        leaseToken: job.leaseToken,
         result: {
           engine,
           commandType,
@@ -2468,9 +2426,13 @@ async function executePabxCommandJob(
           runtimeOperation,
           registrationEnabled,
           registrationStatus,
+          configurationApplied: true,
+          convergenceStatus: registrationEnabled && registrationStatus !== "registered"
+            ? "registration_pending"
+            : "converged",
           observedAt: new Date().toISOString(),
           command,
-          method: engine === "freeswitch" ? "local-runtime-sync" : "pjsip-reload",
+          method: "pjsip-reload",
           exitCode: result.code,
           stdout: diagnosticOutput(`${result.stdout}\n${verification}`),
           stderr: diagnosticOutput(result.stderr),
@@ -2492,6 +2454,7 @@ async function executePabxCommandJob(
           agentUUID,
           {
             jobType: "pabx.command",
+            leaseToken: job.leaseToken,
             result: {
               engine,
               commandType,
@@ -2520,6 +2483,7 @@ async function executePabxCommandJob(
         agentUUID,
         {
           jobType: "pabx.command",
+          leaseToken: job.leaseToken,
           result: {
             engine,
             commandType,
@@ -2628,6 +2592,7 @@ async function executePabxCommandJob(
         agentUUID,
         {
           jobType: "pabx.command",
+          leaseToken: job.leaseToken,
           result: {
             engine,
             commandType,
@@ -2675,6 +2640,7 @@ async function executePabxCommandJob(
         "ENGINE_NOT_SUPPORTED",
         `Unsupported PABX engine: ${engine || "empty"}`,
         "pabx.command",
+        job.leaseToken,
       );
       return;
     }
@@ -2688,6 +2654,7 @@ async function executePabxCommandJob(
         "COMMAND_FAILED",
         result.stderr || result.stdout || `Exit code ${result.code}`,
         "pabx.command",
+        job.leaseToken,
       );
       return;
     }
@@ -2699,6 +2666,7 @@ async function executePabxCommandJob(
       agentUUID,
       {
         jobType: "pabx.command",
+        leaseToken: job.leaseToken,
         result: {
           engine,
           commandType,
@@ -2725,6 +2693,7 @@ async function executePabxCommandJob(
       "COMMAND_EXECUTION_FAILED",
       String(error),
       "pabx.command",
+      job.leaseToken,
     );
   }
 }
