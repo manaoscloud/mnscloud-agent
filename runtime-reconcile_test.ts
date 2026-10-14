@@ -151,3 +151,40 @@ Deno.test("Workers reconcile selects the module-owned adapter and fixed env", ()
   assertEquals(registry.adapter, "scripts/reconcile-runtime-config.py");
   assertThrows(() => parseRuntimeReconcileJob({ ...request, resource: "arbitrary.command" }));
 });
+
+Deno.test("WebApps and nginx edge reconcile select their module adapters and fixed env files", () => {
+  const cases = [
+    {
+      product: "mnscloud-webapps",
+      resource: "webapps.apps",
+      desired: { WEBAPPS_ENABLED_APPS: "phoneweb,pulse,customer-portal" },
+      repo: "/opt/mnscloud/mnscloud-webapps",
+      env: "/etc/mnscloud/webapps/webapps.env",
+    },
+    {
+      product: "mnscloud-nginx",
+      resource: "nginx.webapps",
+      desired: { MNSCLOUD_CUSTOMER_PORTAL_PATH: "" },
+      repo: "/opt/mnscloud/mnscloud-nginx",
+      env: "/etc/mnscloud/nginx.env",
+    },
+  ];
+  for (const item of cases) {
+    const request = parseRuntimeReconcileJob({
+      product: item.product,
+      releaseTag: "v0.1.20",
+      resource: item.resource,
+      stage: "plan",
+      desired: item.desired,
+    });
+    const registry = RUNTIME_RECONCILE_PRODUCTS[request.product];
+    assertEquals(registry.repo, item.repo);
+    assertEquals(registry.envPath, item.env);
+    assertEquals(registry.adapter, "scripts/reconcile-runtime-config.py");
+    assertEquals(
+      registry.origin.test(`https://github.com/manaoscloud/${item.product}.git`),
+      true,
+    );
+    assertThrows(() => parseRuntimeReconcileJob({ ...request, resource: "workers.handlers" }));
+  }
+});

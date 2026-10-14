@@ -71,6 +71,8 @@ type AgentConfig = {
   nginxEdgeWebappsEnabled: boolean;
   nginxEdgeWebappsUpstream: string;
   nginxEdgeWebappsPaths: string[];
+  /** Agent ini overrides; /etc/mnscloud/nginx.env is re-read before every nginx edge job. */
+  nginxEdgeWebappsIni: NginxEdgeWebappsIni;
   nginxEdgeTestCommand: string;
   nginxEdgeReloadCommand: string;
   certbotCommand: string;
@@ -400,6 +402,43 @@ function envBoolean(value: string | undefined, fallback: boolean) {
 }
 
 const DEFAULT_NGINX_EDGE_WEBAPPS_PATHS = "/phoneweb/,/pulse/,/customer-portal/";
+const NGINX_RUNTIME_ENV_PATH = "/etc/mnscloud/nginx.env";
+
+type NginxEdgeWebappsIni = {
+  enabled: string | null;
+  upstream: string | null;
+  paths: string;
+};
+
+function nginxEdgeWebappsIni(parsed: IniConfig): NginxEdgeWebappsIni {
+  return {
+    enabled: parsed["nginx.edge"]?.webapps_enabled ?? parsed.default?.webapps_enabled ?? null,
+    upstream: parsed["nginx.edge"]?.webapps_upstream ?? parsed.default?.webapps_upstream ?? null,
+    paths: getConfigValue(parsed, "nginx.edge", "webapps_paths", DEFAULT_NGINX_EDGE_WEBAPPS_PATHS),
+  };
+}
+
+/**
+ * Effective ThemeDomain webapps settings: the edge env (managed by the nginx.webapps reconcile)
+ * plus Agent ini overrides. Paths published in nginx.env are always added to the configured
+ * list, so every ThemeDomain server block carries the same webapps paths as the edge template.
+ */
+function nginxEdgeWebapps(ini: NginxEdgeWebappsIni, env: Record<string, string>) {
+  const envEnabled = envBoolean(env.MNSCLOUD_ENABLE_WEBAPPS_PROXY, false);
+  return {
+    nginxEdgeWebappsEnabled: envBoolean(ini.enabled ?? undefined, envEnabled) || envEnabled,
+    nginxEdgeWebappsUpstream: ini.upstream ?? env.MNSCLOUD_WEBAPPS_UPSTREAM ?? "$webapps_upstream",
+    nginxEdgeWebappsPaths: [...parseList(ini.paths), ...nginxWebappsPathsFromEnv(env)],
+  };
+}
+
+/** Re-reads nginx.env so a reconciled webapps path reaches ThemeDomains without a restart. */
+async function refreshNginxEdgeWebapps(config: AgentConfig) {
+  Object.assign(
+    config,
+    nginxEdgeWebapps(config.nginxEdgeWebappsIni, await loadKeyValueEnv(NGINX_RUNTIME_ENV_PATH)),
+  );
+}
 
 function nginxWebappsPathsFromEnv(values: Record<string, string>) {
   return parseList(
@@ -415,7 +454,7 @@ function nginxWebappsPathsFromEnv(values: Record<string, string>) {
 async function loadConfig(): Promise<AgentConfig> {
   const parsed = parseIni(await Deno.readTextFile(CONFIG_PATH));
   const build = await loadBuildMetadata();
-  const nginxRuntimeEnv = await loadKeyValueEnv("/etc/mnscloud/nginx.env");
+  const nginxRuntimeEnv = await loadKeyValueEnv(NGINX_RUNTIME_ENV_PATH);
   const defaultStateDir = IS_WINDOWS
     ? `${PROGRAM_DATA}\\MNSCloud\\Agent`
     : "/var/lib/mnscloud/agent";
@@ -568,32 +607,8 @@ async function loadConfig(): Promise<AgentConfig> {
       "api_upstream",
       "$api_upstream",
     ),
-    nginxEdgeWebappsEnabled: getBoolean(
-      parsed,
-      "nginx.edge",
-      "webapps_enabled",
-      envBoolean(nginxRuntimeEnv.MNSCLOUD_ENABLE_WEBAPPS_PROXY, false),
-    ) || envBoolean(nginxRuntimeEnv.MNSCLOUD_ENABLE_WEBAPPS_PROXY, false),
-    nginxEdgeWebappsUpstream: getConfigValue(
-      parsed,
-      "nginx.edge",
-      "webapps_upstream",
-      nginxRuntimeEnv.MNSCLOUD_WEBAPPS_UPSTREAM ?? "$webapps_upstream",
-    ),
-    // Paths published in /etc/mnscloud/nginx.env are always added to the configured list, so
-    // every ThemeDomain server block carries the same webapps paths as the edge template even
-    // when an older agent config still pins a shorter webapps_paths list.
-    nginxEdgeWebappsPaths: [
-      ...parseList(
-        getConfigValue(
-          parsed,
-          "nginx.edge",
-          "webapps_paths",
-          DEFAULT_NGINX_EDGE_WEBAPPS_PATHS,
-        ),
-      ),
-      ...nginxWebappsPathsFromEnv(nginxRuntimeEnv),
-    ],
+    nginxEdgeWebappsIni: nginxEdgeWebappsIni(parsed),
+    ...nginxEdgeWebapps(nginxEdgeWebappsIni(parsed), nginxRuntimeEnv),
     nginxEdgeTestCommand: getConfigValue(
       parsed,
       "nginx.edge",
@@ -3155,6 +3170,7 @@ async function executeNginxEdgeJob(
   );
   const domain = normalizeDomain(payloadString(job.payload, "domain"));
   try {
+    await refreshNginxEdgeWebapps(config);
     let result: Record<string, unknown>;
     if (command === "nginx.edge.domain.activate") {
       result = await activateNginxEdgeDomain(config, domain);
