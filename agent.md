@@ -104,6 +104,12 @@ When either capability is active, the heartbeat also reports the installed local
 that product. The API compares this host inventory against the published release manifest before
 exposing an update action in the App. A release alone is not enough to mark API/App as updateable.
 
+On hosts with `mnscloud.webapps.update` the heartbeat also carries `webapps`: one entry per enabled
+app from the read-only `scripts/status-webapps.sh --json` of `mnscloud-webapps` (app, base path,
+source/ref, installed and resolved release, last sync status/time and a one-line error). The Agent
+validates the fields and never sends configuration values beyond them. A `runtime.update` job for
+`mnscloud-webapps` may carry `app` (and optional `appRef`) to update a single app.
+
 ## Database Table Maintenance
 
 On Linux database hosts the Agent declares `mnscloud.database.table.maintenance.v1` when the

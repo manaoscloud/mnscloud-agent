@@ -1,5 +1,6 @@
 import { trunkRegistrationStatus } from "./pabx-state.ts";
 import { collectOpenVaultStatus } from "./openvault-status.ts";
+import { collectWebappsStatus } from "./webapps-status.ts";
 import { prepareSchemaRelease } from "./schema-release.ts";
 import {
   adapterArgs,
@@ -1400,6 +1401,10 @@ async function performHeartbeat(
   const openvaultStatus = config.capabilities["mnscloud.openvault.update"]
     ? await collectOpenVaultStatus()
     : null;
+  // Webapps hosts report each app's installed/resolved release and last sync result.
+  const webapps = config.capabilities["mnscloud.webapps.update"]
+    ? await collectWebappsStatus()
+    : null;
   await jsonRequest(config, "/agent/heartbeat", agentToken, agentUUID, {
     name: config.name,
     hostname: config.hostname,
@@ -1414,6 +1419,7 @@ async function performHeartbeat(
     mediaRoots: config.mediaRoots,
     mediaMounts: config.mediaMounts,
     runtimeVersions,
+    webapps: webapps ?? undefined,
     capabilities: config.capabilities,
     sbcRuntime: sbcNodeUUID
       ? {
