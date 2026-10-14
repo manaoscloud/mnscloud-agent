@@ -20,6 +20,7 @@ import { runLane } from "./scheduler.ts";
 import {
   byteBudget,
   captureCommand,
+  diagnosticExcerpt,
   readCommandOutput,
   readJson,
   uploadStream,
@@ -1870,10 +1871,10 @@ const PABX_EXTENSION_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9_.+*-]{0,127}$/;
 const MAX_DIAGNOSTIC_OUTPUT_LENGTH = 24_000;
 
 function diagnosticOutput(value: string) {
-  return value
-    .replace(/(password|secret|authorization)\s*[:=]\s*[^\s,;]+/gi, "$1=[REDACTED]")
-    .slice(0, MAX_DIAGNOSTIC_OUTPUT_LENGTH)
-    .trim();
+  return diagnosticExcerpt(
+    value.replace(/(password|secret|authorization)\s*[:=]\s*[^\s,;]+/gi, "$1=[REDACTED]"),
+    MAX_DIAGNOSTIC_OUTPUT_LENGTH,
+  );
 }
 
 function commandOutputFailed(result: { code: number; stdout: string; stderr: string }) {

@@ -1,5 +1,12 @@
 import { assert, assertEquals, assertRejects } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { byteBudget, captureCommand, readJson, uploadStream, withResponse } from "./bounded-io.ts";
+import {
+  byteBudget,
+  captureCommand,
+  diagnosticExcerpt,
+  readJson,
+  uploadStream,
+  withResponse,
+} from "./bounded-io.ts";
 import { runLane } from "./scheduler.ts";
 
 function command(code: string, timeout = 5000, limit = 4 * 1024 * 1024) {
@@ -192,4 +199,16 @@ Deno.test("upload failure closes transport even when the source becomes shorter"
     await server.shutdown();
     await Deno.remove(path);
   }
+});
+
+Deno.test("diagnostic excerpts preserve a hidden failure and the final outcome within budget", () => {
+  const value = "setup start\n" + "normal setup\n".repeat(4000) +
+    "Last failed command: reconcile\nERROR: activation failed\n" +
+    "normal rollback\n".repeat(4000) + "rollback complete";
+  const output = diagnosticExcerpt(value);
+  assertEquals(output.length, 24_000);
+  assert(output.startsWith("setup start"));
+  assert(output.includes("ERROR: activation failed"));
+  assert(output.endsWith("rollback complete"));
+  assertEquals(diagnosticExcerpt("short output"), "short output");
 });

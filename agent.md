@@ -705,3 +705,5 @@ resumes through the module journal and current desired state, not an obsolete sh
 Deploy DB, API, FreeSWITCH module, then Agent. Older Agents cannot lease PABX mutations after the
 DB protocol update. Other typed jobs retain their existing contracts. Validate `pabx-state_test.ts`
 and the FreeSWITCH module behavioral suite, then verify registration and renewal in DEV.
+
+Runtime update diagnostics retain bounded failure highlights and the output tail so verbose setup or rollback cannot hide the failing step.

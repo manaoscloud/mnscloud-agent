@@ -164,3 +164,22 @@ export async function uploadStream(
     await Promise.allSettled([sending, response]);
   }
 }
+
+/** Keep failure evidence even when verbose setup or rollback fills the output budget. */
+export function diagnosticExcerpt(value: string, limit = 24_000): string {
+  const text = value.trim();
+  if (text.length <= limit) return text;
+  const lines = text.split("\n");
+  const evidence = new Set<number>();
+  for (let index = 0; index < lines.length; index++) {
+    if (
+      /error|failed|failure|traceback|exception|last failed command|not found/i.test(lines[index])
+    ) {
+      for (let offset = Math.max(0, index - 2); offset <= index; offset++) evidence.add(offset);
+    }
+  }
+  const highlights = [...evidence].map((index) => lines[index]).join("\n").slice(-6_000);
+  const prefix = text.slice(0, 3_000) + "\n[OUTPUT TRUNCATED; FAILURE HIGHLIGHTS]\n" + highlights +
+    "\n[OUTPUT TAIL]\n";
+  return prefix + text.slice(-(limit - prefix.length));
+}
