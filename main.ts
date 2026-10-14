@@ -398,11 +398,14 @@ function envBoolean(value: string | undefined, fallback: boolean) {
   return fallback;
 }
 
+const DEFAULT_NGINX_EDGE_WEBAPPS_PATHS = "/phoneweb/,/pulse/,/customer-portal/";
+
 function nginxWebappsPathsFromEnv(values: Record<string, string>) {
   return parseList(
     [
       values.MNSCLOUD_PHONEWEB_PATH,
       values.MNSCLOUD_PULSE_PATH,
+      values.MNSCLOUD_CUSTOMER_PORTAL_PATH,
       values.MNSCLOUD_WEBAPPS_PATHS,
     ].filter(Boolean).join(","),
   );
@@ -576,14 +579,20 @@ async function loadConfig(): Promise<AgentConfig> {
       "webapps_upstream",
       nginxRuntimeEnv.MNSCLOUD_WEBAPPS_UPSTREAM ?? "$webapps_upstream",
     ),
-    nginxEdgeWebappsPaths: parseList(
-      getConfigValue(
-        parsed,
-        "nginx.edge",
-        "webapps_paths",
-        nginxWebappsPathsFromEnv(nginxRuntimeEnv).join(",") || "/phoneweb/,/pulse/",
+    // Paths published in /etc/mnscloud/nginx.env are always added to the configured list, so
+    // every ThemeDomain server block carries the same webapps paths as the edge template even
+    // when an older agent config still pins a shorter webapps_paths list.
+    nginxEdgeWebappsPaths: [
+      ...parseList(
+        getConfigValue(
+          parsed,
+          "nginx.edge",
+          "webapps_paths",
+          DEFAULT_NGINX_EDGE_WEBAPPS_PATHS,
+        ),
       ),
-    ),
+      ...nginxWebappsPathsFromEnv(nginxRuntimeEnv),
+    ],
     nginxEdgeTestCommand: getConfigValue(
       parsed,
       "nginx.edge",
