@@ -103,3 +103,36 @@ export function parseNetworkLinks(text: string) {
   } catch { /* Interface state is optional; do not invent a state. */ }
   return result;
 }
+
+/** Private host addresses from `ip -j addr show` (RFC 1918, 100.64/10, IPv6 ULA), at most 16. */
+export function parsePrivateAddresses(text: string): string[] {
+  let links: unknown;
+  try {
+    links = JSON.parse(text);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(links)) return [];
+  const result: string[] = [];
+  for (const link of links) {
+    const entries = (link as { addr_info?: unknown })?.addr_info;
+    if (!Array.isArray(entries)) continue;
+    for (const entry of entries) {
+      const local = String((entry as { local?: unknown })?.local ?? "").toLowerCase();
+      if (isPrivateAddress(local) && !result.includes(local)) result.push(local);
+      if (result.length === 16) return result;
+    }
+  }
+  return result;
+}
+
+function isPrivateAddress(address: string) {
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(address);
+  if (v4) {
+    const [a, b] = [Number(v4[1]), Number(v4[2])];
+    if (v4.slice(1).some((part) => Number(part) > 255)) return false;
+    return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) ||
+      (a === 100 && b >= 64 && b <= 127);
+  }
+  return /^f[cd][0-9a-f]{0,2}:[0-9a-f:]*$/.test(address);
+}

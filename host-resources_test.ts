@@ -1,4 +1,4 @@
-import { parseFilesystems, parseNetworkCounters } from "./host-resources.ts";
+import { parseFilesystems, parseNetworkCounters, parsePrivateAddresses } from "./host-resources.ts";
 function check(value: unknown) {
   if (!value) throw new Error("Assertion failed");
 }
@@ -26,4 +26,28 @@ Deno.test("interface recreation invalidates deltas even when counters increase",
   const sample =
     parseNetworkCounters(line(10000), 11000, cache, new Map([["eth0", { index: 2, up: 1 }]]))[0];
   check(sample.values.rx_bps === undefined && sample.values.link_up === 1);
+});
+
+Deno.test("private addresses come from ip -j addr, private ranges only", () => {
+  const sample = JSON.stringify([
+    {
+      ifname: "lo",
+      addr_info: [{ family: "inet", local: "127.0.0.1" }, { family: "inet6", local: "::1" }],
+    },
+    {
+      ifname: "eth0",
+      addr_info: [
+        { family: "inet", local: "172.17.0.198" },
+        { family: "inet", local: "203.0.113.7" },
+        { family: "inet6", local: "fe80::1" },
+        { family: "inet6", local: "fd00::198" },
+        { family: "inet", local: "172.17.0.198" },
+      ],
+    },
+    { ifname: "docker0", addr_info: [{ family: "inet", local: "10.88.0.1" }] },
+  ]);
+  const found = parsePrivateAddresses(sample);
+  check(JSON.stringify(found) === JSON.stringify(["172.17.0.198", "fd00::198", "10.88.0.1"]));
+  check(parsePrivateAddresses("not json").length === 0);
+  check(parsePrivateAddresses("{}").length === 0);
 });
