@@ -30,6 +30,10 @@ jobs:
         run: deno test --allow-all host-metrics_test.ts host-resources_test.ts bounded-io_test.ts schema-release_test.ts openvault-status_test.ts database-maintenance_test.ts runtime-reconcile_test.ts pabx-state_test.ts webapps-status_test.ts nginx-webapps_test.ts
       - name: Shell syntax check
         run: bash -n scripts/*.sh
+      - name: SSH diagnostics contract
+        run: python3 tests/ssh_diagnostics_contract.py
+      - name: SSH diagnostics lifecycle (disposable container)
+        run: bash tests/ssh_diagnostics_integration.sh
       - name: Shared Deno runtime selection
         run: bash scripts/test-deno-selection.sh
       - name: apt/dpkg lock wait

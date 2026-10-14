@@ -197,6 +197,13 @@ Runtime installers should call `scripts/validate-agent.sh` instead of duplicatin
 validation. This keeps Agent prerequisite behavior consistent across SBC, WebRTC, TURN/STUN, media,
 PABX, and future managed runtimes.
 
+## Restricted SSH diagnostics
+
+Every Linux install/update also converges the restricted `mns-diagnostics` SSH account from
+[diagnostics/](diagnostics/) through `scripts/install-diagnostics.sh` (install with the approved
+public key when missing, in-place update otherwise, no change when current). Failures never
+block the Agent. Contract and allowlist: [docs/ssh-diagnostics.md](docs/ssh-diagnostics.md).
+
 ## Cyber Security edge profiles
 
 Cyber Security remains the control plane for SIP scanner detection and temporary blocking. The API
