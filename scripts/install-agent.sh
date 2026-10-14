@@ -477,7 +477,7 @@ app_upstream = \$app_upstream
 api_upstream = \$api_upstream
 webapps_enabled = false
 webapps_upstream = \$webapps_upstream
-webapps_paths = /phoneweb/,/pulse/
+webapps_paths = /phoneweb/,/pulse/,/customer-portal/
 test_command = nginx -t
 reload_command = systemctl reload nginx
 
