@@ -1,5 +1,10 @@
 import { collectOpenVaultStatus } from "./openvault-status.ts";
 import { collectWebappsStatus } from "./webapps-status.ts";
+import {
+  DEFAULT_NGINX_EDGE_WEBAPPS_PATHS,
+  nginxEdgeWebapps,
+  type NginxEdgeWebappsIni,
+} from "./nginx-webapps.ts";
 import { prepareSchemaRelease } from "./schema-release.ts";
 import {
   adapterArgs,
@@ -401,14 +406,7 @@ function envBoolean(value: string | undefined, fallback: boolean) {
   return fallback;
 }
 
-const DEFAULT_NGINX_EDGE_WEBAPPS_PATHS = "/phoneweb/,/pulse/,/customer-portal/";
 const NGINX_RUNTIME_ENV_PATH = "/etc/mnscloud/nginx.env";
-
-type NginxEdgeWebappsIni = {
-  enabled: string | null;
-  upstream: string | null;
-  paths: string;
-};
 
 function nginxEdgeWebappsIni(parsed: IniConfig): NginxEdgeWebappsIni {
   return {
@@ -418,36 +416,11 @@ function nginxEdgeWebappsIni(parsed: IniConfig): NginxEdgeWebappsIni {
   };
 }
 
-/**
- * Effective ThemeDomain webapps settings: the edge env (managed by the nginx.webapps reconcile)
- * plus Agent ini overrides. Paths published in nginx.env are always added to the configured
- * list, so every ThemeDomain server block carries the same webapps paths as the edge template.
- */
-function nginxEdgeWebapps(ini: NginxEdgeWebappsIni, env: Record<string, string>) {
-  const envEnabled = envBoolean(env.MNSCLOUD_ENABLE_WEBAPPS_PROXY, false);
-  return {
-    nginxEdgeWebappsEnabled: envBoolean(ini.enabled ?? undefined, envEnabled) || envEnabled,
-    nginxEdgeWebappsUpstream: ini.upstream ?? env.MNSCLOUD_WEBAPPS_UPSTREAM ?? "$webapps_upstream",
-    nginxEdgeWebappsPaths: [...parseList(ini.paths), ...nginxWebappsPathsFromEnv(env)],
-  };
-}
-
 /** Re-reads nginx.env so a reconciled webapps path reaches ThemeDomains without a restart. */
 async function refreshNginxEdgeWebapps(config: AgentConfig) {
   Object.assign(
     config,
     nginxEdgeWebapps(config.nginxEdgeWebappsIni, await loadKeyValueEnv(NGINX_RUNTIME_ENV_PATH)),
-  );
-}
-
-function nginxWebappsPathsFromEnv(values: Record<string, string>) {
-  return parseList(
-    [
-      values.MNSCLOUD_PHONEWEB_PATH,
-      values.MNSCLOUD_PULSE_PATH,
-      values.MNSCLOUD_CUSTOMER_PORTAL_PATH,
-      values.MNSCLOUD_WEBAPPS_PATHS,
-    ].filter(Boolean).join(","),
   );
 }
 
@@ -3118,6 +3091,45 @@ async function activateNginxEdgeDomain(config: AgentConfig, domain: string) {
   }
   await reloadNginxEdge(config);
   return { domain, path, sslEnabled };
+}
+
+/**
+ * Re-renders every existing ThemeDomain server block with the current webapps settings (after an
+ * nginx.webapps reconcile apply). One config test for all files; any failure restores them all.
+ */
+async function rerenderNginxEdgeDomains(config: AgentConfig) {
+  if (!config.capabilities["nginx-edge.manage"]) return [];
+  await refreshNginxEdgeWebapps(config);
+  const previous = new Map<string, string>();
+  try {
+    for await (const entry of Deno.readDir(config.nginxEdgeConfigDir)) {
+      if (!entry.isFile || !entry.name.endsWith(".conf")) continue;
+      const domain = entry.name.slice(0, -".conf".length);
+      assertSafeDomain(domain);
+      const path = nginxEdgeConfigPath(config, domain);
+      if (path.endsWith(`/${entry.name}`)) previous.set(domain, await Deno.readTextFile(path));
+    }
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) return [];
+    throw error;
+  }
+  const domains = [...previous.keys()].sort();
+  try {
+    for (const domain of domains) {
+      await writeAtomic(
+        nginxEdgeConfigPath(config, domain),
+        renderNginxEdgeDomainConfig(config, domain, await nginxEdgeHasCertificate(config, domain)),
+      );
+    }
+    await testNginxEdge(config);
+  } catch (error) {
+    for (const [domain, content] of previous) {
+      await writeAtomic(nginxEdgeConfigPath(config, domain), content);
+    }
+    throw error;
+  }
+  if (domains.length) await reloadNginxEdge(config);
+  return domains;
 }
 
 async function removeNginxEdgeDomain(config: AgentConfig, domain: string) {
@@ -6532,8 +6544,32 @@ async function executeRuntimeReconcileJob(
       );
       return;
     }
+    // The edge env is the source of the ThemeDomain webapps paths: apply them to every domain.
+    let themeDomains: string[] | undefined;
+    if (
+      request.product === "mnscloud-nginx" && request.stage === "apply" &&
+      output.outcome === "applied"
+    ) {
+      try {
+        themeDomains = await rerenderNginxEdgeDomains(config);
+      } catch (error) {
+        await failJob(
+          config,
+          job.jobUUID,
+          agentUUID,
+          agentToken,
+          "THEME_DOMAIN_RENDER_FAILED",
+          `Edge applied; ThemeDomain re-render failed and was restored: ${
+            error instanceof Error ? error.message : String(error)
+          }`.slice(0, 2000),
+          jobType,
+        );
+        return;
+      }
+    }
     await completeRuntimeReconcileJob(config, job.jobUUID, agentUUID, agentToken, {
       ...output,
+      ...(themeDomains ? { themeDomains } : {}),
       product: request.product,
       releaseTag: request.releaseTag,
     });
