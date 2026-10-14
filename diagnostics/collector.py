@@ -453,7 +453,9 @@ def connectivity(configs):
         try:
             with socket.create_connection((target['host'], target['port']), timeout=2) as sock:
                 if target['scheme'] in ('https', 'amqps'):
-                    with ssl.create_default_context().wrap_socket(sock, server_hostname=target['host']):
+                    context = ssl.create_default_context()
+                    context.minimum_version = ssl.TLSVersion.TLSv1_2  # never report legacy TLS as healthy
+                    with context.wrap_socket(sock, server_hostname=target['host']):
                         pass
                 result['status'] = 'TLS_OK' if target['scheme'] in ('https', 'amqps') else 'TCP_OK'
         except (OSError, ValueError):
