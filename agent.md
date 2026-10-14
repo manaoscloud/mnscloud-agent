@@ -669,3 +669,19 @@ commands. The control plane authorizes a DNS-only additive plan and apply digest
 Workers checkout and env advertise the capability after Agent update. Use an exact Workers release
 that supplies the adapter; that adapter owns activation, health verification and rollback. Runtime
 update and configuration reconcile remain separate recorded jobs.
+
+## Fenced PABX reconciliation
+
+`voip.pabx.reconcile.v2` declares the renewable PABX lease protocol. Mutating jobs require a
+`leaseToken`; progress renews it every 30 seconds, and complete/fail must return that exact token.
+The API rejects reports from an expired/replaced execution. FreeSWITCH mutations use the module's
+fixed reconciler and its fresh API-authorized retirement inventory. Do not interpret `UNREGED`
+as a carrier removal acknowledgement: FreeSWITCH 1.11.3 goes to local `DOWN` on unregister.
+Local removal is reported separately from unconfirmed remote removal. Configuration convergence
+and outbound registration are separate observations; registration is polled after activation.
+The engine maintains SIP refresh/retry; unrelated jobs never force a registered gateway to restart.
+A lost completion response is retried without repeating the mutation. An interrupted attempt
+resumes through the module journal and current desired state, not an obsolete shell payload.
+Deploy DB, API, FreeSWITCH module, then Agent. Older Agents cannot lease PABX mutations after the
+DB protocol update. Other typed jobs retain their existing contracts. Validate `pabx-state_test.ts`
+and the FreeSWITCH module behavioral suite, then verify registration and renewal in DEV.
