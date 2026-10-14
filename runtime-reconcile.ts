@@ -19,7 +19,7 @@ export const RUNTIME_RECONCILE_PRODUCTS: Record<string, RuntimeReconcileProduct>
     origin: /^https:\/\/github\.com\/manaoscloud\/mnscloud-webapps(?:\.git)?\/?$/,
     adapter: "scripts/reconcile-runtime-config.py",
     envPath: "/etc/mnscloud/webapps/webapps.env",
-    resources: ["webapps.apps"],
+    resources: ["webapps.apps", "webapps.listener"],
   },
   "mnscloud-nginx": {
     repo: "/opt/mnscloud/mnscloud-nginx",
