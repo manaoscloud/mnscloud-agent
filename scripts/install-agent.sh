@@ -821,6 +821,10 @@ main() {
   run "systemctl enable --now mnscloud-agent"
   run "systemctl restart mnscloud-agent"
   sync_installed_capabilities "$api_base" "${data_dir}/agent.uuid" "${data_dir}/agent.token" "$config_file" "$hostname"
+  # Restricted SSH diagnostics follow the Agent version on every host (never fatal).
+  if [[ "$DRY_RUN" != true ]]; then
+    bash "${AGENT_SOURCE_DIR}/scripts/install-diagnostics.sh" || warn "Diagnostics convergence skipped."
+  fi
 
   ok "mnscloud-agent installed as native systemd service."
   info "Agent UUID: ${agent_uuid}"

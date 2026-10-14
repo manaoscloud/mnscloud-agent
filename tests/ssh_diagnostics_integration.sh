@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# Requires Docker; all account/sudo mutations happen in a disposable container.
+set -euo pipefail
+ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+docker run --rm -i -v "$ROOT_DIR:/agent:ro" \
+  debian:13-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132 bash -s <<'TEST'
+set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -qq
+apt-get install -y -qq python3 sudo openssh-client procps >/dev/null
+# Fresh host: the Agent installer path creates the account with the approved key.
+bash /agent/scripts/install-diagnostics.sh | tee /tmp/first
+grep -q 'Converged' /tmp/first
+grep -qF "$(cut -d' ' -f1-2 /agent/diagnostics/diagnostic-client.pub)" /var/lib/mns-diagnostics/.ssh/authorized_keys
+bash /agent/scripts/install-diagnostics.sh | grep -q 'Current; no change'
+mkdir -p /var/log/freeradius
+printf 'Auth: (0) Login OK: [CANARY.subscriber] (from client X_1 port 0)\n' > /var/log/freeradius/radius.log
+mkdir -p /etc/mnscloud
+printf 'DB_HOST=127.0.0.1\nDB_PORT=1\nDB_PASS=CANARY_SECRET\nJWT_SECRET=CANARY_JWT\n' > /etc/mnscloud/api.env
+chmod 600 /etc/mnscloud/api.env
+printf 'step VISIBLE_MARKER apt-get failed\ntoken=CANARY_TOKEN Authorization: Bearer CANARY_BEARER\n' > /var/log/mnscloud-install.log
+for op in config config-check logs logs-text versions connectivity asterisk-odbc; do
+  runuser -u mns-diagnostics -- env SSH_ORIGINAL_COMMAND="$op" /usr/local/sbin/mns-diagnostics > "/tmp/$op.json"
+  python3 -c 'import json,sys; v=open(sys.argv[1]).read(); json.loads(v); assert "CANARY" not in v' "/tmp/$op.json"
+done
+grep -q VISIBLE_MARKER /tmp/logs-text.json
+grep -q 'Login OK: \[USER\]' /tmp/logs-text.json
+ln -s /etc/shadow /var/log/asterisk-link-test.log
+if runuser -u mns-diagnostics -- env SSH_ORIGINAL_COMMAND='logs-text /var/log/asterisk-link-test.log' /usr/local/sbin/mns-diagnostics; then exit 1; fi
+if runuser -u mns-diagnostics -- sudo -n /usr/bin/python3 -c 'print("unauthorized")'; then exit 1; fi
+if runuser -u mns-diagnostics -- sudo -n /usr/bin/python3 -I /usr/local/lib/mns-diagnostics/collector.py config extra; then exit 1; fi
+sha256sum /var/lib/mns-diagnostics/.ssh/authorized_keys > /tmp/key-check
+id -u mns-diagnostics > /tmp/uid-check
+printf '#!/bin/sh\nprintf "legacy dispatcher\\n"\n' > /usr/local/sbin/mns-diagnostics
+rm /usr/local/lib/mns-diagnostics/collector.py /etc/sudoers.d/mns-diagnostics
+python3 -I /agent/diagnostics/manage.py --update | tee /tmp/update-result
+sha256sum -c /tmp/key-check
+test "$(id -u mns-diagnostics)" = "$(cat /tmp/uid-check)"
+backup=$(sed -n 's/^Backup directory: //p' /tmp/update-result)
+python3 -I /agent/diagnostics/manage.py --rollback "$backup"
+test ! -e /etc/sudoers.d/mns-diagnostics
+test ! -e /usr/local/lib/mns-diagnostics/collector.py
+runuser -u mns-diagnostics -- env SSH_ORIGINAL_COMMAND=help /usr/local/sbin/mns-diagnostics | grep 'legacy dispatcher'
+sha256sum -c /tmp/key-check
+# Legacy files on an existing account: the Agent path updates in place and keeps the key.
+bash /agent/scripts/install-diagnostics.sh | grep -q 'Converged'
+runuser -u mns-diagnostics -- env SSH_ORIGINAL_COMMAND=help /usr/local/sbin/mns-diagnostics | grep -q asterisk-odbc
+sha256sum -c /tmp/key-check
+printf 'PASS: Agent-managed install/idempotence/update, collectors, masked usernames, denied sudo, key/UID preservation and rollback.\n'
+TEST
