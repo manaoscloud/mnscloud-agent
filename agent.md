@@ -130,8 +130,15 @@ automatically.
 ## Runtime Configuration Reconcile
 
 The Agent declares `mnscloud.runtime.reconcile.v1` on Linux when `python3` exists and at least one
-registered module (`runtime-reconcile.ts`, currently `mnscloud-db` at `/opt/mnscloud/mnscloud-db`
-with `/etc/mnscloud/db-migration.env`) is installed. A Master queues `runtime.reconcile` jobs
+registered module (`runtime-reconcile.ts`) is installed:
+
+| Product | Resource | Env file |
+| --- | --- | --- |
+| `mnscloud-db` | `mariadb.server` | `/etc/mnscloud/db-migration.env` |
+| `mnscloud-workers` | `workers.handlers` | `/etc/mnscloud/workers.env` |
+| `mnscloud-webapps` | `webapps.apps` (enabled apps) | `/etc/mnscloud/webapps/webapps.env` |
+| `mnscloud-nginx` | `nginx.webapps` (published webapps paths) | `/etc/mnscloud/nginx.env` |
+ A Master queues `runtime.reconcile` jobs
 through `POST /api/v1/system/runtime/reconcile-jobs` with a product, an explicit module release
 tag, a logical resource (for example `mariadb.server`) and a stage:
 
@@ -148,6 +155,13 @@ Only non-secret fields are managed. The completion acknowledgement is retried be
 restart the database behind the API. An expired lease fails the job; applies are never retried
 automatically. See `docs/agent-managed-reconciliation.md` in the workspace and
 `docs/runtime-reconcile.md` in mnscloud-db.
+
+Nginx edge jobs re-read `/etc/mnscloud/nginx.env` before rendering a ThemeDomain. When that env
+declares `MNSCLOUD_ENABLE_WEBAPPS_PROXY`, it is authoritative: ThemeDomains publish exactly the
+edge webapps paths (the agent.conf `webapps_paths` list applies only to hosts without the flag).
+After a successful `nginx.webapps` apply the Agent re-renders every existing ThemeDomain server
+block (one `nginx -t`, all files restored on failure) and lists them as `themeDomains` in the job
+result, so a published or unpublished path takes effect on every domain without an API call.
 
 ## Local Uninstall
 
