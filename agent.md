@@ -156,9 +156,12 @@ restart the database behind the API. An expired lease fails the job; applies are
 automatically. See `docs/agent-managed-reconciliation.md` in the workspace and
 `docs/runtime-reconcile.md` in mnscloud-db.
 
-Nginx edge jobs re-read `/etc/mnscloud/nginx.env` before rendering a ThemeDomain, so webapps
-paths published by the `nginx.webapps` reconcile reach existing domains on their next
-`nginx.edge.domain.activate` without restarting the Agent.
+Nginx edge jobs re-read `/etc/mnscloud/nginx.env` before rendering a ThemeDomain. When that env
+declares `MNSCLOUD_ENABLE_WEBAPPS_PROXY`, it is authoritative: ThemeDomains publish exactly the
+edge webapps paths (the agent.conf `webapps_paths` list applies only to hosts without the flag).
+After a successful `nginx.webapps` apply the Agent re-renders every existing ThemeDomain server
+block (one `nginx -t`, all files restored on failure) and lists them as `themeDomains` in the job
+result, so a published or unpublished path takes effect on every domain without an API call.
 
 ## Local Uninstall
 
