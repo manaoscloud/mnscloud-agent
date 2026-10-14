@@ -188,3 +188,17 @@ Deno.test("WebApps and nginx edge reconcile select their module adapters and fix
     assertThrows(() => parseRuntimeReconcileJob({ ...request, resource: "workers.handlers" }));
   }
 });
+
+Deno.test("WebApps listener reconcile uses the WebApps adapter", () => {
+  const request = parseRuntimeReconcileJob({
+    product: "mnscloud-webapps",
+    releaseTag: "v0.1.16",
+    resource: "webapps.listener",
+    stage: "plan",
+    desired: { WEBAPPS_LISTEN_HOST: "10.0.0.5", WEBAPPS_ALLOWED_CLIENTS: "10.0.0.9" },
+  });
+  assertEquals(
+    RUNTIME_RECONCILE_PRODUCTS[request.product].envPath,
+    "/etc/mnscloud/webapps/webapps.env",
+  );
+});
