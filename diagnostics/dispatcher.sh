@@ -17,6 +17,7 @@ case "${SSH_ORIGINAL_COMMAND:-help}" in
       "  config-check" \
       "  logs" \
       "  logs-text" \
+      "  journal UNIT [MINUTES] [PRIORITY]" \
       "  versions" \
       "  connectivity" \
       "  asterisk-odbc"
@@ -71,6 +72,14 @@ case "${SSH_ORIGINAL_COMMAND:-help}" in
     exec /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin LC_ALL=C \
       /usr/bin/sudo -n -- /usr/bin/python3 -I \
       /usr/local/lib/mns-diagnostics/collector.py "$SSH_ORIGINAL_COMMAND"
+    ;;
+  journal\ *)
+    # Only the fixed `journal` operation reaches sudo; its parameters travel on stdin and the
+    # collector validates them (fixed unit list, 1-1440 minutes, err|warning|notice|info).
+    printf '%s\n' "${SSH_ORIGINAL_COMMAND#journal }" |
+      /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin LC_ALL=C \
+      /usr/bin/sudo -n -- /usr/bin/python3 -I \
+      /usr/local/lib/mns-diagnostics/collector.py journal
     ;;
   *)
     printf '%s\n' "DENIED: Command is not in the diagnostic allowlist." >&2

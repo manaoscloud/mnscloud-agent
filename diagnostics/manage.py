@@ -21,7 +21,7 @@ COLLECTOR = Path('/usr/local/lib/mns-diagnostics/collector.py')
 SUDOERS = Path('/etc/sudoers.d/mns-diagnostics')
 BACKUPS = Path('/var/backups/mns-diagnostics')
 TARGETS = (SHELL, COLLECTOR, SUDOERS)
-OPERATIONS = ('config', 'config-check', 'logs', 'logs-text', 'versions', 'connectivity', 'asterisk-odbc')
+OPERATIONS = ('config', 'config-check', 'logs', 'logs-text', 'journal', 'versions', 'connectivity', 'asterisk-odbc')
 
 
 def call(args, **kwargs):
