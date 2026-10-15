@@ -268,6 +268,7 @@ Invoke-Step {
   Copy-Item -Path "$PSScriptRoot\..\schema-release.ts" -Destination "$InstallDir\schema-release.ts" -Force
   Copy-Item -Path "$PSScriptRoot\..\openvault-status.ts" -Destination "$InstallDir\openvault-status.ts" -Force
   Copy-Item -Path "$PSScriptRoot\..\webapps-status.ts" -Destination "$InstallDir\webapps-status.ts" -Force
+  Copy-Item -Path "$PSScriptRoot\..\webapps-update.ts" -Destination "$InstallDir\webapps-update.ts" -Force
   Copy-Item -Path "$PSScriptRoot\..\nginx-webapps.ts" -Destination "$InstallDir\nginx-webapps.ts" -Force
   Copy-Item -Path "$PSScriptRoot\..\database-maintenance.ts" -Destination "$InstallDir\database-maintenance.ts" -Force
   Copy-Item -Path "$PSScriptRoot\..\runtime-reconcile.ts" -Destination "$InstallDir\runtime-reconcile.ts" -Force

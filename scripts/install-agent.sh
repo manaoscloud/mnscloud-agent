@@ -792,6 +792,7 @@ main() {
   run "cp '${AGENT_SOURCE_DIR}/schema-release.ts' '${install_dir}/schema-release.ts'"
   run "cp '${AGENT_SOURCE_DIR}/openvault-status.ts' '${install_dir}/openvault-status.ts'"
   run "cp '${AGENT_SOURCE_DIR}/webapps-status.ts' '${install_dir}/webapps-status.ts'"
+  run "cp '${AGENT_SOURCE_DIR}/webapps-update.ts' '${install_dir}/webapps-update.ts'"
   run "cp '${AGENT_SOURCE_DIR}/nginx-webapps.ts' '${install_dir}/nginx-webapps.ts'"
   run "cp '${AGENT_SOURCE_DIR}/database-maintenance.ts' '${install_dir}/database-maintenance.ts'"
   run "cp '${AGENT_SOURCE_DIR}/runtime-reconcile.ts' '${install_dir}/runtime-reconcile.ts'"

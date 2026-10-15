@@ -1,6 +1,7 @@
 import { trunkRegistrationStatus } from "./pabx-state.ts";
 import { collectOpenVaultStatus } from "./openvault-status.ts";
 import { collectWebappsStatus } from "./webapps-status.ts";
+import { webappsUpdateScript } from "./webapps-update.ts";
 import {
   DEFAULT_NGINX_EDGE_WEBAPPS_PATHS,
   nginxEdgeWebapps,
@@ -3565,26 +3566,13 @@ function runtimeUpdateTarget(product: string) {
       label: "Webapps Runtime",
       capability: "mnscloud.webapps.update",
       repoDir: "/opt/mnscloud/mnscloud-webapps",
-      command: (targetRef, job) => {
-        const app = payloadString(job.payload, "app");
-        const appRef = payloadString(job.payload, "appRef");
-        if (app && !/^[a-z0-9][a-z0-9_-]{0,62}$/.test(app)) {
-          throw new Error(`Invalid webapp name: ${app}`);
-        }
-        if (appRef && !/^[A-Za-z0-9._/@+-]+$/.test(appRef)) {
-          throw new Error(`Invalid webapp ref: ${appRef}`);
-        }
-        const updateArgs = ["--env", "/etc/mnscloud/webapps/webapps.env"];
-        if (app) updateArgs.push("--app", app);
-        if (appRef) updateArgs.push("--app-ref", appRef);
-        return [
-          "bash",
-          "-lc",
-          `git fetch --tags --prune origin && git checkout ${
-            shellQuote(targetRef)
-          } && bash scripts/update-webapps.sh ${updateArgs.map(shellQuote).join(" ")}`,
-        ];
-      },
+      command: (targetRef, job) => [
+        "bash",
+        "-lc",
+        `git fetch --tags --prune origin && git checkout ${shellQuote(targetRef)} && ${
+          webappsUpdateScript(job.payload)
+        }`,
+      ],
     },
     "mnscloud-openvault": {
       label: "OpenVault",
