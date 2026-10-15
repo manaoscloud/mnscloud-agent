@@ -92,11 +92,20 @@ export function parseAsteriskRegistration(
   output: string,
   runtimeName: string,
 ): RegistrationRuntime {
+  // The summary table truncates long `<name>/<server URI>` cells, so prefer the detail block.
+  const detail = (name: string) =>
+    clean(output.match(new RegExp(`^\\s*${name}\\s*:\\s*(\\S+)`, "im"))?.[1]);
   const row = output.match(
     new RegExp(`^\\s*${escapeRegExp(runtimeName)}/(\\S+)`, "im"),
   );
-  const serverUri = clean(row?.[1]);
-  const clientUri = clean(output.match(/^\s*client_uri\s*:\s*(\S+)/im)?.[1]);
+  const serverUri = detail("server_uri") ?? clean(row?.[1]);
+  const clientUri = detail("client_uri");
+  const transportName = detail("transport")?.toLowerCase() ?? "";
+  const namedTransport = /\btcp\b|-tcp$/.test(transportName)
+    ? "tcp"
+    : /\budp\b|-udp$/.test(transportName)
+    ? "udp"
+    : null;
   return {
     proxy: serverUri,
     realm: null,
@@ -105,7 +114,7 @@ export function parseAsteriskRegistration(
     contact: null,
     serverUri,
     clientUri,
-    transport: uriTransport(serverUri),
+    transport: uriTransport(serverUri) ?? namedTransport,
   };
 }
 
