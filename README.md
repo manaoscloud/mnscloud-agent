@@ -19,6 +19,14 @@ PABX diagnostics are typed read-only jobs, never browser-provided shell commands
 the extensions of an assigned PABX account. The API owns authorization, tenant scope, target
 resolution, and the bounded payload; the Agent only performs the fixed local engine query.
 
+Trunk registration jobs also return `insight` (single trunk) or `lastFailure` (each trunk of a
+list): the last SIP failure code the engine logged for that trunk (`/var/log/freeswitch/freeswitch.log`
+or `/var/log/asterisk/messages`, last 1 MiB), the runtime destination/contact, and the local SIP
+binding. When a single trunk is not registered, the Agent sends one unauthenticated `REGISTER`
+(`Expires: 0`, no credentials, UDP or TCP) to the runtime destination to report whether the
+registrar answers this host and which realm it announces; it never sends credentials and cannot
+create or change a provider binding.
+
 ## Contract
 
 - Product/runtime: `mnscloud-agent`
