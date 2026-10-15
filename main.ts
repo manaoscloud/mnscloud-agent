@@ -1,4 +1,15 @@
 import { trunkRegistrationStatus } from "./pabx-state.ts";
+import {
+  lastAsteriskFailure,
+  lastFreeswitchFailure,
+  parseAsteriskRegistration,
+  parseAsteriskTransports,
+  parseFreeswitchContactBinding,
+  parseFreeswitchGateway,
+  probeRegistrar,
+  readEngineLogTail,
+  sipTarget,
+} from "./pabx-registration-insight.ts";
 import { collectOpenVaultStatus } from "./openvault-status.ts";
 import { collectWebappsStatus } from "./webapps-status.ts";
 import { webappsUpdateScript } from "./webapps-update.ts";
@@ -1955,6 +1966,54 @@ async function runPabxTrunkRegistrationDiagnosticWithConvergence(
   return diagnostic;
 }
 
+/**
+ * Explains a trunk registration beyond the engine state: the last SIP failure the engine logged,
+ * the runtime destination/contact, the local SIP binding and, when the trunk is not registered,
+ * one unauthenticated REGISTER probe (Expires: 0, no credentials) that shows whether the
+ * registrar answers this host and which realm it announces.
+ */
+async function pabxTrunkRegistrationInsight(
+  engine: string,
+  runtimeName: string,
+  output: string,
+  registrationStatus: string,
+  config: AgentConfig,
+) {
+  const runtime = engine === "freeswitch"
+    ? parseFreeswitchGateway(output)
+    : parseAsteriskRegistration(output, runtimeName);
+  const registered = registrationStatus === "registered";
+  const log = registered ? "" : await readEngineLogTail(engine);
+  const lastFailure = registered
+    ? null
+    : engine === "freeswitch"
+    ? lastFreeswitchFailure(log, runtimeName)
+    : runtime.serverUri
+    ? lastAsteriskFailure(log, runtime.serverUri)
+    : null;
+
+  let localBinding = engine === "freeswitch"
+    ? parseFreeswitchContactBinding(runtime.contact)
+    : null;
+  if (engine === "asterisk") {
+    const transports = await runLocalCommand(
+      config.asteriskCli,
+      ["-rx", "pjsip show transports"],
+      config.commandTimeoutMs,
+    ).catch(() => null);
+    localBinding = transports && transports.code === 0
+      ? parseAsteriskTransports(transports.stdout, runtime.transport ?? "udp")
+      : null;
+  }
+
+  const target = sipTarget(runtime.proxy ?? runtime.serverUri, runtime.transport ?? "udp");
+  const probe = !registered && registrationStatus !== "not_configured" && target
+    ? await probeRegistrar(target, runtime.username ?? "")
+    : null;
+
+  return { runtime, lastFailure, localBinding, probe };
+}
+
 type PabxExtensionRuntimeTarget = {
   extensionUUID: string;
   username: string;
@@ -2493,6 +2552,20 @@ async function executePabxCommandJobInner(
       result = diagnostic.result;
       const stdout = diagnosticOutput(result.stdout);
       const stderr = diagnosticOutput(result.stderr);
+      const registrationStatus = trunkRegistrationStatus(
+        engine,
+        `${stdout}\n${stderr}`,
+        result.code,
+      );
+      const insight = await pabxTrunkRegistrationInsight(
+        engine,
+        runtimeName,
+        result.stdout,
+        registrationStatus,
+        config,
+      ).catch((error) => ({
+        error: diagnosticOutput(error instanceof Error ? error.message : String(error)),
+      }));
       await jsonRequest(
         config,
         `/agent/jobs/${job.jobUUID}/complete`,
@@ -2506,11 +2579,8 @@ async function executePabxCommandJobInner(
             commandType,
             runtimeName,
             registrationEnabled: true,
-            registrationStatus: trunkRegistrationStatus(
-              engine,
-              `${stdout}\n${stderr}`,
-              result.code,
-            ),
+            registrationStatus,
+            insight,
             observedAt: new Date().toISOString(),
             command,
             args,
@@ -2532,6 +2602,7 @@ async function executePabxCommandJobInner(
     if (commandType === "trunk.registration.list") {
       const targets = pabxTrunkRuntimeTargets(job.payload);
       const observedAt = new Date().toISOString();
+      let engineLog: string | null = null;
       const trunks = [] as Array<Record<string, unknown>>;
       let output = "";
       let errors = "";
@@ -2568,12 +2639,25 @@ async function executePabxCommandJobInner(
             `${stdout}\n${stderr}`,
             diagnostic.result.code,
           );
+          let lastFailure = null;
+          if (registrationStatus !== "registered") {
+            engineLog ??= await readEngineLogTail(engine);
+            const serverUri =
+              parseAsteriskRegistration(diagnostic.result.stdout, target.runtimeName)
+                .serverUri;
+            lastFailure = engine === "freeswitch"
+              ? lastFreeswitchFailure(engineLog, target.runtimeName)
+              : serverUri
+              ? lastAsteriskFailure(engineLog, serverUri)
+              : null;
+          }
           trunks.push({
             trunkUUID: target.trunkUUID,
             name: target.name,
             runtimeName: target.runtimeName,
             registrationEnabled: true,
             registrationStatus,
+            lastFailure,
             observedAt,
             command: diagnostic.command,
             args: diagnostic.args,
