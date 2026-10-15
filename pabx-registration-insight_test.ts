@@ -72,6 +72,25 @@ Deno.test("parses the Asterisk registration, transports and last failure", () =>
 `;
   const runtime = parseAsteriskRegistration(output, NAME);
   assertEquals(runtime.serverUri, "sip:198.51.100.7:5060");
+
+  // Real Asterisk output: the table cell is truncated, the detail block is complete.
+  const detailed = parseAsteriskRegistration(
+    ` <Registration/ServerURI..............................>  <Auth....................>  <Status.......>
+==========================================================================================
+
+ ${NAME}/sip:198.51.100.2  ${NAME}  Rejected          (exp. 220s)
+
+ ParameterName            : ParameterValue
+ =================================================================
+ client_uri               : sip:1000@198.51.100.77
+ server_uri               : sip:198.51.100.77:5060
+ transport                : transport-udp
+`,
+    NAME,
+  );
+  assertEquals(detailed.serverUri, "sip:198.51.100.77:5060");
+  assertEquals(detailed.username, "1000");
+  assertEquals(detailed.transport, "udp");
   assertEquals(sipTarget(runtime.serverUri), {
     host: "198.51.100.7",
     port: 5060,
