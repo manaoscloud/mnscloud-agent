@@ -31,13 +31,24 @@ privilege; failures never block the Agent and are retried on its next update.
 | `config-check` | Missing/empty required settings, invalid endpoints/ports/enums and production debug checks |
 | `logs` | Last 15 minutes, at most 40 events per fixed systemd unit; timestamps, severity and fixed error categories only |
 | `logs-text` | Masked text: last 120 lines of fixed log files and of the last 60 minutes of each fixed systemd unit journal |
+| `journal UNIT [MINUTES] [PRIORITY]` | Masked journal of one fixed systemd unit: last `MINUTES` (1-1440, default 60) at `PRIORITY` or more severe (`err`, `warning`, `notice`, `info`; default `info`), newest 2000 lines, 4 MiB read cap |
 | `versions` | Selected package versions (including `freeswitch`, `kamailio`, `opensips`, `rtpengine-daemon` and `coturn`; Asterisk is source-built) and root-controlled checkout VERSION files (including `mnscloud-{asterisk,freeswitch,kamailio-softswitch,opensips-sbc,media,turn,kamailio-webrtc}`) |
 | `connectivity` | At most 12 configured endpoints; TCP and verified TLS only, 2-second socket timeout |
 | `asterisk-odbc` | Asterisk ODBC pool state from `asterisk -rx "odbc show"`: pool names, active/max connections and `CONNECTED`/`NO_ACTIVE_CONNECTION`; no SQL, credentials or DSN values |
 
-The seven extended commands accept no arguments. The privileged collector has a
+The extended commands accept no arguments, except `journal`. The privileged collector has a
 40-second overall deadline. Paths, commands and subprocess arguments are fixed.
 Inputs with extra arguments, shell syntax or unknown operations are rejected.
+
+`journal` (diagnostics 3.7, 2026-10-15, user decision) replaces ad hoc `journalctl` for
+troubleshooting when the 60-minute/120-line `logs-text` window is not enough (for example the
+busy `mnscloud-api` journal). The sudo rule stays exact (`collector.py journal`, no wildcard):
+the dispatcher sends the parameters on stdin and the collector validates them before it checks
+privilege. `UNIT` must be one of the fixed units of `logs`/`logs-text`; nothing else reaches
+`journalctl` (no `--grep`, other units, paths, output formats or follow mode). Each line is
+`<UTC timestamp> <syslog priority number> <message>`, masked like `logs-text` and capped at 400
+characters. `lines` is `UNAVAILABLE` without a journal and `OUTPUT_TOO_LARGE` past the read cap;
+`limitReached` tells that older lines of the window were cut. Filter the result locally.
 
 `config` reads only `/etc/mnscloud/{api,app,nginx,workers,rabbitmq,db}.env`.
 It parses text without shell evaluation or environment interpolation. Symlinks,
@@ -110,6 +121,8 @@ OpenVault (`mnscloud-openvault`, `mnscloud-openvault-tls-renew`, `openvault.env`
 stays `SET`), Webapps (`mnscloud-webapps`, `mnscloud-webapps-sync`, checkout), Incus (`incus`
 unit and package), `mnscloud-grow-rootfs`, the Agent checkout and
 `/var/log/mnscloud-agent-install.log`. No new commands or sudo changes.
+Version 3.7 adds the parameterized `journal` operation described above to the fixed sudo rule
+and reports `"diagnostics": "3.7"` in `versions`.
 
 Security depends on root-controlled code and existing host SSH/PAM/sudo policy.
 Other administrative identities are unaffected. Review pre-existing broad sudo rules;
@@ -167,7 +180,7 @@ at the same pinned revision when needed.
    restrictions. Keep the normal `known_hosts` files; conflicting entries are not automatically
    replaced and may still produce warnings. This accepts the loss of host-identity protection
    against changed keys, as defined in the SSH access policy. No root fallback is allowed.
-2. Through that alias run all twelve commands. Review missing/unsafe files without
+2. Through that alias run all thirteen commands (`journal` with a fixed unit). Review missing/unsafe files without
    exposing or changing secrets. Config endpoints are private operational evidence.
 3. Send harmless `sh -c id` through the same alias: expect denial and exit 126.
    Connection failure/255 is not proof of enforcement. No destructive denial tests.

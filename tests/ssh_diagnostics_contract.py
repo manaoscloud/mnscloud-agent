@@ -27,7 +27,7 @@ class DiagnosticsContract(unittest.TestCase):
             result = subprocess.run(['/bin/sh', str(SOURCE / 'dispatcher.sh')], env={'SSH_ORIGINAL_COMMAND': command}, capture_output=True, text=True, timeout=20)
             self.assertEqual(result.returncode, 0)
             self.assertTrue(result.stdout.strip())
-        for command in ('sh -c id', 'id', 'config extra', 'logs-text extra', 'logs-text /etc/shadow', 'config; id', 'logs\nid', '$(id)', '`id`', 'services --all', 'cat /etc/passwd', 'internal-sftp', ' config', 'config '):
+        for command in ('sh -c id', 'id', 'config extra', 'logs-text extra', 'logs-text /etc/shadow', 'config; id', 'logs\nid', '$(id)', '`id`', 'services --all', 'cat /etc/passwd', 'internal-sftp', ' config', 'config ', 'journal', 'journalctl -u nginx'):
             result = subprocess.run(['/bin/sh', str(SOURCE / 'dispatcher.sh')], env={'SSH_ORIGINAL_COMMAND': command}, capture_output=True, text=True, timeout=20)
             self.assertEqual(result.returncode, 126, command)
             self.assertEqual(result.stdout, '')
@@ -38,6 +38,37 @@ class DiagnosticsContract(unittest.TestCase):
             result = subprocess.run(['python3', '-I', str(SOURCE / 'collector.py'), *args], capture_output=True, text=True)
             self.assertEqual(result.returncode, 126)
             self.assertNotIn('Traceback', result.stderr)
+
+    def test_journal_parameters_are_validated_before_privilege(self):
+        for request in ('', 'sshd', 'nginx 0', 'nginx 1441', 'nginx debug', 'nginx 10 err x', 'nginx err 10',
+                        'nginx\nid', 'nginx;id', '../nginx', 'nginx  10', '--unit=sshd', 'nginx --grep=x',
+                        'nginx ' + '1' * 300, 'nginx \xe9'):
+            result = subprocess.run(['python3', '-I', str(SOURCE / 'collector.py'), 'journal'],
+                                    input=request.encode('latin-1') + b'\n', capture_output=True)
+            self.assertEqual(result.returncode, 126, repr(request))
+            self.assertEqual(result.stdout, b'')
+            self.assertIn(b'DENIED', result.stderr)
+        self.assertEqual(collector.parse_journal_request('mnscloud-api\n'), ('mnscloud-api', 60, 'info'))
+        self.assertEqual(collector.parse_journal_request('mnscloud-api 1440 err'), ('mnscloud-api', 1440, 'err'))
+        self.assertEqual(collector.parse_journal_request('mnscloud-api warning'), ('mnscloud-api', 60, 'warning'))
+
+    def test_journal_is_bounded_and_masked(self):
+        raw = json.dumps({'__REALTIME_TIMESTAMP': '1760500000000000', 'PRIORITY': '3',
+                          'MESSAGE': 'login failed token=abc Authorization: Bearer xyz'})
+        self.assertEqual(collector.journal_lines(raw),
+                         ['2025-10-15T03:46:40.000000Z 3 login failed token=[REDACTED] Authorization: [REDACTED] [REDACTED]'])
+        with patch.object(collector, 'run', return_value='') as run:
+            result = collector.journal('mnscloud-api 30 warning')
+        args = run.call_args.args[0]
+        self.assertIn('--unit=mnscloud-api.service', args)
+        self.assertIn('--since=-30min', args)
+        self.assertIn('--priority=warning', args)
+        self.assertIn('--lines=2000', args)
+        self.assertEqual(result['lines'], [])
+        dispatcher = (SOURCE / 'dispatcher.sh').read_text()
+        self.assertIn('collector.py journal\n', dispatcher)
+        manage = (SOURCE / 'manage.py').read_text()
+        self.assertIn("'journal'", manage)
 
     def test_env_is_literal(self):
         value = collector.parse_env("DB_PASS='$(id); `id`'\nUNKNOWN=secret\n")
@@ -138,7 +169,7 @@ class DiagnosticsContract(unittest.TestCase):
         with patch.object(collector, 'run', side_effect=OSError), \
                 patch.object(collector, 'trusted_read', side_effect=OSError):
             result = collector.versions()
-        self.assertEqual(result['diagnostics'], '3.6')
+        self.assertEqual(result['diagnostics'], '3.7')
         for key in ('rtpengine-daemon', 'coturn', 'media_checkout_version', 'turn_checkout_version',
                     'kamailio-webrtc_checkout_version'):
             self.assertEqual(result[key], 'UNAVAILABLE')

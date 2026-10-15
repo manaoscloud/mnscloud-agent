@@ -1,5 +1,6 @@
 #!/usr/bin/python3
 """Fixed, bounded root collector. Never source env files; log text is always masked."""
+from datetime import datetime, timezone
 import json
 import ipaddress
 import os
@@ -43,6 +44,13 @@ LOG_TEXT_TAIL_BYTES = 262144
 LOG_LINE_CHARS = 400
 LOG_HIGHLIGHT_LINES = 80
 LOG_HIGHLIGHT_CONTEXT = 3
+# journal: one fixed unit, bounded window/priority, parameters only through stdin (never argv/sudo).
+JOURNAL_LINES = 2000
+JOURNAL_MAX_MINUTES = 1440
+JOURNAL_DEFAULT_MINUTES = 60
+JOURNAL_PRIORITIES = ('err', 'warning', 'notice', 'info')
+JOURNAL_OUTPUT_BYTES = 4194304
+JOURNAL_REQUEST_BYTES = 256
 # Failure markers searched across the whole tail window, so a long post-failure summary
 # cannot push the real cause out of the returned lines.
 HIGHLIGHT = re.compile(r'(?i)\b(error|errors|failed|failure|fatal|panic|traceback|'
@@ -246,15 +254,15 @@ def config_report(configs, checks=False):
     return output
 
 
-def run(args):
+def run(args, limit=262144, timeout=12):
     # File-backed bounded reads avoid buffering an unbounded command response in RAM.
     import tempfile
     with tempfile.TemporaryFile() as output:
         subprocess.run(args, stdout=output, stderr=subprocess.DEVNULL,
-                       env=ENV, timeout=12, check=True)
+                       env=ENV, timeout=timeout, check=True)
         output.seek(0)
-        data = output.read(262145)
-        if len(data) > 262144:
+        data = output.read(limit + 1)
+        if len(data) > limit:
             raise ValueError('Output too large')
         return data.decode('utf-8', errors='replace')
 
@@ -372,8 +380,64 @@ def logs_text():
     return output
 
 
+def parse_journal_request(text):
+    """Validate `UNIT [MINUTES] [PRIORITY]`; anything else is rejected before journalctl runs."""
+    if text.endswith('\n'):
+        text = text[:-1]
+    if not text or len(text) > JOURNAL_REQUEST_BYTES or not re.fullmatch(r'[a-z0-9-]+(?: [a-z0-9]+){0,2}', text):
+        raise PermissionError('Unsupported journal request')
+    tokens = text.split(' ')
+    unit, minutes, priority = tokens.pop(0), JOURNAL_DEFAULT_MINUTES, 'info'
+    if unit not in UNITS:
+        raise PermissionError('Unsupported journal unit')
+    if tokens and tokens[0].isdecimal():
+        minutes = int(tokens.pop(0))
+        if not 1 <= minutes <= JOURNAL_MAX_MINUTES:
+            raise PermissionError('Unsupported journal window')
+    if tokens:
+        priority = tokens.pop(0)
+        if priority not in JOURNAL_PRIORITIES:
+            raise PermissionError('Unsupported journal priority')
+    if tokens:
+        raise PermissionError('Unsupported journal request')
+    return unit, minutes, priority
+
+
+def journal_lines(text):
+    lines = []
+    for raw in text.splitlines():
+        row = json.loads(raw)
+        message = row.get('MESSAGE', '')
+        if isinstance(message, list):
+            message = bytes(x for x in message if isinstance(x, int) and 0 <= x < 256).decode('utf-8', errors='replace')
+        stamp = str(row.get('__REALTIME_TIMESTAMP', ''))
+        when = (datetime.fromtimestamp(int(stamp) / 1e6, timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+                if stamp.isdecimal() else '-')
+        level = str(row.get('PRIORITY', ''))
+        lines.append(when + ' ' + (level if level.isdecimal() else '-') + ' ' + mask_line(str(message)))
+    return lines
+
+
+def journal(request):
+    unit, minutes, priority = parse_journal_request(request)
+    try:
+        text = run(['/usr/bin/journalctl', '--no-pager', '--output=json',
+                    '--output-fields=MESSAGE,PRIORITY', '--since=-' + str(minutes) + 'min',
+                    '--priority=' + priority, '--lines=' + str(JOURNAL_LINES),
+                    '--unit=' + unit + '.service'], limit=JOURNAL_OUTPUT_BYTES, timeout=30)
+        lines = journal_lines(text)
+    except ValueError:
+        lines = 'OUTPUT_TOO_LARGE'
+    except (OSError, subprocess.SubprocessError):
+        lines = 'UNAVAILABLE'
+    return {'unit': unit, 'sinceMinutes': minutes, 'priority': priority,
+            'lineLimit': JOURNAL_LINES, 'lines': lines,
+            'limitReached': isinstance(lines, list) and len(lines) >= JOURNAL_LINES,
+            'masking': 'SECRETS_TOKENS_AND_KEYS_REDACTED_BEST_EFFORT'}
+
+
 def versions():
-    output = {'diagnostics': '3.6'}
+    output = {'diagnostics': '3.7'}
     for package in ('nginx', 'mariadb-server', 'rabbitmq-server', 'docker-ce',
                     'freeswitch', 'kamailio', 'opensips', 'rtpengine-daemon', 'coturn',
                     'freeradius', 'incus'):
@@ -467,17 +531,27 @@ def connectivity(configs):
 
 
 def main():
-    if len(sys.argv) != 2 or sys.argv[1] not in ('config', 'config-check', 'logs', 'logs-text', 'versions', 'connectivity',
-                                                      'asterisk-odbc'):
+    if len(sys.argv) != 2 or sys.argv[1] not in ('config', 'config-check', 'logs', 'logs-text', 'journal', 'versions',
+                                                      'connectivity', 'asterisk-odbc'):
         print('DENIED: Unsupported collector operation.', file=sys.stderr)
         return 126
+    signal.alarm(40)
+    request = None
+    if sys.argv[1] == 'journal':
+        try:
+            request = sys.stdin.buffer.read(JOURNAL_REQUEST_BYTES + 2).decode('ascii')
+            parse_journal_request(request)
+        except (PermissionError, UnicodeDecodeError):
+            print('DENIED: Unsupported journal request. Use: journal UNIT [MINUTES] [PRIORITY].', file=sys.stderr)
+            return 126
     if os.geteuid() != 0:
         print('ERROR: Collector requires its dedicated sudo rule.', file=sys.stderr)
         return 1
-    signal.alarm(40)
     os.umask(0o077)
     operation = sys.argv[1]
-    if operation == 'logs':
+    if operation == 'journal':
+        result = journal(request)
+    elif operation == 'logs':
         result = logs()
     elif operation == 'logs-text':
         result = logs_text()

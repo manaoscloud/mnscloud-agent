@@ -24,6 +24,13 @@ for op in config config-check logs logs-text versions connectivity asterisk-odbc
   python3 -c 'import json,sys; v=open(sys.argv[1]).read(); json.loads(v); assert "CANARY" not in v' "/tmp/$op.json"
 done
 grep -q VISIBLE_MARKER /tmp/logs-text.json
+runuser -u mns-diagnostics -- env SSH_ORIGINAL_COMMAND='journal mnscloud-agent 30 err' /usr/local/sbin/mns-diagnostics > /tmp/journal.json
+python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["unit"] == "mnscloud-agent" and v["sinceMinutes"] == 30' /tmp/journal.json
+for request in 'journal sshd' 'journal nginx 9999' 'journal nginx debug' 'journal nginx --grep=x'; do
+  if runuser -u mns-diagnostics -- env SSH_ORIGINAL_COMMAND="$request" /usr/local/sbin/mns-diagnostics; then exit 1; fi
+done
+if printf 'sshd\n' | runuser -u mns-diagnostics -- sudo -n /usr/bin/python3 -I /usr/local/lib/mns-diagnostics/collector.py journal; then exit 1; fi
+if runuser -u mns-diagnostics -- sudo -n /usr/bin/python3 -I /usr/local/lib/mns-diagnostics/collector.py journal nginx; then exit 1; fi
 grep -q 'Login OK: \[USER\]' /tmp/logs-text.json
 ln -s /etc/shadow /var/log/asterisk-link-test.log
 if runuser -u mns-diagnostics -- env SSH_ORIGINAL_COMMAND='logs-text /var/log/asterisk-link-test.log' /usr/local/sbin/mns-diagnostics; then exit 1; fi
@@ -44,7 +51,7 @@ runuser -u mns-diagnostics -- env SSH_ORIGINAL_COMMAND=help /usr/local/sbin/mns-
 sha256sum -c /tmp/key-check
 # Legacy files on an existing account: the Agent path updates in place and keeps the key.
 bash /agent/scripts/install-diagnostics.sh | grep -q 'Converged'
-runuser -u mns-diagnostics -- env SSH_ORIGINAL_COMMAND=help /usr/local/sbin/mns-diagnostics | grep -q asterisk-odbc
+runuser -u mns-diagnostics -- env SSH_ORIGINAL_COMMAND=help /usr/local/sbin/mns-diagnostics | grep -q 'journal UNIT'
 sha256sum -c /tmp/key-check
 printf 'PASS: Agent-managed install/idempotence/update, collectors, masked usernames, denied sudo, key/UID preservation and rollback.\n'
 TEST
