@@ -5,6 +5,11 @@ on:
   push:
     branches: [main]
 
+# CI only reads the code: tests, builds and artifact uploads need no write access.
+# Publishing happens in auto-release.yml, which declares its own permissions.
+permissions:
+  contents: read
+
 concurrency:
   group: agent-ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
