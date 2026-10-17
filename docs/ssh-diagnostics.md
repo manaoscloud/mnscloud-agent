@@ -123,6 +123,10 @@ unit and package), `mnscloud-grow-rootfs`, the Agent checkout and
 `/var/log/mnscloud-agent-install.log`. No new commands or sudo changes.
 Version 3.7 adds the parameterized `journal` operation described above to the fixed sudo rule
 and reports `"diagnostics": "3.7"` in `versions`.
+Version 3.8 (2026-10-17) reports `db_release_version`, the newest approved DB release prepared by
+`database.schema.reconcile` under `/opt/mnscloud/mnscloud-db-releases`, instead of
+`db_checkout_version`: `/opt/mnscloud/mnscloud-db` is only the git source of those release
+worktrees and its own VERSION goes stale. The applied schema is still `SchemaAppliedRevision`.
 
 Security depends on root-controlled code and existing host SSH/PAM/sudo policy.
 Other administrative identities are unaffected. Review pre-existing broad sudo rules;

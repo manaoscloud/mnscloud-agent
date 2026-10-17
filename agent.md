@@ -674,6 +674,12 @@ Schema convergence remains the specialized schema capability, never generic
 `runtime.update`. Completion still requires the API-recorded applied revision.
 An omitted tag retains the installed-checkout contract for existing jobs.
 
+After a successful job the Agent bounds the DB host disk (best effort, never fails the job):
+release worktrees beyond the newest 5 and `/var/backups/schema-reconcile-*` work directories
+(plans, results, pre-apply dumps) beyond the newest 10 are removed once older than 3 days.
+The current job's release worktree and plan directory are always kept, so a plan/apply pair and
+recent rollback dumps survive; worktrees go through `git worktree remove` and `prune`.
+
 The shared Linux/Windows runtime package includes `schema-release.ts`; execution
 is Linux DB hosts only. Validate with `deno test --allow-all schema-release_test.ts`
 and `python3 scripts/test-runtime-package.py`. Install/update and Agent rollback

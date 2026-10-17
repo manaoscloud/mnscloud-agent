@@ -1,6 +1,7 @@
 """Security regression checks; no account installation or remote connections."""
 import importlib.util
 import json
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -169,10 +170,25 @@ class DiagnosticsContract(unittest.TestCase):
         with patch.object(collector, 'run', side_effect=OSError), \
                 patch.object(collector, 'trusted_read', side_effect=OSError):
             result = collector.versions()
-        self.assertEqual(result['diagnostics'], '3.7')
+        self.assertEqual(result['diagnostics'], '3.8')
         for key in ('rtpengine-daemon', 'coturn', 'media_checkout_version', 'turn_checkout_version',
                     'kamailio-webrtc_checkout_version'):
             self.assertEqual(result[key], 'UNAVAILABLE')
+
+    def test_db_reports_newest_prepared_release_not_base_checkout(self):
+        with tempfile.TemporaryDirectory() as root:
+            parent = Path(root) / 'mnscloud-db-releases'
+            parent.mkdir()
+            for name in ('v0.1.9-' + 'a' * 64, 'v0.1.10-' + 'b' * 64, 'v0.1.2-' + 'c' * 64, 'notes'):
+                (parent / name).mkdir()
+            with patch.object(Path, 'lstat', return_value=os.stat_result((0o40755, 0, 0, 0, 0, 0, 0, 0, 0, 0))):
+                self.assertEqual(collector.db_release_version(parent), '0.1.10')
+            self.assertEqual(collector.db_release_version(Path(root) / 'missing'), 'UNAVAILABLE')
+        with patch.object(collector, 'run', side_effect=OSError), \
+                patch.object(collector, 'trusted_read', side_effect=OSError):
+            result = collector.versions()
+        self.assertNotIn('db_checkout_version', result)
+        self.assertIn('db_release_version', result)
 
     def test_asterisk_odbc_reports_pool_state_without_dsn(self):
         sample = ('ODBC DSN Settings\n-----------------\n\n  Name:   mnscloud\n  DSN:    CANARY_DSN\n'
