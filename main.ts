@@ -18,7 +18,7 @@ import {
   nginxEdgeWebapps,
   type NginxEdgeWebappsIni,
 } from "./nginx-webapps.ts";
-import { prepareSchemaRelease } from "./schema-release.ts";
+import { prepareSchemaRelease, pruneSchemaArtifacts } from "./schema-release.ts";
 import {
   adapterArgs,
   parseRuntimeReconcileJob,
@@ -6017,8 +6017,9 @@ async function executeDatabaseSchemaReconcileJob(
     );
 
     const dbReleaseTag = String(job.dbReleaseTag ?? payload.dbReleaseTag ?? "");
+    let releaseDirectory = "";
     if (dbReleaseTag) {
-      const releaseDirectory = await prepareSchemaRelease(
+      releaseDirectory = await prepareSchemaRelease(
         "/opt/mnscloud/mnscloud-db",
         dbReleaseTag,
         schemaSha256,
@@ -6150,6 +6151,23 @@ async function executeDatabaseSchemaReconcileJob(
       schemaSha256,
       status: parsed.status ?? null,
     });
+    try {
+      const removed = await pruneSchemaArtifacts(
+        "/opt/mnscloud/mnscloud-db",
+        "/var/backups",
+        { releaseDirectory, planDirectory: planDir },
+        (args) => runLocalCommand("git", args, Math.max(config.commandTimeoutMs, 180_000)),
+      );
+      if (removed.length > 0) {
+        log("info", "Old schema release checkouts and reconcile work directories removed.", {
+          removed: removed.length,
+        });
+      }
+    } catch (error) {
+      log("warn", "Schema artifact cleanup failed; the reconcile result is unaffected.", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   } catch (error) {
     await failJob(
       config,

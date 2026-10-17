@@ -40,6 +40,8 @@ BRACKETED = re.compile(r'\[[^\]]{0,256}\]')
 CHECKOUTS = ('asterisk', 'freeswitch', 'kamailio-softswitch', 'opensips-sbc', 'media', 'turn',
              'kamailio-webrtc', 'webapps', 'agent')
 LOG_TEXT_LINES = 120
+DB_RELEASES = Path('/opt/mnscloud/mnscloud-db-releases')
+DB_RELEASE = re.compile(r'v(\d+\.\d+\.\d+)-[a-f0-9]{64}')
 LOG_TEXT_TAIL_BYTES = 262144
 LOG_LINE_CHARS = 400
 LOG_HIGHLIGHT_LINES = 80
@@ -437,7 +439,7 @@ def journal(request):
 
 
 def versions():
-    output = {'diagnostics': '3.7'}
+    output = {'diagnostics': '3.8'}
     for package in ('nginx', 'mariadb-server', 'rabbitmq-server', 'docker-ce',
                     'freeswitch', 'kamailio', 'opensips', 'rtpengine-daemon', 'coturn',
                     'freeradius', 'incus'):
@@ -447,14 +449,35 @@ def versions():
         except (OSError, ValueError, subprocess.SubprocessError):
             output[package] = 'UNAVAILABLE'
     for name in (*FILES, *CHECKOUTS):
+        if name == 'db':
+            continue
         path = Path('/opt/mnscloud') / ('mnscloud-' + name) / 'VERSION'
         try:
             value = trusted_read(path).strip()
             output[name + '_checkout_version'] = value if re.fullmatch(r'v?\d+\.\d+\.\d+[-A-Za-z0-9.]*', value) else 'UNKNOWN'
         except (OSError, ValueError, UnicodeError):
             output[name + '_checkout_version'] = 'UNAVAILABLE'
+    output['db_release_version'] = db_release_version()
     output['note'] = 'Checkout version does not prove deployed artifact identity.'
     return output
+
+
+def db_release_version(parent=DB_RELEASES):
+    """Newest approved DB release prepared by schema reconcile; the base checkout is only its git source."""
+    if not parent.is_dir():
+        return 'UNAVAILABLE'
+    try:
+        for item in (*reversed(parent.parents), parent):
+            info = item.lstat()
+            if stat.S_ISLNK(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
+                return 'UNKNOWN'
+        tags = [match.group(1) for match in (DB_RELEASE.fullmatch(entry.name) for entry in parent.iterdir())
+                if match]
+    except OSError:
+        return 'UNAVAILABLE'
+    if not tags:
+        return 'UNAVAILABLE'
+    return max(tags, key=lambda tag: tuple(int(part) for part in tag.split('.')))
 
 
 def parse_odbc_show(text):

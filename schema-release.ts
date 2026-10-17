@@ -80,3 +80,76 @@ export async function prepareSchemaRelease(
   }
   return directory;
 }
+
+const RELEASE_DIRECTORY = /^v\d+\.\d+\.\d+-[a-f0-9]{64}$/;
+const BACKUP_DIRECTORY = /^schema-reconcile-[A-Za-z0-9_]{8,64}$/;
+const DAY_MS = 86_400_000;
+
+async function entriesByAge(parent: string, pattern: RegExp) {
+  const entries: { path: string; mtime: number }[] = [];
+  try {
+    for await (const entry of Deno.readDir(parent)) {
+      if (!entry.isDirectory || !pattern.test(entry.name)) continue;
+      const path = `${parent}/${entry.name}`;
+      const info = await Deno.lstat(path);
+      entries.push({ path, mtime: info.mtime?.getTime() ?? 0 });
+    }
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) return [];
+    throw error;
+  }
+  return entries.sort((a, b) => b.mtime - a.mtime);
+}
+
+/** Entries beyond the newest `keep` that are older than `minAgeDays`, never `current`. */
+function expired(
+  entries: { path: string; mtime: number }[],
+  keep: number,
+  minAgeDays: number,
+  current: string,
+  now: number,
+) {
+  return entries.slice(keep).filter((entry) =>
+    entry.path !== current && now - entry.mtime > minAgeDays * DAY_MS
+  ).map((entry) => entry.path);
+}
+
+/**
+ * Bound the DB host disk: remove old approved release worktrees (through git, so the base checkout
+ * forgets them) and old reconcile work directories (plans, results, pre-apply dumps). The newest
+ * entries and anything recent stay, so a plan/apply pair and recent rollback dumps are untouched.
+ */
+export async function pruneSchemaArtifacts(
+  repo: string,
+  backupsDirectory: string,
+  current: { releaseDirectory?: string; planDirectory?: string },
+  runGit: SchemaGitRunner,
+  options = { keepReleases: 5, keepBackups: 10, minAgeDays: 3, now: Date.now() },
+): Promise<string[]> {
+  const removed: string[] = [];
+  const releases = expired(
+    await entriesByAge(`${repo}-releases`, RELEASE_DIRECTORY),
+    options.keepReleases,
+    options.minAgeDays,
+    current.releaseDirectory ?? "",
+    options.now,
+  );
+  for (const directory of releases) {
+    const result = await runGit(["-C", repo, "worktree", "remove", "--force", directory]);
+    if (result.code !== 0) continue;
+    removed.push(directory);
+  }
+  if (releases.length > 0) await runGit(["-C", repo, "worktree", "prune"]);
+  const backups = expired(
+    await entriesByAge(backupsDirectory, BACKUP_DIRECTORY),
+    options.keepBackups,
+    options.minAgeDays,
+    current.planDirectory ?? "",
+    options.now,
+  );
+  for (const directory of backups) {
+    await Deno.remove(directory, { recursive: true });
+    removed.push(directory);
+  }
+  return removed;
+}
