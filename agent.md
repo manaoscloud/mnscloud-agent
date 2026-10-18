@@ -271,7 +271,7 @@ app_upstream = $app_upstream
 api_upstream = $api_upstream
 webapps_enabled = false
 webapps_upstream = $webapps_upstream
-webapps_paths = /phoneweb/,/pulse/,/customer-portal/
+webapps_paths = /phoneweb/,/pulse/,/customer-portal/,/pos/
 test_command = nginx -t
 reload_command = systemctl reload nginx
 
@@ -284,9 +284,9 @@ default_email =
 # ThemeDomain HTTP/HTTPS server blocks include the WebApps locations even when
 # older agent config files still contain webapps_enabled = false. Paths set
 # there (MNSCLOUD_PHONEWEB_PATH, MNSCLOUD_PULSE_PATH,
-# MNSCLOUD_CUSTOMER_PORTAL_PATH, MNSCLOUD_WEBAPPS_PATHS) are always added to
+# MNSCLOUD_CUSTOMER_PORTAL_PATH, MNSCLOUD_POS_PATH, MNSCLOUD_WEBAPPS_PATHS) are always added to
 # webapps_paths, so every ThemeDomain gets the same webapps locations as the
-# edge template and /phoneweb/, /pulse/ and /customer-portal/ never fall
+# edge template and /phoneweb/, /pulse/, /customer-portal/ and /pos/ never fall
 # through to the main Angular app.
 #
 # ThemeDomain frontend CSP must keep Flutter Web runtime support for WebApps:

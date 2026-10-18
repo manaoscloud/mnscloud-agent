@@ -30,7 +30,18 @@ Deno.test("hosts without the proxy flag keep the legacy ini and env merge", () =
     "/phoneweb/",
     "/pulse/",
     "/customer-portal/",
+    "/pos/",
     "/extra/",
   ]);
   assertEquals(nginxEdgeWebapps(legacyIni, {}).nginxEdgeWebappsEnabled, false);
+});
+
+Deno.test("the POS path is published once even when listed twice", () => {
+  const settings = nginxEdgeWebapps(legacyIni, {
+    MNSCLOUD_ENABLE_WEBAPPS_PROXY: "true",
+    MNSCLOUD_CUSTOMER_PORTAL_PATH: "/customer-portal/",
+    MNSCLOUD_POS_PATH: "/pos/",
+    MNSCLOUD_WEBAPPS_PATHS: "/pos/",
+  });
+  assertEquals(settings.nginxEdgeWebappsPaths, ["/customer-portal/", "/pos/"]);
 });

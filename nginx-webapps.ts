@@ -1,6 +1,6 @@
 // Effective ThemeDomain webapps settings from /etc/mnscloud/nginx.env and agent.conf overrides.
 
-export const DEFAULT_NGINX_EDGE_WEBAPPS_PATHS = "/phoneweb/,/pulse/,/customer-portal/";
+export const DEFAULT_NGINX_EDGE_WEBAPPS_PATHS = "/phoneweb/,/pulse/,/customer-portal/,/pos/";
 
 export type NginxEdgeWebappsIni = {
   enabled: string | null;
@@ -30,6 +30,7 @@ function envPaths(env: Record<string, string>) {
     ...list(env.MNSCLOUD_PHONEWEB_PATH),
     ...list(env.MNSCLOUD_PULSE_PATH),
     ...list(env.MNSCLOUD_CUSTOMER_PORTAL_PATH),
+    ...list(env.MNSCLOUD_POS_PATH),
     ...list(env.MNSCLOUD_WEBAPPS_PATHS),
   ];
 }
@@ -56,6 +57,6 @@ export function nginxEdgeWebapps(
   return {
     nginxEdgeWebappsEnabled: flag(ini.enabled, envEnabled) || envEnabled,
     nginxEdgeWebappsUpstream: upstream,
-    nginxEdgeWebappsPaths: [...list(ini.paths), ...envPaths(env)],
+    nginxEdgeWebappsPaths: [...new Set([...list(ini.paths), ...envPaths(env)])],
   };
 }
