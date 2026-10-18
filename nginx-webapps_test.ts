@@ -1,5 +1,9 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { DEFAULT_NGINX_EDGE_WEBAPPS_PATHS, nginxEdgeWebapps } from "./nginx-webapps.ts";
+import {
+  DEFAULT_NGINX_EDGE_WEBAPPS_PATHS,
+  edgeSecurityHeaders,
+  nginxEdgeWebapps,
+} from "./nginx-webapps.ts";
 
 const legacyIni = {
   enabled: "false",
@@ -44,4 +48,26 @@ Deno.test("the POS path is published once even when listed twice", () => {
     MNSCLOUD_WEBAPPS_PATHS: "/pos/",
   });
   assertEquals(settings.nginxEdgeWebappsPaths, ["/customer-portal/", "/pos/"]);
+});
+
+Deno.test("edge headers: App and softphone may use the microphone, only the softphone is framable", () => {
+  const app = edgeSecurityHeaders("app", "");
+  const softphone = edgeSecurityHeaders("softphone", "");
+  const webapp = edgeSecurityHeaders("webapp", "");
+  assertEquals(app.includes("frame-ancestors 'none'"), true);
+  assertEquals(app.includes("microphone=(self)"), true);
+  assertEquals(softphone.includes("frame-ancestors 'self'"), true);
+  assertEquals(softphone.includes("microphone=(self)"), true);
+  assertEquals(webapp.includes("frame-ancestors 'none'"), true);
+  assertEquals(webapp.includes("microphone=()"), true);
+  assertEquals(app.split("\n").length, 4);
+});
+
+Deno.test("the softphone path comes from MNSCLOUD_PHONEWEB_PATH, defaulting to /phoneweb/", () => {
+  const custom = nginxEdgeWebapps(legacyIni, {
+    MNSCLOUD_ENABLE_WEBAPPS_PROXY: "true",
+    MNSCLOUD_PHONEWEB_PATH: "phone",
+  });
+  assertEquals(custom.nginxEdgeSoftphonePaths, ["/phone/"]);
+  assertEquals(nginxEdgeWebapps(legacyIni, {}).nginxEdgeSoftphonePaths, ["/phoneweb/"]);
 });
