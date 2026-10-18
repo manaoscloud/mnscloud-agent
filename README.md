@@ -502,6 +502,26 @@ component destruction and backs off after failures. No SSH or runtime jobs are s
 when opening a visualization. Raw measurements remain authoritative; displayed bucket
 averages are not claimed as instantaneous values.
 
+## Per-module database principals
+
+Each module host connects to MariaDB with its own account (mnscloud-db `docs/db-patterns.md` →
+Per-module database principals). `database.principal` jobs carry only a lease and a step:
+
+- `create` / `revoke` run on the DB host (`mnscloud.database.principal.v1`, advertised when the
+  schema-release executor and `/etc/mnscloud/db.env` exist) with `scripts/database-principal.py` of
+  the applied DB release (immutable verified release worktree, like the Authentication principal).
+- `deliver` runs on the module host (`mnscloud.module.database.credential.v1`, advertised when
+  `python3` and an adapter of a supported module exist: `api` → `/opt/mnscloud/mnscloud-api`,
+  `workers` → `/opt/mnscloud/mnscloud-workers`) with that checkout's
+  `scripts/apply-database-credential.py`, which switches the credential, restarts the module and
+  proves database health or restores the previous file.
+
+Material arrives over the authenticated Agent channel and goes to the adapter on stdin only; adapter
+output is never logged or forwarded, only fixed result codes. After a successful step the Agent never
+reports a failure (that would retire an account already in use, e.g. when an API node restarts its
+own API): it retries the success report and otherwise lets the lease expire so the idempotent
+adapter runs again.
+
 ## Authentication installation lifecycle
 
 The Agent remains installed/enrolled before Authentication bootstrap. Installing or removing that
