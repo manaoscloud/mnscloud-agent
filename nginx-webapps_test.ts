@@ -61,6 +61,10 @@ Deno.test("edge headers: App and softphone may use the microphone, only the soft
   assertEquals(webapp.includes("frame-ancestors 'none'"), true);
   assertEquals(webapp.includes("microphone=()"), true);
   assertEquals(app.split("\n").length, 4);
+  // Tutorial videos: only the App frames youtube-nocookie.com.
+  assertEquals(app.includes("frame-src 'self' https://www.youtube-nocookie.com;"), true);
+  assertEquals(softphone.includes("frame-src"), false);
+  assertEquals(webapp.includes("frame-src"), false);
 });
 
 Deno.test("the softphone path comes from MNSCLOUD_PHONEWEB_PATH, defaulting to /phoneweb/", () => {
