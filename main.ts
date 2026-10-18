@@ -23,6 +23,17 @@ import {
 } from "./nginx-webapps.ts";
 import { prepareSchemaRelease, pruneSchemaArtifacts } from "./schema-release.ts";
 import {
+  DATABASE_PRINCIPAL_CAPABILITY,
+  DATABASE_PRINCIPAL_JOB_TYPE,
+  databaseAdapterInput,
+  forwardedErrorCode,
+  genericErrorCode,
+  MODULE_DATABASE_CREDENTIAL_ADAPTERS,
+  MODULE_DATABASE_CREDENTIAL_CAPABILITY,
+  moduleAdapterInput,
+  parseDatabasePrincipalJob,
+} from "./database-principal.ts";
+import {
   adapterArgs,
   parseRuntimeReconcileJob,
   prepareModuleRelease,
@@ -316,6 +327,18 @@ async function applyRuntimeCapabilities(config: AgentConfig) {
   config.capabilities["mnscloud.database.authentication.principal.v1"] = !IS_WINDOWS &&
     await isExecutableFile("/opt/mnscloud/mnscloud-db/scripts/reconcile-database-schema.py") &&
     await fileExists("/etc/mnscloud/db.env");
+  // Per-module principals: DB hosts create/revoke accounts with the applied release adapter; module
+  // hosts apply a credential with the adapter of their installed checkout.
+  config.capabilities[DATABASE_PRINCIPAL_CAPABILITY] = !IS_WINDOWS &&
+    await isExecutableFile("/opt/mnscloud/mnscloud-db/scripts/reconcile-database-schema.py") &&
+    await fileExists("/etc/mnscloud/db.env");
+  config.capabilities[MODULE_DATABASE_CREDENTIAL_CAPABILITY] = !IS_WINDOWS &&
+    (await commandAvailable("python3")) !== null &&
+    (await Promise.all(
+      Object.values(MODULE_DATABASE_CREDENTIAL_ADAPTERS).map(async (module) =>
+        await fileExists(`${module.repo}/${module.adapter}`) && await fileExists(module.envPath)
+      ),
+    )).some(Boolean);
   config.capabilities["mnscloud.database.schema.reconcile.v1"] = await isExecutableFile(
     "/opt/mnscloud/mnscloud-db/scripts/reconcile-database-schema.py",
   );
@@ -6565,6 +6588,137 @@ async function executeAuthenticationDatabaseJob(
   }
 }
 
+async function runPrincipalAdapter(
+  script: string,
+  input: Record<string, unknown>,
+  timeoutMs: number,
+) {
+  const child = new Deno.Command("python3", {
+    args: [script],
+    stdin: "piped",
+    stdout: "piped",
+    stderr: "null",
+  }).spawn();
+  const timer = setTimeout(() => {
+    try {
+      child.kill("SIGKILL");
+    } catch { /* already exited */ }
+  }, timeoutMs);
+  try {
+    const writer = child.stdin.getWriter();
+    await writer.write(new TextEncoder().encode(JSON.stringify(input)));
+    await writer.close();
+    const [stdout, status] = await Promise.all([
+      readCommandOutput(child.stdout, 70000),
+      child.status,
+    ]);
+    let result: Record<string, unknown> = {};
+    try {
+      result = JSON.parse(stdout);
+    } catch { /* generic failure below */ }
+    return { ok: status.success && result.ok === true, errorCode: result.errorCode };
+  } catch {
+    try {
+      child.kill("SIGKILL");
+    } catch { /* exited */ }
+    await child.status;
+    return { ok: false, errorCode: undefined };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function executeDatabasePrincipalJob(
+  job: LeaseJob,
+  config: AgentConfig,
+  agentUUID: string,
+  agentToken: string,
+) {
+  let parsed;
+  try {
+    parsed = parseDatabasePrincipalJob(
+      job as { jobUUID: string; payload?: Record<string, unknown> },
+    );
+  } catch {
+    return;
+  }
+  const { leaseUUID, step } = parsed;
+  const base = `/agent/database-principals/${job.jobUUID}`;
+  let errorCode: string | null = null;
+  try {
+    const material = (await jsonRequest<{ data: Record<string, unknown> }>(
+      config,
+      `${base}/material`,
+      agentToken,
+      agentUUID,
+      { leaseUUID },
+    )).data;
+    if (material.step !== step) throw new Error("Step changed");
+    let outcome;
+    if (step === "deliver") {
+      const module = MODULE_DATABASE_CREDENTIAL_ADAPTERS[String(material.profile)];
+      if (
+        !config.capabilities[MODULE_DATABASE_CREDENTIAL_CAPABILITY] || !module ||
+        !await fileExists(`${module.repo}/${module.adapter}`)
+      ) {
+        errorCode = "MODULE_DATABASE_MODULE_UNAVAILABLE";
+        throw new Error("Module adapter unavailable");
+      }
+      // Restart, health proof and possible rollback of the module.
+      outcome = await runPrincipalAdapter(
+        `${module.repo}/${module.adapter}`,
+        moduleAdapterInput(material),
+        900_000,
+      );
+    } else {
+      if (!config.capabilities[DATABASE_PRINCIPAL_CAPABILITY]) {
+        throw new Error("Capability unavailable");
+      }
+      const releaseDirectory = await prepareSchemaRelease(
+        "/opt/mnscloud/mnscloud-db",
+        String(material.dbReleaseTag ?? ""),
+        String(material.schemaSha256 ?? ""),
+        (args) => runLocalCommand("git", args, Math.max(config.commandTimeoutMs, 180_000)),
+      );
+      outcome = await runPrincipalAdapter(
+        `${releaseDirectory}/scripts/database-principal.py`,
+        databaseAdapterInput(material, step),
+        180_000,
+      );
+    }
+    if (!outcome.ok) {
+      errorCode = forwardedErrorCode(step, outcome.errorCode);
+      throw new Error("Principal adapter failed");
+    }
+  } catch {
+    // Never forward adapter output, secret transport errors, SQL or response bodies.
+    const code = errorCode ?? genericErrorCode(step);
+    await jsonRequest(config, `${base}/result`, agentToken, agentUUID, {
+      leaseUUID,
+      errorCode: code,
+    })
+      .catch(() => undefined);
+    log("warn", "Database principal step failed.", { jobUUID: job.jobUUID, step, errorCode: code });
+    return;
+  }
+  // After a successful step never report a failure: a failure would retire an account the module
+  // already uses (an API node restarts its own API during delivery). Retry the success report; if
+  // it never arrives, the lease expires and the idempotent adapters run the step again.
+  for (let attempt = 1; attempt <= 12; attempt++) {
+    try {
+      await jsonRequest(config, `${base}/result`, agentToken, agentUUID, { leaseUUID });
+      log("info", "Database principal step completed.", { jobUUID: job.jobUUID, step });
+      return;
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 10_000));
+    }
+  }
+  log("warn", "Database principal result not delivered; the step will be retried.", {
+    jobUUID: job.jobUUID,
+    step,
+  });
+}
+
 async function executeRuntimeReconcileJob(
   job: LeaseJob,
   config: AgentConfig,
@@ -6728,6 +6882,8 @@ async function pollJobs(
       await executeAuthenticationLifecycleJob(job, config, agentUUID, agentToken);
     } else if (job.jobType === "authentication.database.principal") {
       await executeAuthenticationDatabaseJob(job, config, agentUUID, agentToken);
+    } else if (job.jobType === DATABASE_PRINCIPAL_JOB_TYPE) {
+      await executeDatabasePrincipalJob(job, config, agentUUID, agentToken);
     } else if (job.jobType === "database.schema.reconcile") {
       await executeDatabaseSchemaReconcileJob(job, config, agentUUID, agentToken);
     } else if (job.jobType === "database.table.maintenance") {
