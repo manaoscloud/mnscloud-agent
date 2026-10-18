@@ -15,6 +15,9 @@ import { collectWebappsStatus } from "./webapps-status.ts";
 import { webappsUpdateScript } from "./webapps-update.ts";
 import {
   DEFAULT_NGINX_EDGE_WEBAPPS_PATHS,
+  edgeSecurityHeaders,
+  type EdgeSurface,
+  NGINX_EDGE_RENDER_REVISION,
   nginxEdgeWebapps,
   type NginxEdgeWebappsIni,
 } from "./nginx-webapps.ts";
@@ -91,6 +94,7 @@ type AgentConfig = {
   nginxEdgeWebappsEnabled: boolean;
   nginxEdgeWebappsUpstream: string;
   nginxEdgeWebappsPaths: string[];
+  nginxEdgeSoftphonePaths: string[];
   /** Agent ini overrides; /etc/mnscloud/nginx.env is re-read before every nginx edge job. */
   nginxEdgeWebappsIni: NginxEdgeWebappsIni;
   nginxEdgeTestCommand: string;
@@ -2899,15 +2903,8 @@ async function nginxEdgeHasCertificate(config: AgentConfig, domain: string) {
     await fileExists(`${base}/privkey.pem`);
 }
 
-function frontendSecurityHeaders(indent = "    ") {
-  const csp =
-    "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://www.gstatic.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; connect-src 'self' https: wss:; form-action 'self'; upgrade-insecure-requests";
-  return [
-    `${indent}add_header Content-Security-Policy "${csp}" always;`,
-    `${indent}add_header X-Content-Type-Options "nosniff" always;`,
-    `${indent}add_header Referrer-Policy "strict-origin-when-cross-origin" always;`,
-    `${indent}add_header Permissions-Policy "geolocation=(), microphone=(), camera=()" always;`,
-  ].join("\n");
+function frontendSecurityHeaders(indent = "    ", surface: EdgeSurface = "app") {
+  return edgeSecurityHeaders(surface, indent);
 }
 
 function renderNginxEdgeDomainConfig(
@@ -3122,7 +3119,12 @@ function renderNginxEdgeWebappsLocations(config: AgentConfig) {
   }
 
   location ^~ ${path} {
-${frontendSecurityHeaders()}
+${
+      frontendSecurityHeaders(
+        "    ",
+        config.nginxEdgeSoftphonePaths.includes(path) ? "softphone" : "webapp",
+      )
+    }
     proxy_http_version 1.1;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
@@ -3200,6 +3202,22 @@ async function rerenderNginxEdgeDomains(config: AgentConfig) {
   }
   if (domains.length) await reloadNginxEdge(config);
   return domains;
+}
+
+/**
+ * Re-renders the existing ThemeDomain vhosts once per `NGINX_EDGE_RENDER_REVISION`, so a header
+ * or block change shipped in an Agent update reaches every domain without a manual reconcile.
+ */
+async function ensureNginxEdgeRenderRevision(config: AgentConfig) {
+  if (!config.capabilities["nginx-edge.manage"]) return;
+  const marker = `${config.nginxEdgeConfigDir.replace(/\/+$/, "")}/.render-revision`;
+  if ((await optionalRead(marker))?.trim() === NGINX_EDGE_RENDER_REVISION) return;
+  const domains = await rerenderNginxEdgeDomains(config);
+  await writeAtomic(marker, `${NGINX_EDGE_RENDER_REVISION}\n`);
+  log("info", "ThemeDomain vhosts re-rendered for the render revision.", {
+    revision: NGINX_EDGE_RENDER_REVISION,
+    domains: domains.length,
+  });
 }
 
 async function removeNginxEdgeDomain(config: AgentConfig, domain: string) {
@@ -6725,6 +6743,9 @@ async function pollJobs(
 async function main() {
   const config = await loadConfig();
   await applyRuntimeCapabilities(config);
+  await ensureNginxEdgeRenderRevision(config).catch((error) =>
+    log("warn", "ThemeDomain render revision update failed; vhosts kept.", String(error))
+  );
   const agentUUID = await readText(config.agentUUIDFile);
   log("info", "Agent started.", {
     config: CONFIG_PATH,
