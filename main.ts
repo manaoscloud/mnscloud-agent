@@ -297,6 +297,9 @@ async function applyRuntimeCapabilities(config: AgentConfig) {
   config.capabilities["mnscloud.authentication.update"] = await isExecutableFile(
     "/opt/mnscloud/mnscloud-authentication/scripts/update-authentication.sh",
   );
+  config.capabilities["mnscloud.logs.update"] = await isExecutableFile(
+    "/opt/mnscloud/mnscloud-logs/scripts/update-logs.sh",
+  );
   config.capabilities["mnscloud.freeswitch.update"] = await isExecutableFile(
     "/opt/mnscloud/mnscloud-freeswitch/scripts/update-freeswitch.sh",
   );
@@ -880,6 +883,12 @@ async function collectRuntimeVersions(config: AgentConfig) {
       "mnscloud-authentication",
       "mnscloud.authentication.update",
       "/opt/mnscloud/mnscloud-authentication",
+      config,
+    ),
+    runtimeVersionReport(
+      "mnscloud-logs",
+      "mnscloud.logs.update",
+      "/opt/mnscloud/mnscloud-logs",
       config,
     ),
     runtimeVersionReport(
@@ -3636,6 +3645,18 @@ function runtimeUpdateTarget(product: string) {
         `git fetch --tags --prune origin && git checkout ${
           shellQuote(targetRef)
         } && MNSCLOUD_SKIP_REPO_SYNC=1 bash scripts/update-authentication.sh --env /etc/mnscloud/authentication.env`,
+      ],
+    },
+    "mnscloud-logs": {
+      label: "Logs",
+      capability: "mnscloud.logs.update",
+      repoDir: "/opt/mnscloud/mnscloud-logs",
+      command: (targetRef) => [
+        "bash",
+        "-lc",
+        `git fetch --tags --prune origin && git checkout ${
+          shellQuote(targetRef)
+        } && bash scripts/update-logs.sh --env /etc/mnscloud/logs.env`,
       ],
     },
     "mnscloud-freeswitch": {

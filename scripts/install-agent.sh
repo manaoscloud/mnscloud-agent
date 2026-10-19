@@ -521,6 +521,7 @@ mnscloud.nginx.update = $(detect_executable_file /opt/mnscloud/mnscloud-nginx/sc
 mnscloud.rabbitmq.update = $(detect_executable_file /opt/mnscloud/mnscloud-rabbitmq/scripts/update-rabbitmq.sh)
 mnscloud.workers.update = $(detect_executable_file /opt/mnscloud/mnscloud-workers/scripts/update-workers.sh)
 mnscloud.authentication.update = $(detect_executable_file /opt/mnscloud/mnscloud-authentication/scripts/update-authentication.sh)
+mnscloud.logs.update = $(detect_executable_file /opt/mnscloud/mnscloud-logs/scripts/update-logs.sh)
 mnscloud.freeswitch.update = $(detect_executable_file /opt/mnscloud/mnscloud-freeswitch/scripts/update-freeswitch.sh)
 mnscloud.asterisk.update = $(detect_executable_file /opt/mnscloud/mnscloud-asterisk/scripts/update-asterisk.sh)
 mnscloud.opensips-sbc.update = $(detect_executable_file /opt/mnscloud/mnscloud-opensips-sbc/scripts/update-opensips-sbc.sh)

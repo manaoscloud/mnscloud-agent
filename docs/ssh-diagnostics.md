@@ -127,6 +127,10 @@ Version 3.8 (2026-10-17) reports `db_release_version`, the newest approved DB re
 `database.schema.reconcile` under `/opt/mnscloud/mnscloud-db-releases`, instead of
 `db_checkout_version`: `/opt/mnscloud/mnscloud-db` is only the git source of those release
 worktrees and its own VERSION goes stale. The applied schema is still `SchemaAppliedRevision`.
+Version 3.9 (2026-10-19) adds the Logs node the same way: `mnscloud-logs-storage`,
+`mnscloud-logs-ingest` and `mnscloud-logs-config` units, `logs.env` (non-secret keys only; the node
+principals file `logs-secrets.env` is never read), the `mnscloud-logs` checkout and the
+`clickhouse-server`/`vector` packages. No new commands or sudo changes.
 
 Security depends on root-controlled code and existing host SSH/PAM/sudo policy.
 Other administrative identities are unaffected. Review pre-existing broad sudo rules;

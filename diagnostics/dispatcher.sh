@@ -66,7 +66,10 @@ case "${SSH_ORIGINAL_COMMAND:-help}" in
       mnscloud-webapps.service \
       mnscloud-webapps-sync.service \
       incus.service \
-      mnscloud-grow-rootfs.service
+      mnscloud-grow-rootfs.service \
+      mnscloud-logs-storage.service \
+      mnscloud-logs-ingest.service \
+      mnscloud-logs-config.service
     ;;
   config|config-check|logs|logs-text|versions|connectivity|asterisk-odbc)
     exec /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin LC_ALL=C \
