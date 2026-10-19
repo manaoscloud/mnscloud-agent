@@ -60,6 +60,12 @@ Deno.test("edge headers: App and softphone may use the microphone, only the soft
   assertEquals(softphone.includes("microphone=(self)"), true);
   assertEquals(webapp.includes("frame-ancestors 'none'"), true);
   assertEquals(webapp.includes("microphone=()"), true);
+  // POS web reads barcodes with the camera of its own origin; nothing else gets the camera.
+  const scanner = edgeSecurityHeaders("scanner", "");
+  assertEquals(scanner.includes("camera=(self)"), true);
+  assertEquals(scanner.includes("microphone=()"), true);
+  assertEquals(scanner.includes("frame-ancestors 'none'"), true);
+  for (const other of [app, softphone, webapp]) assertEquals(other.includes("camera=()"), true);
   assertEquals(app.split("\n").length, 4);
   // Tutorial videos: only the App frames youtube-nocookie.com.
   assertEquals(app.includes("frame-src 'self' https://www.youtube-nocookie.com;"), true);
@@ -74,4 +80,13 @@ Deno.test("the softphone path comes from MNSCLOUD_PHONEWEB_PATH, defaulting to /
   });
   assertEquals(custom.nginxEdgeSoftphonePaths, ["/phone/"]);
   assertEquals(nginxEdgeWebapps(legacyIni, {}).nginxEdgeSoftphonePaths, ["/phoneweb/"]);
+  assertEquals(nginxEdgeWebapps(legacyIni, {}).nginxEdgeScannerPaths, ["/pos/"]);
+  assertEquals(
+    nginxEdgeWebapps(legacyIni, {
+      MNSCLOUD_ENABLE_WEBAPPS_PROXY: "true",
+      MNSCLOUD_POS_PATH: "caixa",
+    })
+      .nginxEdgeScannerPaths,
+    ["/caixa/"],
+  );
 });
