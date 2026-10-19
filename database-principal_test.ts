@@ -52,6 +52,10 @@ Deno.test("only fixed adapter codes are forwarded", () => {
     "MODULE_DATABASE_CREDENTIAL_FAILED",
   );
   assertEquals(forwardedErrorCode("create", undefined), "DATABASE_PRINCIPAL_PROVISION_FAILED");
+  assertEquals(
+    forwardedErrorCode("revoke", "DATABASE_PRINCIPAL_LEGACY_IN_USE"),
+    "DATABASE_PRINCIPAL_LEGACY_IN_USE",
+  );
 });
 
 Deno.test("adapters receive only the fields they read", () => {
@@ -66,5 +70,11 @@ Deno.test("adapters receive only the fields they read", () => {
     "password",
     "username",
   ]);
-  assertEquals(Object.keys(MODULE_DATABASE_CREDENTIAL_ADAPTERS).sort(), ["api", "workers"]);
+  assertEquals(Object.keys(MODULE_DATABASE_CREDENTIAL_ADAPTERS).sort(), [
+    "api",
+    "asterisk-realtime",
+    "workers",
+  ]);
+  const legacy = databaseAdapterInput({ ...material, profile: "legacy", host: "*" }, "revoke");
+  assertEquals([legacy.profile, legacy.host, "password" in legacy], ["legacy", "*", false]);
 });
