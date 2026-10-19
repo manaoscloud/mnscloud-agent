@@ -946,7 +946,7 @@ def parse_listeners(text):
             continue
         local = parts[4]
         address, _, port = local.rpartition(':')
-        if port.isdecimal() and re.fullmatch(r'[\[\]0-9A-Fa-f.:*%a-z]{1,64}', address):
+        if port.isdecimal() and re.fullmatch(r'[][0-9A-Za-z.:*%]{1,64}', address):
             listeners.append({'proto': parts[0], 'address': address, 'port': int(port)})
     return sorted(listeners, key=lambda item: (item['proto'], item['port'], item['address']))[:200]
 
