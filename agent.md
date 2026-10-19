@@ -332,9 +332,9 @@ timeout_ms = 15000
 
 Job lease long-poll: the job lane sends `waitSeconds` (`job_wait_seconds`, default 20, `0`
 disables, capped at 20 and 10 s under `request_timeout_ms`) to `POST /agent/jobs/lease`. With
-nothing to lease the API keeps the request open and leases as soon as on-demand runtime work
-(PABX, SBC or Softswitch command jobs, such as a runtime status asked in the App) is queued, so it
-runs within about a second instead of waiting up to `poll_interval_ms`. When the API echoes
+nothing to lease the API keeps the request open, probes every 2 s, and leases as soon as on-demand
+runtime work (PABX, SBC or Softswitch command jobs, such as a runtime status asked in the App) is
+queued, so it starts within about 2 s instead of waiting up to `poll_interval_ms`. When the API echoes
 `waitSeconds > 0` the next lease follows after 1 s; an API without long-poll answers at once and
 the lane keeps `poll_interval_ms`.
 
