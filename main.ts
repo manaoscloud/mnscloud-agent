@@ -42,7 +42,7 @@ import {
   RUNTIME_RECONCILE_PRODUCTS,
   runtimeReconcileProductAvailable,
 } from "./runtime-reconcile.ts";
-import { runLane } from "./scheduler.ts";
+import { JOB_LONG_POLL_MAX_SECONDS, jobLongPollSeconds, runLane } from "./scheduler.ts";
 import {
   byteBudget,
   captureCommand,
@@ -83,6 +83,7 @@ type AgentConfig = {
   transferTimeoutMs: number;
   transferMaxBytes: number;
   pollIntervalMs: number;
+  jobWaitSeconds: number;
   heartbeatIntervalMs: number;
   hostMetricsEnabled: boolean;
   hostMetricsIntervalMs: number;
@@ -528,6 +529,7 @@ async function loadConfig(): Promise<AgentConfig> {
       Math.max(1, getNumber(parsed, "agent", "transfer_max_bytes", 1024 ** 3)),
     ),
     pollIntervalMs: getNumber(parsed, "agent", "poll_interval_ms", 15_000),
+    jobWaitSeconds: getNumber(parsed, "agent", "job_wait_seconds", JOB_LONG_POLL_MAX_SECONDS),
     heartbeatIntervalMs: getNumber(
       parsed,
       "agent",
@@ -6873,17 +6875,19 @@ async function executeRuntimeReconcileJob(
   }
 }
 
+/** Leases and runs jobs; true when the API honored the long-poll, so the next lease can follow at once. */
 async function pollJobs(
   config: AgentConfig,
   agentUUID: string,
   agentToken: string,
-) {
-  const result = await jsonRequest<{ data?: { jobs?: LeaseJob[] } }>(
+): Promise<boolean> {
+  const waitSeconds = jobLongPollSeconds(config.jobWaitSeconds, config.requestTimeoutMs);
+  const result = await jsonRequest<{ data?: { jobs?: LeaseJob[]; waitSeconds?: number } }>(
     config,
     "/agent/jobs/lease",
     agentToken,
     agentUUID,
-    { limit: 3 },
+    waitSeconds > 0 ? { limit: 3, waitSeconds } : { limit: 3 },
   );
   for (const job of result.data?.jobs ?? []) {
     if (job.jobType === "media.file.sync") {
@@ -6920,6 +6924,7 @@ async function pollJobs(
       await uploadJob(job, config, agentUUID, agentToken);
     }
   }
+  return waitSeconds > 0 && Number(result.data?.waitSeconds ?? 0) > 0;
 }
 
 async function main() {
@@ -6940,6 +6945,7 @@ async function main() {
   let lastCapabilitiesRefresh = Date.now();
   let lastSelfObservation = 0;
   let jobPolling = false;
+  let jobLongPoll = false;
   const reportError = (lane: string) => (error: unknown) =>
     log("warn", `Agent ${lane} failed.`, String(error));
   await Promise.all([
@@ -6982,12 +6988,16 @@ async function main() {
         if (!agentToken) return;
         jobPolling = true;
         try {
-          await pollJobs(config, agentUUID, agentToken);
+          jobLongPoll = await pollJobs(config, agentUUID, agentToken);
+        } catch (error) {
+          jobLongPoll = false;
+          throw error;
         } finally {
           jobPolling = false;
         }
       },
-      Math.max(1000, config.pollIntervalMs),
+      // The API long-poll already waited for work; an older API answers at once (normal interval).
+      () => jobLongPoll ? 1000 : Math.max(1000, config.pollIntervalMs),
       reportError("jobs"),
     ),
   ]);
