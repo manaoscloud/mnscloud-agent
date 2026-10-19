@@ -106,6 +106,7 @@ type AgentConfig = {
   nginxEdgeWebappsUpstream: string;
   nginxEdgeWebappsPaths: string[];
   nginxEdgeSoftphonePaths: string[];
+  nginxEdgeScannerPaths: string[];
   /** Agent ini overrides; /etc/mnscloud/nginx.env is re-read before every nginx edge job. */
   nginxEdgeWebappsIni: NginxEdgeWebappsIni;
   nginxEdgeTestCommand: string;
@@ -3145,7 +3146,11 @@ function renderNginxEdgeWebappsLocations(config: AgentConfig) {
 ${
       frontendSecurityHeaders(
         "    ",
-        config.nginxEdgeSoftphonePaths.includes(path) ? "softphone" : "webapp",
+        config.nginxEdgeSoftphonePaths.includes(path)
+          ? "softphone"
+          : config.nginxEdgeScannerPaths.includes(path)
+          ? "scanner"
+          : "webapp",
       )
     }
     proxy_http_version 1.1;
