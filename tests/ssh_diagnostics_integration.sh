@@ -19,11 +19,24 @@ mkdir -p /etc/mnscloud
 printf 'DB_HOST=127.0.0.1\nDB_PORT=1\nDB_PASS=CANARY_SECRET\nJWT_SECRET=CANARY_JWT\n' > /etc/mnscloud/api.env
 chmod 600 /etc/mnscloud/api.env
 printf 'step VISIBLE_MARKER apt-get failed\ntoken=CANARY_TOKEN Authorization: Bearer CANARY_BEARER\n' > /var/log/mnscloud-install.log
-for op in config config-check logs logs-text versions connectivity asterisk-odbc; do
+mkdir -p /var/log/nginx /var/www/mnscloud-app
+printf '203.0.113.9 - CANARYUSER [%s] "GET /api/v1/health?token=CANARY HTTP/1.1" 200 1 "-" "CANARY"\n' \
+  "$(date '+%d/%b/%Y:%H:%M:%S %z')" > /var/log/nginx/access.log
+printf '{"product":"mnscloud-app","version":"0.2.85","gitRef":"v0.2.85","secret":"CANARY"}' > /var/www/mnscloud-app/build.json
+for op in config config-check logs logs-text versions connectivity asterisk-odbc artifacts health agent host \
+  network timers edge log-usage voip-summary schema-status access-summary; do
   runuser -u mns-diagnostics -- env SSH_ORIGINAL_COMMAND="$op" /usr/local/sbin/mns-diagnostics > "/tmp/$op.json"
   python3 -c 'import json,sys; v=open(sys.argv[1]).read(); json.loads(v); assert "CANARY" not in v' "/tmp/$op.json"
 done
 grep -q VISIBLE_MARKER /tmp/logs-text.json
+python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["served"]["mnscloud-app"]["version"] == "0.2.85"' /tmp/artifacts.json
+python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["total"] == 1 and v["top"][0]["path"] == "/api/v1/health"' /tmp/access-summary.json
+python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["status"] == "NOT_A_DATABASE_HOST"' /tmp/schema-status.json
+runuser -u mns-diagnostics -- env SSH_ORIGINAL_COMMAND='access-summary 60' /usr/local/sbin/mns-diagnostics | grep -q '"sinceMinutes": 60'
+runuser -u mns-diagnostics -- env SSH_ORIGINAL_COMMAND='mns-diagnostics versions 2>/dev/null' /usr/local/sbin/mns-diagnostics | grep -q '"diagnostics": "4.0"'
+for request in 'access-summary 0' 'access-summary x' 'artifacts /etc/shadow' 'health 8.8.8.8'; do
+  if runuser -u mns-diagnostics -- env SSH_ORIGINAL_COMMAND="$request" /usr/local/sbin/mns-diagnostics; then exit 1; fi
+done
 runuser -u mns-diagnostics -- env SSH_ORIGINAL_COMMAND='journal mnscloud-agent 30 err' /usr/local/sbin/mns-diagnostics > /tmp/journal.json
 python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["unit"] == "mnscloud-agent" and v["sinceMinutes"] == 30' /tmp/journal.json
 for request in 'journal sshd' 'journal nginx 9999' 'journal nginx debug' 'journal nginx --grep=x'; do
@@ -53,5 +66,5 @@ sha256sum -c /tmp/key-check
 bash /agent/scripts/install-diagnostics.sh | grep -q 'Converged'
 runuser -u mns-diagnostics -- env SSH_ORIGINAL_COMMAND=help /usr/local/sbin/mns-diagnostics | grep -q 'journal UNIT'
 sha256sum -c /tmp/key-check
-printf 'PASS: Agent-managed install/idempotence/update, collectors, masked usernames, denied sudo, key/UID preservation and rollback.\n'
+printf 'PASS: Agent-managed install/idempotence/update, collectors (diagnostics 4.0), masked usernames, denied sudo, key/UID preservation and rollback.\n'
 TEST

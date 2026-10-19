@@ -67,7 +67,7 @@ class DiagnosticsContract(unittest.TestCase):
         self.assertIn('--lines=2000', args)
         self.assertEqual(result['lines'], [])
         dispatcher = (SOURCE / 'dispatcher.sh').read_text()
-        self.assertIn('collector.py journal\n', dispatcher)
+        self.assertIn('journal\\ *|access-summary\\ *)', dispatcher)
         manage = (SOURCE / 'manage.py').read_text()
         self.assertIn("'journal'", manage)
 
@@ -170,7 +170,7 @@ class DiagnosticsContract(unittest.TestCase):
         with patch.object(collector, 'run', side_effect=OSError), \
                 patch.object(collector, 'trusted_read', side_effect=OSError):
             result = collector.versions()
-        self.assertEqual(result['diagnostics'], '3.9')
+        self.assertEqual(result['diagnostics'], '4.0')
         for key in ('rtpengine-daemon', 'coturn', 'clickhouse-server', 'vector', 'media_checkout_version',
                     'turn_checkout_version', 'logs_checkout_version',
                     'kamailio-webrtc_checkout_version'):
@@ -257,6 +257,281 @@ class DiagnosticsContract(unittest.TestCase):
             self.assertIn('Login OK: [USER] (from client X_1 port 0)', result['tail'][0])
             self.assertTrue(any('rlm_sql failed' in line for line in result['highlights']))
             self.assertIn('CANARY', json.dumps(collector.tail_log(path)))  # only the engine log is user-masked
+
+
+def dispatch(command):
+    return subprocess.run(['/bin/sh', str(SOURCE / 'dispatcher.sh')], env={'SSH_ORIGINAL_COMMAND': command},
+                          capture_output=True, text=True, timeout=20)
+
+
+class DiagnosticsV4Contract(unittest.TestCase):
+    def test_operation_lists_agree(self):
+        spec_manage = importlib.util.spec_from_file_location('manage', SOURCE / 'manage.py')
+        manage = importlib.util.module_from_spec(spec_manage)
+        spec_manage.loader.exec_module(manage)
+        self.assertEqual(set(manage.OPERATIONS), set(collector.OPERATIONS))
+        help_text = dispatch('help').stdout
+        for operation in collector.OPERATIONS:
+            self.assertIn('  ' + operation, help_text)
+        self.assertIn('diagnostics ' + collector.DIAGNOSTICS_VERSION, help_text)
+
+    def test_runtime_products_are_covered(self):
+        # Every runtime product the Agent reports must be readable by artifacts and versions.
+        main = (ROOT / 'main.ts').read_text()
+        block = main.split('async function collectRuntimeVersions', 1)[1].split('runtimeVersionCache = {', 1)[0]
+        products = set(__import__('re').findall(r'"/opt/mnscloud/mnscloud-([a-z0-9-]+)"', block))
+        self.assertTrue(products)
+        self.assertEqual(products, set(collector.RUNTIME_CHECKOUTS))
+        for product in products:
+            self.assertTrue(product in collector.FILES or product in collector.CHECKOUTS
+                            or product in ('kamailio-webrtc',), product)
+
+    def test_dispatcher_normalizes_habits_but_still_denies(self):
+        for command in ('mns-diagnostics help', 'help 2>/dev/null', 'help 2>&1', 'mns-diagnostics uptime 2>/dev/null'):
+            result = dispatch(command)
+            self.assertEqual(result.returncode, 0, command)
+            self.assertTrue(result.stdout.strip())
+        for command in ('help; id', 'help 2>/tmp/x', 'help 2>/dev/null; id', 'mns-diagnostics sh -c id',
+                        'help 2>&1 2>&1', 'artifacts x', 'health 8.8.8.8', 'access-summary', 'access-summaryx',
+                        'schema-status SELECT'):
+            if command == 'access-summary':
+                continue  # valid; needs the sudo collector
+            result = dispatch(command)
+            self.assertEqual(result.returncode, 126, command)
+            self.assertEqual(result.stdout, '')
+            self.assertIn("Run 'help'", result.stderr)
+        identity = dispatch('identity')
+        self.assertEqual(identity.returncode, 0)
+        self.assertEqual(len(identity.stdout.strip().splitlines()), 2)
+
+    def test_parameters_are_validated_before_privilege(self):
+        for request in ('abc', '0', '1441', '10 10', '-5', '10;id', '9' * 10):
+            result = subprocess.run(['python3', '-I', str(SOURCE / 'collector.py'), 'access-summary'],
+                                    input=request.encode() + b'\n', capture_output=True)
+            self.assertEqual(result.returncode, 126, request)
+            self.assertIn(b'DENIED', result.stderr)
+        self.assertEqual(collector.parse_access_request('\n'), 15)
+        self.assertEqual(collector.parse_access_request('120\n'), 120)
+        self.assertEqual(collector.parse_journal_request('mnscloud-asterisk-logs 30'), ('mnscloud-asterisk-logs', 30, 'info'))
+        for request in ('mnscloud-', 'mnscloud--x', 'mnscloudx', 'sshd-mnscloud-x'):
+            with self.assertRaises(PermissionError):
+                collector.parse_journal_request(request)
+        for args in (['artifacts', 'x'], ['health', '/etc/shadow'], ['schema-status', 'SELECT 1']):
+            result = subprocess.run(['python3', '-I', str(SOURCE / 'collector.py'), *args], capture_output=True)
+            self.assertEqual(result.returncode, 126)
+
+    def test_access_summary_aggregates_without_clients_queries_or_agents(self):
+        now = collector.datetime(2026, 10, 19, 16, 0, tzinfo=collector.timezone.utc)
+        rows = [
+            '203.0.113.9 - CANARYUSER [19/Oct/2026:12:58:00 -0300] "POST /api/v1/system/ai/providers/'
+            '9F1C2E3D4B5A69788796A5B4C3D2E1F0?token=CANARY HTTP/2.0" 200 155 "-" "CANARY-agent"',
+            '2804:8094::1 - - [19/Oct/2026:12:59:00 -0300] "GET /api/v1/tenants/12345/domains/CANARY.example.com '
+            'HTTP/2.0" 404 70 "https://CANARY.example/" "Deno/2.8.1"',
+            '198.51.100.7 - - [19/Oct/2026:11:00:00 -0300] "GET /old HTTP/1.1" 200 1 "-" "-"',
+            'garbage CANARY line',
+        ]
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'access.log'
+            path.write_text('\n'.join(rows) + '\n')
+            result = collector.access_summary(15, path, now)
+        text = json.dumps(result)
+        self.assertNotIn('CANARY', text)
+        self.assertNotIn('203.0.113.9', text)
+        self.assertEqual(result['total'], 2)
+        self.assertTrue(result['windowComplete'])
+        self.assertIn({'method': 'POST', 'path': '/api/v1/system/ai/providers/:id', 'status': 200, 'count': 1},
+                      result['top'])
+        self.assertIn({'method': 'GET', 'path': '/api/v1/tenants/:id/domains/:value', 'status': 404, 'count': 1},
+                      result['top'])
+        self.assertEqual(collector.normalize_path('/a/b/c/d/e/f/g/h/i/j'), '/a/b/c/d/e/f/g/h/...')
+
+    def test_agent_events_keep_listed_fields_only(self):
+        lines = [
+            {'PRIORITY': '6', 'MESSAGE': '[mnscloud-agent] 2026-10-19T16:35:33.418Z Runtime update completed. '
+                                         '{"jobUUID":"65372109189346B2A10139BF13688E02","product":"mnscloud-app",'
+                                         '"targetRef":"v0.2.86","scheduled":false,"password":"CANARY","nested":{"x":1}}'},
+            {'PRIORITY': '4', 'MESSAGE': '[mnscloud-agent] 2026-10-19T16:36:00.000Z Failed to report job failure. '
+                                         '{"error":"POST failed Authorization: Bearer CANARY_TOKEN"}'},
+            {'PRIORITY': '6', 'MESSAGE': '[mnscloud-agent] 2026-10-19T16:38:54.096Z Agent resource usage. '
+                                         '{"rssBytes":97243136,"uptimeSeconds":38529,"jobPolling":false}'},
+            {'PRIORITY': '6', 'MESSAGE': 'unrelated CANARY output'},
+        ]
+        result = collector.agent_events('\n'.join(json.dumps(line) for line in lines))
+        text = json.dumps(result)
+        self.assertNotIn('CANARY', text)
+        self.assertEqual(result['events'][0]['targetRef'], 'v0.2.86')
+        self.assertNotIn('password', result['events'][0])
+        self.assertEqual(result['events'][1]['level'], 'warn')
+        self.assertEqual(result['resource']['rssBytes'], 97243136)
+        self.assertEqual(result['levels24h'], {'info': 2, 'warn': 1})
+
+    def test_health_targets_are_local_and_fields_are_listed(self):
+        self.assertEqual(collector.local_address('0.0.0.0'), '127.0.0.1')
+        self.assertEqual(collector.local_address('127.0.0.1'), '127.0.0.1')
+        self.assertIsNone(collector.local_address('8.8.8.8'))
+        self.assertIsNone(collector.local_address('api.example.com'))
+        targets = collector.health_targets({'api': {'APP_HOST': '8.8.8.8', 'APP_PORT': '8000'},
+                                            'openvault': {'OPENVAULT_MODE': 'x'}}, {'WEBAPPS_LISTEN_PORT': '99999'},
+                                           True)
+        by_name = {target['name']: target for target in targets}
+        self.assertEqual(by_name['api']['configError'], 'NOT_A_LOCAL_ADDRESS_OR_PORT')
+        self.assertEqual(by_name['webapps']['configError'], 'NOT_A_LOCAL_ADDRESS_OR_PORT')
+        self.assertEqual((by_name['app']['host'], by_name['app']['port'], by_name['app']['path']),
+                         ('127.0.0.1', 8080, '/build.json'))
+        self.assertTrue(by_name['openvault']['path'].startswith('/v1/sys/health?'))
+        self.assertNotIn('logs-clickhouse', by_name)
+
+        class Response:
+            status = 200
+
+            def read(self, size):
+                return json.dumps({'status': 'ok', 'version': '1.3.661', 'database': 'connected',
+                                   'secret': 'CANARY', 'environment': {'nested': 'CANARY'}}).encode()
+
+            def getheader(self, name):
+                return None
+
+        class Connection:
+            def request(self, method, path, headers):
+                assert method == 'GET' and 'Authorization' not in headers
+
+            def getresponse(self):
+                return Response()
+
+            def close(self):
+                pass
+
+        api = {'name': 'api', 'scheme': 'http', 'host': '127.0.0.1', 'port': 8000, 'path': '/health',
+               'configError': None}
+        result = collector.probe(api, lambda target: Connection())
+        self.assertEqual(result['status'], 'OK')
+        self.assertEqual(result['fields'], {'status': 'ok', 'version': '1.3.661', 'database': 'connected'})
+        self.assertNotIn('CANARY', json.dumps(result))
+        dropped = []
+        with patch.object(collector, 'load_configs', return_value={}), \
+                patch.object(collector, 'trusted_read', side_effect=FileNotFoundError), \
+                patch.object(collector, 'probe', side_effect=lambda target: {'name': target['name']}):
+            collector.health(drop=lambda: dropped.append(True))
+        self.assertEqual(dropped, [True])
+
+    def test_artifacts_read_listed_build_fields_inside_release_tree(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            release = root / 'releases' / 'pos' / 'v1.0.11-abc'
+            release.mkdir(parents=True)
+            (release / 'build.json').write_text(json.dumps({'product': 'mnscloud-pos', 'version': '1.0.11',
+                                                            'ref': 'v1.0.11', 'token': 'CANARY',
+                                                            'buildRef': 'x; rm -rf /'}))
+            (release / 'index.html').write_text('<html>')
+            (root / 'current').mkdir()
+            (root / 'current' / 'pos').symlink_to(release)
+            outside = root / 'outside'
+            outside.mkdir()
+            (outside / 'build.json').write_text('{"version": "CANARY"}')
+            (root / 'current' / 'evil').symlink_to(outside)
+            result = collector.webapps_artifacts(root)
+        self.assertEqual(result['evil'], 'UNEXPECTED_RELEASE_TARGET')
+        self.assertEqual(result['pos']['version'], '1.0.11')
+        self.assertEqual(result['pos']['release'], 'v1.0.11-abc')
+        self.assertEqual(result['pos']['buildRef'], 'REDACTED')
+        self.assertEqual(len(result['pos']['indexSha256']), 64)
+        self.assertNotIn('CANARY', json.dumps(result))
+        with tempfile.TemporaryDirectory() as folder:
+            (Path(folder) / 'VERSION').write_text('v1.3.661\n')
+            self.assertEqual(collector.build_metadata(Path(folder)), {'version': 'v1.3.661'})
+            link = Path(folder) / 'linked'
+            link.mkdir()
+            (link / 'build.json').symlink_to('/etc/hostname')
+            self.assertEqual(collector.build_metadata(link)['build'], 'UNREADABLE_OR_UNSAFE')
+
+    def test_network_listeners_have_no_processes(self):
+        sample = ('tcp   LISTEN 0 511 0.0.0.0:443 0.0.0.0:* users:(("nginx",pid=1,fd=6))\n'
+                  'tcp   LISTEN 0 4096 [::]:22 [::]:*\nudp   UNCONN 0 0 172.17.0.100:5060 0.0.0.0:*\n')
+        self.assertEqual(collector.parse_listeners(sample), [
+            {'proto': 'tcp', 'address': '[::]', 'port': 22}, {'proto': 'tcp', 'address': '0.0.0.0', 'port': 443},
+            {'proto': 'udp', 'address': '172.17.0.100', 'port': 5060}])
+
+    def test_voip_summary_returns_counters_only(self):
+        outputs = {
+            'stats.get_statistics': 'usrloc:registered_users = 3\nusrloc:location_contacts = 4\nCANARY = x\n',
+            'core show channels count': '2 active channels\n1 active call\n9 calls processed\n',
+            'pjsip show contacts': 'Contact: CANARY/sip:1001@10.0.0.1\n\nObjects found: 5\n',
+            'pjsip show endpoints': 'Objects found: 7\n',
+            'pjsip show registrations': 'No objects found.\n',
+        }
+
+        def runner(args):
+            for key, value in outputs.items():
+                if key in args:
+                    return value
+            raise OSError
+
+        tools = {name: '/bin/sh' if name in ('kamailio', 'asterisk') else '/nonexistent' for name in collector.VOIP_TOOLS}
+        with patch.dict(collector.VOIP_TOOLS, tools):
+            result = collector.voip_summary(runner)
+        self.assertEqual(result['kamailio'], {'usrloc:registered_users': 3, 'usrloc:location_contacts': 4})
+        self.assertEqual(result['asterisk'], {'activeChannels': 2, 'activeCalls': 1, 'callsProcessed': 9,
+                                              'pjsipContacts': 5, 'pjsipEndpoints': 7, 'pjsipRegistrations': 0})
+        self.assertNotIn('freeswitch', result)
+        self.assertNotIn('CANARY', json.dumps(result))
+
+    def test_schema_status_uses_fixed_queries_after_dropping_privileges(self):
+        calls, dropped = [], []
+
+        def runner(sql):
+            calls.append(sql)
+            if 'SchemaAppliedRevision' in sql:
+                return 'primary\tv0.1.495\t2026-10-19 16:00:00.000000\n'
+            return 'verify\tv0.1.495\tsuccess\t2026-10-19 16:00:00\tNULL\tNULL\t2026-10-19 15:59:00\n'
+
+        with patch.object(collector, 'trusted_read', return_value='DB_NAME=clouddb\nDB_ROOT_PASSWORD=CANARY\n'):
+            result = collector.schema_status(drop=lambda: dropped.append(True), runner=runner)
+        self.assertEqual(dropped, [True])
+        self.assertEqual(calls, [collector.SCHEMA_REVISION_SQL, collector.SCHEMA_JOBS_SQL])
+        self.assertEqual(result['appliedRevisions'][0]['releaseTag'], 'v0.1.495')
+        self.assertIsNone(result['reconcileJobs'][0]['finishedAt'])
+        self.assertNotIn('CANARY', json.dumps(result))
+        with patch.object(collector, 'trusted_read', side_effect=FileNotFoundError):
+            self.assertEqual(collector.schema_status(drop=lambda: None)['status'], 'NOT_A_DATABASE_HOST')
+        for sql in (collector.SCHEMA_REVISION_SQL, collector.SCHEMA_JOBS_SQL):
+            self.assertTrue(sql.startswith('SELECT '))
+            self.assertNotIn('Message', sql)
+            self.assertNotIn('Json', sql)
+
+    def test_db_account_grants_are_column_scoped(self):
+        spec_db = importlib.util.spec_from_file_location('db_account', SOURCE / 'db_account.py')
+        db_account = importlib.util.module_from_spec(spec_db)
+        spec_db.loader.exec_module(db_account)
+        tables = {'SchemaAppliedRevision', 'SchemaReconcileJob'}
+        allowed = [
+            'GRANT USAGE ON *.* TO `mns-diagnostics`@`localhost` IDENTIFIED VIA unix_socket',
+            'GRANT SELECT (`SarStatus`, `SarClusterKey`) ON `clouddb`.`SchemaAppliedRevision` TO `mns-diagnostics`@`localhost`',
+        ]
+        self.assertEqual(db_account.unexpected_grants(allowed, 'clouddb', tables), [])
+        for line in ('GRANT SELECT ON `clouddb`.`Secret` TO `mns-diagnostics`@`localhost`',
+                     'GRANT SELECT (`SrjLastErrorMessage`) ON `clouddb`.`SchemaReconcileJob` TO `mns-diagnostics`@`localhost`',
+                     'GRANT SELECT (`SarStatus`) ON `otherdb`.`SchemaAppliedRevision` TO `mns-diagnostics`@`localhost`',
+                     'GRANT ALL PRIVILEGES ON *.* TO `mns-diagnostics`@`localhost`'):
+            self.assertEqual(db_account.unexpected_grants(allowed + [line], 'clouddb', tables), [line])
+        statements = []
+
+        def run(statement, database, password):
+            statements.append(statement)
+            if statement.startswith('SELECT TABLE_NAME'):
+                return 'SchemaAppliedRevision\nSchemaReconcileJob\n'
+            if statement.startswith('SHOW GRANTS'):
+                return '\n'.join(allowed) + '\n'
+            return ''
+
+        with patch.object(db_account, 'DB_ENV', Path('/etc/hostname')), \
+                patch.object(db_account, 'MARIADB', Path('/bin/sh')), \
+                patch.object(db_account.pwd, 'getpwnam'), \
+                patch.object(db_account, 'private_env', return_value={'DB_NAME': 'clouddb'}):
+            self.assertEqual(db_account.converge(run)['status'], 'CONVERGED')
+        self.assertIn("CREATE USER IF NOT EXISTS 'mns-diagnostics'@'localhost' IDENTIFIED VIA unix_socket;", statements)
+        self.assertFalse(any('IDENTIFIED BY' in statement or 'PASSWORD' in statement for statement in statements))
+        self.assertFalse(any(statement.startswith('REVOKE') for statement in statements))
+
 
 if __name__ == '__main__':
     unittest.main()

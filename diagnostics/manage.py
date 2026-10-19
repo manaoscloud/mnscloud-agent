@@ -21,7 +21,9 @@ COLLECTOR = Path('/usr/local/lib/mns-diagnostics/collector.py')
 SUDOERS = Path('/etc/sudoers.d/mns-diagnostics')
 BACKUPS = Path('/var/backups/mns-diagnostics')
 TARGETS = (SHELL, COLLECTOR, SUDOERS)
-OPERATIONS = ('config', 'config-check', 'logs', 'logs-text', 'journal', 'versions', 'connectivity', 'asterisk-odbc')
+OPERATIONS = ('config', 'config-check', 'logs', 'logs-text', 'journal', 'versions', 'connectivity', 'asterisk-odbc',
+              'artifacts', 'health', 'agent', 'host', 'network', 'timers', 'edge', 'access-summary', 'log-usage',
+              'voip-summary', 'schema-status')
 
 
 def call(args, **kwargs):
@@ -186,14 +188,14 @@ def main():
         call(['runuser', '-u', USER, '--', 'env', 'SSH_ORIGINAL_COMMAND=help', str(SHELL)])
         for operation in OPERATIONS:
             # Exercise privilege delegation without reading network/config/log data.
-            if operation == 'versions':
+            if operation in ('versions', 'host'):
                 call(['runuser', '-u', USER, '--', 'env', 'SSH_ORIGINAL_COMMAND=' + operation, str(SHELL)],
                      stdout=subprocess.DEVNULL, timeout=45)
         result = subprocess.run(['runuser', '-u', USER, '--', 'env',
                                  'SSH_ORIGINAL_COMMAND=sh -c id', str(SHELL)])
         if result.returncode != 126:
             raise RuntimeError('Unauthorized command was not rejected correctly.')
-        print('Diagnostics v3 installed. Keys and existing account identity preserved on update.')
+        print('Diagnostics v4 installed. Keys and existing account identity preserved on update.')
         print('Remote SSH validation still required. No service restart performed.')
     except BaseException:
         restore(saved)

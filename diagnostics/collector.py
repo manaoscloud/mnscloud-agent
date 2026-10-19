@@ -1,10 +1,14 @@
 #!/usr/bin/python3
 """Fixed, bounded root collector. Never source env files; log text is always masked."""
-from datetime import datetime, timezone
+from collections import Counter
+from datetime import datetime, timedelta, timezone
+import hashlib
+import http.client
 import json
 import ipaddress
 import os
 from pathlib import Path
+import pwd
 import re
 import signal
 import socket
@@ -14,6 +18,8 @@ import subprocess
 import sys
 from urllib.parse import urlsplit
 
+DIAGNOSTICS_VERSION = '4.0'
+DIAGNOSTICS_USER = 'mns-diagnostics'
 CONFIG_DIR = Path('/etc/mnscloud')
 FILES = ('api', 'app', 'nginx', 'workers', 'rabbitmq', 'db', 'authentication', 'openvault', 'logs')
 UNITS = ('nginx', 'mariadb', 'rabbitmq-server', 'mnscloud-api',
@@ -23,6 +29,9 @@ UNITS = ('nginx', 'mariadb', 'rabbitmq-server', 'mnscloud-api',
          'mnscloud-authentication-config', 'mnscloud-openvault', 'mnscloud-openvault-tls-renew',
          'mnscloud-webapps', 'mnscloud-webapps-sync', 'incus', 'mnscloud-grow-rootfs',
          'mnscloud-logs-storage', 'mnscloud-logs-ingest', 'mnscloud-logs-config')
+# Any installed MNSCloud unit is covered without a diagnostics release (diagnostics 4.0): names are
+# validated against this pattern before they reach systemctl/journalctl.
+MNSCLOUD_UNIT = re.compile(r'mnscloud-[a-z0-9]+(?:-[a-z0-9]+){0,8}')
 # Fixed log files readable through logs-text. Never accept paths from the client.
 LOG_FILES = {
     'install': Path('/var/log/mnscloud-install.log'),
@@ -295,9 +304,24 @@ def summarize_logs(text):
     return events[-40:]
 
 
+def installed_units():
+    """Fixed units plus every installed mnscloud-* service, validated before any later use."""
+    found = []
+    try:
+        text = run(['/usr/bin/systemctl', '--no-pager', '--plain', '--no-legend', '--all',
+                    'list-units', '--type=service', 'mnscloud-*'], limit=65536, timeout=10)
+        for line in text.splitlines():
+            name = line.split(' ', 1)[0].strip()
+            if name.endswith('.service') and MNSCLOUD_UNIT.fullmatch(name[:-8]):
+                found.append(name[:-8])
+    except (OSError, ValueError, subprocess.SubprocessError):
+        pass
+    return tuple(dict.fromkeys((*UNITS, *sorted(found)[:64])))
+
+
 def logs():
     output = {}
-    for unit in UNITS:
+    for unit in installed_units():
         try:
             text = run(['/usr/bin/journalctl', '--no-pager', '--output=json',
                         '--since=-15min', '--lines=40', '--unit=' + unit + '.service'])
@@ -375,7 +399,7 @@ def logs_text():
             output['files'][name] = 'MISSING_FILE'
         except (OSError, ValueError):
             output['files'][name] = 'UNREADABLE_OR_UNSAFE'
-    for unit in UNITS:
+    for unit in installed_units():
         try:
             text = run(['/usr/bin/journalctl', '--no-pager', '--output=json',
                         '--since=-60min', '--lines=' + str(LOG_TEXT_LINES),
@@ -395,7 +419,7 @@ def parse_journal_request(text):
         raise PermissionError('Unsupported journal request')
     tokens = text.split(' ')
     unit, minutes, priority = tokens.pop(0), JOURNAL_DEFAULT_MINUTES, 'info'
-    if unit not in UNITS:
+    if unit not in UNITS and not MNSCLOUD_UNIT.fullmatch(unit):
         raise PermissionError('Unsupported journal unit')
     if tokens and tokens[0].isdecimal():
         minutes = int(tokens.pop(0))
@@ -444,7 +468,7 @@ def journal(request):
 
 
 def versions():
-    output = {'diagnostics': '3.9'}
+    output = {'diagnostics': DIAGNOSTICS_VERSION}
     for package in ('nginx', 'mariadb-server', 'rabbitmq-server', 'docker-ce',
                     'freeswitch', 'kamailio', 'opensips', 'rtpengine-daemon', 'coturn',
                     'freeradius', 'incus', 'clickhouse-server', 'vector'):
@@ -558,38 +582,806 @@ def connectivity(configs):
     return {'targets': output, 'scope': 'TCP_TLS_ONLY_NO_AUTHENTICATION_OR_SQL'}
 
 
+# --- diagnostics 4.0 -------------------------------------------------------------------------------
+
+def drop_privileges():
+    """Become the unprivileged diagnostics account; used before reads that need no root and before
+    any network or database I/O, so a parsing or protocol bug never runs with root rights."""
+    try:
+        account = pwd.getpwnam(DIAGNOSTICS_USER)
+    except KeyError:
+        raise PermissionError('Diagnostics account missing') from None
+    if account.pw_uid == 0 or account.pw_gid == 0:
+        raise PermissionError('Diagnostics account must not be privileged')
+    os.setgroups([])
+    os.setgid(account.pw_gid)
+    os.setuid(account.pw_uid)
+    if os.geteuid() == 0 or os.getegid() == 0:
+        raise PermissionError('Privileges were not dropped')
+
+
+VERSION_TEXT = re.compile(r'v?\d+\.\d+\.\d+[-A-Za-z0-9.+]{0,40}')
+SAFE_SCALAR = re.compile(r'[A-Za-z0-9 _.:/@+~,=()-]{0,160}')
+HEX_REF = re.compile(r'[a-f0-9]{7,64}')
+BUILD_FIELDS = ('product', 'app', 'version', 'ref', 'gitRef', 'buildRef', 'buildDate', 'minimumVersion',
+                'updateChannel')
+APP_ROOT = Path('/var/www/mnscloud-app')
+WEBAPPS_ROOT = Path('/opt/mnscloud/webapps')
+AGENT_INSTALL = Path('/opt/mnscloud/agent')
+# Runtime products whose checkout the Agent reports as installed (main.ts collectRuntimeVersions).
+RUNTIME_CHECKOUTS = ('api', 'app', 'nginx', 'rabbitmq', 'workers', 'authentication', 'logs', 'freeswitch',
+                     'asterisk', 'opensips-sbc', 'kamailio-softswitch', 'kamailio-webrtc', 'turn', 'media',
+                     'webapps', 'openvault')
+
+
+def safe_scalar(value):
+    if isinstance(value, bool) or value is None:
+        return value
+    if isinstance(value, int) and abs(value) < 10 ** 15:
+        return value
+    if isinstance(value, float) and abs(value) < 10 ** 15:
+        return round(value, 3)
+    text = str(value)
+    return text if SAFE_SCALAR.fullmatch(text) else 'REDACTED'
+
+
+def public_read(path, limit=65536):
+    """Bounded read of a world-readable artifact file as the unprivileged account (no link follow)."""
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, 'rb') as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_size > limit:
+            raise ValueError('Unsupported artifact file')
+        return stream.read(limit + 1)
+
+
+def build_metadata(directory):
+    """version/ref/buildRef of build.json (VERSION as fallback), the fields the Agent itself reports."""
+    result = {}
+    try:
+        data = json.loads(public_read(directory / 'build.json'))
+        if isinstance(data, dict):
+            for key in BUILD_FIELDS:
+                if key in data:
+                    result[key] = safe_scalar(data[key])
+    except FileNotFoundError:
+        pass
+    except (OSError, ValueError, UnicodeError):
+        result['build'] = 'UNREADABLE_OR_UNSAFE'
+    if 'version' not in result:
+        try:
+            value = public_read(directory / 'VERSION', 256).decode('ascii').strip()
+            result['version'] = value if VERSION_TEXT.fullmatch(value) else 'UNKNOWN'
+        except FileNotFoundError:
+            pass
+        except (OSError, ValueError, UnicodeError):
+            result['version'] = 'UNREADABLE_OR_UNSAFE'
+    return result or 'NO_VERSION_METADATA'
+
+
+def file_sha256(path, limit=4194304):
+    try:
+        return hashlib.sha256(public_read(path, limit)).hexdigest()
+    except (OSError, ValueError):
+        return 'UNAVAILABLE'
+
+
+def webapps_artifacts(root=WEBAPPS_ROOT):
+    current = root / 'current'
+    if not current.is_dir():
+        return 'NOT_INSTALLED'
+    output = {}
+    for entry in sorted(current.iterdir())[:32]:
+        name = entry.name
+        if not re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,62}', name):
+            continue
+        # current/<app> links to releases/<app>/<release>; anything outside that tree is reported, not read.
+        target = Path(os.path.realpath(entry))
+        releases = (root / 'releases' / name).resolve()
+        if target.parent != releases:
+            output[name] = 'UNEXPECTED_RELEASE_TARGET'
+            continue
+        item = build_metadata(target)
+        item = item if isinstance(item, dict) else {'build': item}
+        item['release'] = target.name if re.fullmatch(r'[A-Za-z0-9._-]{1,120}', target.name) else 'REDACTED'
+        item['indexSha256'] = file_sha256(target / 'index.html')
+        output[name] = item
+    return output
+
+
+def artifacts():
+    """What each host serves or runs right now, read as the unprivileged account."""
+    output = {'diagnostics': DIAGNOSTICS_VERSION, 'served': {}, 'checkouts': {}}
+    if APP_ROOT.is_dir():
+        item = build_metadata(APP_ROOT)
+        item = item if isinstance(item, dict) else {'build': item}
+        item['indexSha256'] = file_sha256(APP_ROOT / 'index.html')
+        output['served']['mnscloud-app'] = item
+    output['webapps'] = webapps_artifacts()
+    for name in RUNTIME_CHECKOUTS:
+        directory = Path('/opt/mnscloud') / ('mnscloud-' + name)
+        if directory.is_dir():
+            output['checkouts']['mnscloud-' + name] = build_metadata(directory)
+    output['agent'] = build_metadata(AGENT_INSTALL) if AGENT_INSTALL.is_dir() else 'NOT_INSTALLED'
+    output['db_release_version'] = db_release_version()
+    output['note'] = ('served = files the web server returns; checkouts = what the Agent reports as installed '
+                      '(build.json or VERSION of /opt/mnscloud/mnscloud-*).')
+    return output
+
+
+# health: fixed local endpoints only. Hosts must be addresses of this machine, paths are constants and
+# only listed response fields are returned. Configuration is read as root, requests run unprivileged.
+HEALTH_FIELDS = {
+    'api': ('status', 'database', 'openvault', 'version', 'environment'),
+    'app': ('product', 'version', 'gitRef', 'buildRef', 'buildDate'),
+    'webapps': (),
+    'openvault': ('initialized', 'sealed', 'standby', 'version'),
+    'logs-clickhouse': (),
+    'logs-vector': (),
+}
+WEBAPPS_ENV = CONFIG_DIR / 'webapps' / 'webapps.env'
+OPENVAULT_HEALTH = '/v1/sys/health?standbyok=true&perfstandbyok=true&sealedcode=200&uninitcode=200'
+
+
+def local_address(host):
+    """Loopback, or an address assigned to this host (bind succeeds only for local addresses)."""
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return None
+    if address.is_unspecified:
+        return '::1' if address.version == 6 else '127.0.0.1'
+    if address.is_loopback:
+        return str(address)
+    if address.is_multicast or address.is_link_local:
+        return None
+    family = socket.AF_INET6 if address.version == 6 else socket.AF_INET
+    try:
+        with socket.socket(family, socket.SOCK_STREAM) as probe:
+            probe.bind((str(address), 0))
+    except OSError:
+        return None
+    return str(address)
+
+
+def env_port(values, key, default):
+    value = (values or {}).get(key, '') if isinstance(values, dict) else ''
+    if not value:
+        return default
+    return int(value) if value.isdecimal() and 1 <= int(value) <= 65535 else None
+
+
+def health_targets(configs, webapps_env, app_installed):
+    targets = []
+
+    def add(name, scheme, host, port, path):
+        address = local_address(host) if host else None
+        targets.append({'name': name, 'scheme': scheme, 'host': address, 'port': port, 'path': path,
+                        'configError': None if address and port else 'NOT_A_LOCAL_ADDRESS_OR_PORT'})
+
+    api = configs.get('api')
+    if isinstance(api, dict):
+        add('api', 'http', api.get('APP_HOST') or '127.0.0.1', env_port(api, 'APP_PORT', 8000), '/api/v1/health')
+    app = configs.get('app')
+    if isinstance(app, dict) or app_installed:
+        values = app if isinstance(app, dict) else {}
+        add('app', 'http', values.get('APP_LISTEN_ADDR') or '127.0.0.1', env_port(values, 'APP_LISTEN_PORT', 8080),
+            '/build.json')
+    if isinstance(webapps_env, dict):
+        add('webapps', 'http', webapps_env.get('WEBAPPS_LISTEN_HOST') or '127.0.0.1',
+            env_port(webapps_env, 'WEBAPPS_LISTEN_PORT', 8080), '/healthz')
+    if isinstance(configs.get('openvault'), dict):
+        add('openvault', 'https', '127.0.0.1', 8200, OPENVAULT_HEALTH)
+    if isinstance(configs.get('logs'), dict):
+        add('logs-clickhouse', 'http', '127.0.0.1', 8123, '/ping')
+        add('logs-vector', 'http', '127.0.0.1', 8686, '/health')
+    return targets
+
+
+def probe(target, connection_factory=None):
+    result = {'name': target['name'],
+              'url': '%s://%s:%s%s' % (target['scheme'], target['host'], target['port'],
+                                       target['path'].split('?', 1)[0])}
+    if target['configError']:
+        result['status'] = target['configError']
+        return result
+    started = datetime.now(timezone.utc)
+    try:
+        if connection_factory:
+            connection = connection_factory(target)
+        elif target['scheme'] == 'https':
+            # Local self-signed listeners (OpenVault): the peer is this host, so the certificate is
+            # not verified; reported as such and never used for anything but status fields.
+            context = ssl._create_unverified_context()
+            context.minimum_version = ssl.TLSVersion.TLSv1_2
+            connection = http.client.HTTPSConnection(target['host'], target['port'], timeout=2, context=context)
+        else:
+            connection = http.client.HTTPConnection(target['host'], target['port'], timeout=2)
+        try:
+            connection.request('GET', target['path'], headers={'User-Agent': 'mns-diagnostics/' + DIAGNOSTICS_VERSION,
+                                                               'Connection': 'close'})
+            response = connection.getresponse()
+            body = response.read(65537)
+            result['httpStatus'] = response.status
+            cache = response.getheader('Cache-Control')
+            if cache and target['name'] == 'app':
+                result['cacheControl'] = safe_scalar(cache[:120])
+        finally:
+            connection.close()
+    except (OSError, http.client.HTTPException, ValueError):
+        result['status'] = 'CONNECTION_FAILED'
+        return result
+    result['latencyMs'] = int((datetime.now(timezone.utc) - started).total_seconds() * 1000)
+    result['status'] = 'OK' if 200 <= result['httpStatus'] < 300 else 'HTTP_ERROR'
+    fields = HEALTH_FIELDS.get(target['name'], ())
+    if fields and len(body) <= 65536:
+        try:
+            data = json.loads(body)
+        except (ValueError, UnicodeError):
+            data = None
+        if isinstance(data, dict):
+            result['fields'] = {key: safe_scalar(data[key]) for key in fields if key in data
+                                and not isinstance(data[key], (dict, list))}
+    if target['scheme'] == 'https':
+        result['tls'] = 'LOCAL_UNVERIFIED'
+    return result
+
+
+def health(drop=drop_privileges):
+    configs = load_configs()
+    try:
+        webapps_env = parse_env(trusted_read(WEBAPPS_ENV))
+    except FileNotFoundError:
+        webapps_env = None
+    except (OSError, ValueError, UnicodeError):
+        webapps_env = 'UNREADABLE_OR_UNSAFE'
+    targets = health_targets(configs, webapps_env, APP_ROOT.is_dir())
+    drop()
+    return {'targets': [probe(target) for target in targets],
+            'scope': 'FIXED_LOCAL_HEALTH_ENDPOINTS_ONLY_GET_NO_CREDENTIALS'}
+
+
+# agent: job outcomes of the Agent journal, keeping only listed fields of its structured log lines.
+AGENT_LINE = re.compile(r'\[mnscloud-agent\] (\d{4}-\d\d-\d\dT[\d:.]+Z) (.+?)(?: (\{.*\}))?')
+AGENT_FIELDS = ('jobUUID', 'jobType', 'product', 'targetRef', 'targetVersion', 'scheduled', 'status', 'stage',
+                'step', 'code', 'durationMs', 'revision', 'releaseTag', 'scope', 'error', 'rssBytes',
+                'heapUsedBytes', 'uptimeSeconds', 'jobPolling')
+AGENT_EVENTS = 60
+
+
+def agent_events(text):
+    events, resource, started, levels = [], None, None, Counter()
+    for raw in text.splitlines():
+        row = json.loads(raw)
+        message = row.get('MESSAGE', '')
+        if not isinstance(message, str):
+            continue
+        match = AGENT_LINE.fullmatch(message.strip())
+        if not match:
+            continue
+        when, text_part, extra = match.groups()
+        level = {'3': 'error', '4': 'warn'}.get(str(row.get('PRIORITY', '')), 'info')
+        fields = {}
+        if extra:
+            try:
+                data = json.loads(extra)
+            except ValueError:
+                data = None
+            if isinstance(data, dict):
+                for key in AGENT_FIELDS:
+                    value = data.get(key)
+                    if value is None or isinstance(value, (dict, list)):
+                        continue
+                    fields[key] = mask_line(str(value))[:300] if key == 'error' else safe_scalar(value)
+        message_text = mask_line(text_part)[:160]
+        levels[level] += 1
+        if message_text == 'Agent resource usage.':
+            resource = {'at': when, **fields}
+            continue
+        if message_text == 'Agent started.':
+            started = when
+        events.append({'at': when, 'level': level, 'message': message_text, **fields})
+    return {'started': started, 'resource': resource, 'levels24h': dict(levels), 'events': events[-AGENT_EVENTS:]}
+
+
+def agent():
+    output = {'agent': build_metadata(AGENT_INSTALL) if AGENT_INSTALL.is_dir() else 'NOT_INSTALLED'}
+    try:
+        output['service'] = dict(line.split('=', 1) for line in run(
+            ['/usr/bin/systemctl', '--no-pager', 'show', '--property=ActiveState,SubState,NRestarts,'
+             'ActiveEnterTimestamp', 'mnscloud-agent.service'], limit=4096).splitlines() if '=' in line)
+        output['service'] = {key: safe_scalar(value) for key, value in output['service'].items()}
+    except (OSError, ValueError, subprocess.SubprocessError):
+        output['service'] = 'UNAVAILABLE'
+    try:
+        text = run(['/usr/bin/journalctl', '--no-pager', '--output=json', '--output-fields=MESSAGE,PRIORITY',
+                    '--since=-24h', '--lines=20000', '--unit=mnscloud-agent.service'],
+                   limit=JOURNAL_OUTPUT_BYTES * 2, timeout=30)
+        output.update(agent_events(text))
+    except ValueError:
+        output['events'] = 'OUTPUT_TOO_LARGE'
+    except (OSError, subprocess.SubprocessError):
+        output['events'] = 'UNAVAILABLE'
+    output['masking'] = 'LISTED_FIELDS_ONLY_ERRORS_MASKED'
+    return output
+
+
+def os_release(path=Path('/usr/lib/os-release')):  # /etc/os-release is a symlink to it
+    values = {}
+    try:
+        for line in public_read(path, 16384).decode('utf-8', errors='replace').splitlines():
+            key, sep, value = line.partition('=')
+            if sep and key in ('PRETTY_NAME', 'VERSION_ID', 'ID'):
+                values[key] = safe_scalar(value.strip().strip('"'))
+    except (OSError, ValueError):
+        pass
+    return values
+
+
+def host():
+    uname = os.uname()
+    output = {'hostname': safe_scalar(socket.gethostname()), 'os': os_release(),
+              'kernel': safe_scalar(uname.release), 'arch': safe_scalar(uname.machine), 'cpus': os.cpu_count()}
+    try:
+        for line in public_read(Path('/proc/stat'), 1048576).decode().splitlines():
+            if line.startswith('btime '):
+                output['bootedAt'] = datetime.fromtimestamp(int(line.split()[1]), timezone.utc).isoformat()
+    except (OSError, ValueError):
+        pass
+    for key, args in (('virtualization', ['/usr/bin/systemd-detect-virt']),
+                      ('ntpSynchronized', ['/usr/bin/timedatectl', 'show', '-p', 'NTPSynchronized', '--value']),
+                      ('timezone', ['/usr/bin/timedatectl', 'show', '-p', 'Timezone', '--value'])):
+        try:
+            output[key] = safe_scalar(run(args, limit=256, timeout=5).strip())
+        except (OSError, ValueError, subprocess.SubprocessError):
+            output[key] = 'UNAVAILABLE'
+    return output
+
+
+def parse_listeners(text):
+    listeners = []
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) < 5 or parts[0] not in ('tcp', 'udp'):
+            continue
+        local = parts[4]
+        address, _, port = local.rpartition(':')
+        if port.isdecimal() and re.fullmatch(r'[][0-9A-Za-z.:*%]{1,64}', address):
+            listeners.append({'proto': parts[0], 'address': address, 'port': int(port)})
+    return sorted(listeners, key=lambda item: (item['proto'], item['port'], item['address']))[:200]
+
+
+def network():
+    output = {}
+    try:
+        interfaces = []
+        for item in json.loads(run(['/usr/sbin/ip', '-j', 'addr', 'show'], limit=1048576)):
+            interfaces.append({'name': safe_scalar(item.get('ifname')), 'state': safe_scalar(item.get('operstate')),
+                               'addresses': [{'address': safe_scalar(a.get('local')),
+                                              'prefix': safe_scalar(a.get('prefixlen')),
+                                              'family': safe_scalar(a.get('family')),
+                                              'scope': safe_scalar(a.get('scope'))}
+                                             for a in item.get('addr_info', [])[:16]]})
+        output['interfaces'] = interfaces[:32]
+    except (OSError, ValueError, subprocess.SubprocessError, TypeError):
+        output['interfaces'] = 'UNAVAILABLE'
+    routes = []
+    for family in ('-4', '-6'):
+        try:
+            for item in json.loads(run(['/usr/sbin/ip', '-j', family, 'route', 'show', 'default'], limit=65536)):
+                routes.append({'family': family[1:], 'dev': safe_scalar(item.get('dev')),
+                               'gateway': safe_scalar(item.get('gateway'))})
+        except (OSError, ValueError, subprocess.SubprocessError, TypeError):
+            pass
+    output['defaultRoutes'] = routes
+    try:
+        output['listeners'] = parse_listeners(run(['/usr/bin/ss', '-H', '-l', '-n', '-t', '-u'], limit=1048576))
+    except (OSError, ValueError, subprocess.SubprocessError):
+        output['listeners'] = 'UNAVAILABLE'
+    try:
+        output['nameservers'] = [safe_scalar(line.split()[1]) for line in public_read(
+            Path('/etc/resolv.conf'), 16384).decode().splitlines() if line.startswith('nameserver ')][:8]
+    except (OSError, ValueError, IndexError):
+        output['nameservers'] = 'UNAVAILABLE'
+    output['scope'] = 'ADDRESSES_ROUTES_LISTENING_PORTS_NO_PROCESSES_OR_PEERS'
+    return output
+
+
+TIMER_NAME = re.compile(r'(?:mnscloud-[a-z0-9-]{1,80}|snap\.certbot\.renew|certbot)\.timer')
+
+
+def micros_iso(value):
+    return (datetime.fromtimestamp(value / 1e6, timezone.utc).isoformat()
+            if isinstance(value, int) and 0 < value < 2 ** 62 else None)
+
+
+def timers():
+    try:
+        rows = json.loads(run(['/usr/bin/systemctl', '--no-pager', '--all', '--output=json', 'list-timers'],
+                              limit=1048576))
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return {'timers': 'UNAVAILABLE'}
+    output = []
+    for row in rows if isinstance(rows, list) else []:
+        unit, service = row.get('unit', ''), row.get('activates', '')
+        if not TIMER_NAME.fullmatch(unit) or not re.fullmatch(r'[A-Za-z0-9.@_-]{1,120}\.service', service):
+            continue
+        item = {'timer': unit, 'service': service, 'next': micros_iso(row.get('next')),
+                'last': micros_iso(row.get('last'))}
+        try:
+            item.update({key: safe_scalar(value) for key, value in (line.split('=', 1) for line in run(
+                ['/usr/bin/systemctl', '--no-pager', 'show', '--property=Result,ExecMainStatus,'
+                 'ExecMainExitTimestamp,ActiveState', service], limit=4096).splitlines() if '=' in line)})
+        except (OSError, ValueError, subprocess.SubprocessError):
+            item['Result'] = 'UNAVAILABLE'
+        output.append(item)
+    return {'timers': output[:64]}
+
+
+EDGE_VHOST_DIRS = (Path('/etc/nginx/mnscloud/theme-domains'), Path('/etc/nginx/mnscloud/runtime'),
+                   Path('/etc/nginx/sites-enabled'), Path('/etc/nginx/conf.d'))
+LETSENCRYPT_LIVE = Path('/etc/letsencrypt/live')
+NGINX_CONFIGS = (('system', ['/usr/sbin/nginx', '-t']),
+                 ('webapps', ['/usr/sbin/nginx', '-t', '-p', '/opt/mnscloud/webapps/runtime',
+                              '-c', '/opt/mnscloud/webapps/runtime/nginx.conf']))
+
+
+def run_result(args, timeout=15):
+    """Exit code plus masked, bounded stderr of a fixed command."""
+    import tempfile
+    with tempfile.TemporaryFile() as errors:
+        completed = subprocess.run(args, stdout=subprocess.DEVNULL, stderr=errors, env=ENV, timeout=timeout)
+        errors.seek(0)
+        text = errors.read(16384).decode('utf-8', errors='replace')
+    return completed.returncode, [mask_line(line) for line in text.splitlines()[-20:]]
+
+
+def certificate(path):
+    text = run(['/usr/bin/openssl', 'x509', '-noout', '-enddate', '-subject', '-ext', 'subjectAltName',
+                '-in', str(path)], limit=65536, timeout=5)
+    result = {}
+    end = re.search(r'notAfter=(.+)', text)
+    if end:
+        expires = datetime.strptime(end.group(1).strip(), '%b %d %H:%M:%S %Y %Z').replace(tzinfo=timezone.utc)
+        result['notAfter'] = expires.isoformat()
+        result['daysLeft'] = (expires - datetime.now(timezone.utc)).days
+    subject = re.search(r'CN\s*=\s*([^,\n]+)', text)
+    result['subject'] = safe_scalar(subject.group(1).strip()) if subject else None
+    result['names'] = [safe_scalar(name) for name in re.findall(r'DNS:([A-Za-z0-9*.-]{1,253})', text)][:20]
+    return result
+
+
+def edge():
+    output = {'nginx': {}, 'vhosts': {}, 'certificates': {}}
+    for name, args in NGINX_CONFIGS:
+        if not Path(args[0]).exists() or (name == 'webapps' and not Path(args[-1]).exists()):
+            continue
+        try:
+            code, lines = run_result(args)
+            output['nginx'][name] = {'configTest': 'OK' if code == 0 else 'FAILED', 'messages': lines}
+        except (OSError, subprocess.SubprocessError):
+            output['nginx'][name] = 'UNAVAILABLE'
+    for directory in EDGE_VHOST_DIRS:
+        if directory.is_dir() and not directory.is_symlink():
+            names = sorted(entry.name for entry in directory.iterdir()
+                           if re.fullmatch(r'[A-Za-z0-9._-]{1,120}', entry.name))
+            output['vhosts'][str(directory)] = {'count': len(names), 'names': names[:300]}
+    if LETSENCRYPT_LIVE.is_dir() and not LETSENCRYPT_LIVE.is_symlink():
+        for entry in sorted(LETSENCRYPT_LIVE.iterdir())[:100]:
+            if not entry.is_dir() or not re.fullmatch(r'[A-Za-z0-9.-]{1,253}', entry.name):
+                continue
+            try:
+                output['certificates'][entry.name] = certificate(entry / 'fullchain.pem')
+            except (OSError, ValueError, subprocess.SubprocessError):
+                output['certificates'][entry.name] = 'UNREADABLE'
+    output['scope'] = 'CONFIG_TEST_VHOST_FILE_NAMES_CERTIFICATE_EXPIRY_NO_CONFIG_CONTENT'
+    return output
+
+
+# access-summary: aggregate counts of the edge access log; no client addresses, users, queries or agents.
+ACCESS_LOG = Path('/var/log/nginx/access.log')
+ACCESS_TAIL_BYTES = 33554432
+ACCESS_DEFAULT_MINUTES = 15
+ACCESS_TOP = 200
+ACCESS_LINE = re.compile(r'\S+ \S+ \S+ \[([^\]]{20,40})\] "([A-Z]{1,12}) (\S{1,4096})(?: [^"]{0,32})?" (\d{3}) ')
+ID_SEGMENT = re.compile(r'\d+|[0-9a-fA-F-]{12,}|(?=\S*\d)[A-Za-z0-9_-]{16,}')
+WORD_SEGMENT = re.compile(r'[A-Za-z][A-Za-z0-9_-]{0,40}')
+
+
+def parse_access_request(text):
+    if text.endswith('\n'):
+        text = text[:-1]
+    if not text:
+        return ACCESS_DEFAULT_MINUTES
+    if len(text) > 4 or not text.isdecimal() or not 1 <= int(text) <= JOURNAL_MAX_MINUTES:
+        raise PermissionError('Unsupported access-summary window')
+    return int(text)
+
+
+def normalize_path(path):
+    path = path.split('?', 1)[0].split('#', 1)[0]
+    segments = [segment for segment in path.split('/') if segment][:8]
+    output = []
+    for segment in segments:
+        if ID_SEGMENT.fullmatch(segment):
+            output.append(':id')
+        elif WORD_SEGMENT.fullmatch(segment):
+            output.append(segment)
+        else:
+            output.append(':value')  # domains, e-mails, encoded or file names
+    suffix = '/...' if len([s for s in path.split('/') if s]) > 8 else ''
+    return ('/' + '/'.join(output) + suffix)[:200]
+
+
+def access_summary(minutes, path=ACCESS_LOG, now=None):
+    now = now or datetime.now(timezone.utc)
+    start = now - timedelta(minutes=minutes)
+    try:
+        for parent in reversed(path.parents):
+            if stat.S_ISLNK(parent.lstat().st_mode):
+                raise ValueError('Symlinked log directory')
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, 'rb') as stream:
+            info = os.fstat(stream.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                raise ValueError('Unsupported log file type')
+            stream.seek(max(0, info.st_size - ACCESS_TAIL_BYTES))
+            data = stream.read(ACCESS_TAIL_BYTES)
+    except FileNotFoundError:
+        return {'status': 'NO_ACCESS_LOG'}
+    except (OSError, ValueError):
+        return {'status': 'UNREADABLE_OR_UNSAFE'}
+    lines = data.decode('utf-8', errors='replace').splitlines()
+    if info.st_size > ACCESS_TAIL_BYTES and lines:
+        lines = lines[1:]
+    counts, classes, earliest, total = Counter(), Counter(), None, 0
+    for line in lines:
+        match = ACCESS_LINE.match(line)
+        if not match:
+            continue
+        try:
+            when = datetime.strptime(match.group(1), '%d/%b/%Y:%H:%M:%S %z')
+        except ValueError:
+            continue
+        earliest = when if earliest is None or when < earliest else earliest
+        if when < start or when > now + timedelta(minutes=5):
+            continue
+        method, status = match.group(2), match.group(4)
+        counts[(method, normalize_path(match.group(3)), status)] += 1
+        classes[status[0] + 'xx'] += 1
+        total += 1
+    return {'status': 'OK', 'sinceMinutes': minutes, 'total': total, 'byStatusClass': dict(classes),
+            'windowComplete': earliest is not None and earliest <= start,
+            'oldestLineAt': earliest.isoformat() if earliest else None,
+            'top': [{'method': key[0], 'path': key[1], 'status': int(key[2]), 'count': value}
+                    for key, value in counts.most_common(ACCESS_TOP)],
+            'scope': 'COUNTS_BY_METHOD_NORMALIZED_PATH_STATUS_NO_CLIENTS_QUERIES_OR_AGENTS'}
+
+
+LOG_USAGE_DIRS = ('/var/log', '/var/log/journal', '/var/log/nginx', '/var/log/asterisk', '/var/log/freeswitch',
+                  '/var/log/mnscloud', '/var/log/freeradius', '/var/lib/mnscloud/files', '/var/lib/clickhouse')
+
+
+def largest_logs(root=Path('/var/log'), limit=10, budget=5000):
+    found, seen = [], 0
+    for directory, folders, files in os.walk(root, followlinks=False):
+        folders[:] = [name for name in folders if directory.count('/') < 5]
+        for name in files:
+            seen += 1
+            if seen > budget:
+                break
+            try:
+                info = os.lstat(os.path.join(directory, name))
+            except OSError:
+                continue
+            if stat.S_ISREG(info.st_mode):
+                found.append((info.st_size, os.path.join(directory, name)))
+    found.sort(reverse=True)
+    return [{'path': safe_scalar(path), 'bytes': size} for size, path in found[:limit]]
+
+
+def log_usage():
+    output = {'directories': {}}
+    for directory in LOG_USAGE_DIRS:
+        if not os.path.isdir(directory) or os.path.islink(directory):
+            continue
+        try:
+            value = run(['/usr/bin/du', '-s', '-b', '-x', directory], limit=4096, timeout=8).split()[0]
+            output['directories'][directory] = int(value)
+        except (OSError, ValueError, IndexError, subprocess.SubprocessError):
+            output['directories'][directory] = 'UNAVAILABLE'
+    try:
+        text = run(['/usr/bin/journalctl', '--disk-usage'], limit=4096, timeout=8)
+        match = re.search(r'take up ([0-9.]+[KMGT]?B?)', text)
+        output['journalDiskUsage'] = match.group(1) if match else 'UNKNOWN'
+    except (OSError, ValueError, subprocess.SubprocessError):
+        output['journalDiskUsage'] = 'UNAVAILABLE'
+    output['largestLogFiles'] = largest_logs()
+    return output
+
+
+STAT_NAME = re.compile(r'[a-z_]{1,32}:[a-z0-9_]{1,64}')
+
+
+def numeric_stats(text):
+    stats = {}
+    for name, value in re.findall(r'([a-z_]{1,32}:[a-z0-9_]{1,64})\s*=\s*(-?\d{1,15})', text):
+        stats[name] = int(value)
+    return dict(list(stats.items())[:120])
+
+
+def first_int(pattern, text):
+    match = re.search(pattern, text)
+    return int(match.group(1)) if match else None
+
+
+VOIP_TOOLS = {
+    'kamailio': '/usr/sbin/kamcmd',
+    'opensips': '/usr/bin/opensips-cli',
+    'asterisk': '/usr/sbin/asterisk',
+    'freeswitch': '/usr/bin/fs_cli',
+    'rtpengine': '/usr/bin/rtpengine-ctl',
+}
+
+
+def voip_summary(runner=None):
+    """Registration/call/session counters of the local engines; numbers only, never users or numbers."""
+    runner = runner or (lambda args: run(args, limit=262144, timeout=6))
+    output = {}
+
+    def collect(name, function):
+        if not os.path.exists(VOIP_TOOLS[name]):
+            return
+        try:
+            output[name] = function()
+        except (OSError, ValueError, subprocess.SubprocessError):
+            output[name] = 'UNAVAILABLE'
+
+    collect('kamailio', lambda: numeric_stats(runner([VOIP_TOOLS['kamailio'], 'stats.get_statistics', 'usrloc:',
+                                                      'dialog:', 'tm:', 'core:rcv_requests', 'core:drop_requests',
+                                                      'core:err_requests', 'core:bad_msg_hdr'])))
+
+    def opensips():
+        data = json.loads(runner([VOIP_TOOLS['opensips'], '-x', 'mi', 'get_statistics', 'usrloc:', 'dialog:',
+                                  'tm:', 'core:rcv_requests', 'core:drop_requests', 'core:err_requests',
+                                  'core:bad_msg_hdr']))
+        return {key: value for key, value in data.items()
+                if STAT_NAME.fullmatch(key) and isinstance(value, int)} if isinstance(data, dict) else {}
+    collect('opensips', opensips)
+
+    def asterisk():
+        channels = runner([VOIP_TOOLS['asterisk'], '-rx', 'core show channels count'])
+        return {'activeChannels': first_int(r'(\d+) active channels?', channels),
+                'activeCalls': first_int(r'(\d+) active calls?', channels),
+                'callsProcessed': first_int(r'(\d+) calls? processed', channels),
+                'pjsipContacts': first_int(r'Objects found: (\d+)',
+                                           runner([VOIP_TOOLS['asterisk'], '-rx', 'pjsip show contacts'])) or 0,
+                'pjsipEndpoints': first_int(r'Objects found: (\d+)',
+                                            runner([VOIP_TOOLS['asterisk'], '-rx', 'pjsip show endpoints'])) or 0,
+                'pjsipRegistrations': first_int(r'Objects found: (\d+)',
+                                                runner([VOIP_TOOLS['asterisk'], '-rx', 'pjsip show registrations'])) or 0}
+    collect('asterisk', asterisk)
+
+    def freeswitch():
+        return {'registrations': first_int(r'(\d+) total', runner([VOIP_TOOLS['freeswitch'], '-x',
+                                                                    'show registrations count'])),
+                'calls': first_int(r'(\d+) total', runner([VOIP_TOOLS['freeswitch'], '-x', 'show calls count'])),
+                'channels': first_int(r'(\d+) total', runner([VOIP_TOOLS['freeswitch'], '-x', 'show channels count'])),
+                'sofiaProfiles': first_int(r'(\d+) profiles?', runner([VOIP_TOOLS['freeswitch'], '-x', 'sofia status']))}
+    collect('freeswitch', freeswitch)
+
+    def rtpengine():
+        text = runner([VOIP_TOOLS['rtpengine'], '-ip', '127.0.0.1:2224', 'list', 'numsessions'])
+        return {'sessionsTotal': first_int(r'Current sessions total: (\d+)', text),
+                'sessionsOwn': first_int(r'Current sessions own: (\d+)', text),
+                'transcoded': first_int(r'Current transcoded media: (\d+)', text)}
+    collect('rtpengine', rtpengine)
+    output['scope'] = 'COUNTERS_ONLY_NO_USERS_NUMBERS_OR_ADDRESSES'
+    return output
+
+
+# schema-status: the diagnostics account authenticates to the local MariaDB through unix_socket (no
+# password exists) and holds SELECT on the columns below only (diagnostics/db_account.py).
+DB_ENV = CONFIG_DIR / 'db.env'
+SCHEMA_REVISION_SQL = ('SELECT SarClusterKey, SarDbReleaseTag, SarAppliedAt FROM SchemaAppliedRevision '
+                       'WHERE SarStatus = 1 AND SarDateDeleted IS NULL ORDER BY SarAppliedAt DESC LIMIT 5')
+SCHEMA_JOBS_SQL = ('SELECT SrjStage, SrjDbReleaseTag, SrjStatus, SrjStartedAt, SrjFinishedAt, SrjLastErrorCode, '
+                   'SrjDateCreated FROM SchemaReconcileJob WHERE SrjDateDeleted IS NULL '
+                   'ORDER BY SrjDateCreated DESC LIMIT 10')
+
+
+def schema_rows(text, names):
+    rows = []
+    for line in text.splitlines():
+        values = line.split('\t')
+        if len(values) == len(names):
+            rows.append({name: (None if value == 'NULL' else safe_scalar(value)) for name, value in zip(names, values)})
+    return rows
+
+
+def schema_status(drop=drop_privileges, runner=None):
+    try:
+        database = parse_env(trusted_read(DB_ENV)).get('DB_NAME', '')
+    except FileNotFoundError:
+        return {'status': 'NOT_A_DATABASE_HOST'}
+    except (OSError, ValueError, UnicodeError):
+        return {'status': 'UNREADABLE_OR_UNSAFE'}
+    if not re.fullmatch(r'[A-Za-z0-9_]{1,64}', database):
+        return {'status': 'INVALID_DB_NAME'}
+    drop()
+    runner = runner or (lambda sql: run(['/usr/bin/mariadb', '--protocol=socket', '-u', DIAGNOSTICS_USER, '-N',
+                                         '--batch', '--raw', database, '-e', sql], limit=65536, timeout=10))
+    try:
+        revisions = schema_rows(runner(SCHEMA_REVISION_SQL), ('cluster', 'releaseTag', 'appliedAt'))
+        jobs = schema_rows(runner(SCHEMA_JOBS_SQL), ('stage', 'releaseTag', 'status', 'startedAt', 'finishedAt',
+                                                      'errorCode', 'createdAt'))
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return {'status': 'DIAGNOSTICS_DB_ACCOUNT_UNAVAILABLE', 'database': database}
+    return {'status': 'OK', 'database': database, 'appliedRevisions': revisions, 'reconcileJobs': jobs,
+            'scope': 'SCHEMA_REVISION_AND_RECONCILE_JOB_COLUMNS_ONLY'}
+
+
+# Operations: (handler, reads stdin parameters, drop privileges before any work).
+OPERATIONS = {
+    'config': ('config', False, False),
+    'config-check': ('config-check', False, False),
+    'logs': ('logs', False, False),
+    'logs-text': ('logs-text', False, False),
+    'journal': ('journal', True, False),
+    'versions': ('versions', False, False),
+    'connectivity': ('connectivity', False, False),
+    'asterisk-odbc': ('asterisk-odbc', False, False),
+    'artifacts': ('artifacts', False, True),
+    'health': ('health', False, False),
+    'agent': ('agent', False, False),
+    'host': ('host', False, True),
+    'network': ('network', False, True),
+    'timers': ('timers', False, True),
+    'edge': ('edge', False, False),
+    'access-summary': ('access-summary', True, False),
+    'log-usage': ('log-usage', False, False),
+    'voip-summary': ('voip-summary', False, False),
+    'schema-status': ('schema-status', False, False),
+}
+
+
 def main():
-    if len(sys.argv) != 2 or sys.argv[1] not in ('config', 'config-check', 'logs', 'logs-text', 'journal', 'versions',
-                                                      'connectivity', 'asterisk-odbc'):
+    if len(sys.argv) != 2 or sys.argv[1] not in OPERATIONS:
         print('DENIED: Unsupported collector operation.', file=sys.stderr)
         return 126
+    operation = sys.argv[1]
+    _, takes_input, drop_first = OPERATIONS[operation]
     signal.alarm(40)
     request = None
-    if sys.argv[1] == 'journal':
+    if takes_input:
         try:
             request = sys.stdin.buffer.read(JOURNAL_REQUEST_BYTES + 2).decode('ascii')
-            parse_journal_request(request)
+            if operation == 'journal':
+                parse_journal_request(request)
+            else:
+                request = parse_access_request(request)
         except (PermissionError, UnicodeDecodeError):
-            print('DENIED: Unsupported journal request. Use: journal UNIT [MINUTES] [PRIORITY].', file=sys.stderr)
+            usage = ('journal UNIT [MINUTES] [PRIORITY]' if operation == 'journal' else 'access-summary [MINUTES]')
+            print('DENIED: Unsupported ' + operation + ' request. Use: ' + usage + '.', file=sys.stderr)
             return 126
     if os.geteuid() != 0:
         print('ERROR: Collector requires its dedicated sudo rule.', file=sys.stderr)
         return 1
     os.umask(0o077)
-    operation = sys.argv[1]
+    if drop_first:
+        drop_privileges()
     if operation == 'journal':
         result = journal(request)
-    elif operation == 'logs':
-        result = logs()
-    elif operation == 'logs-text':
-        result = logs_text()
-    elif operation == 'versions':
-        result = versions()
-    elif operation == 'asterisk-odbc':
-        result = asterisk_odbc()
-    else:
+    elif operation == 'access-summary':
+        result = access_summary(request)
+    elif operation in ('config', 'config-check', 'connectivity'):
         configs = load_configs()
         result = connectivity(configs) if operation == 'connectivity' else config_report(configs, operation == 'config-check')
+    else:
+        result = {'logs': logs, 'logs-text': logs_text, 'versions': versions, 'asterisk-odbc': asterisk_odbc,
+                  'artifacts': artifacts, 'health': health, 'agent': agent, 'host': host, 'network': network,
+                  'timers': timers, 'edge': edge, 'log-usage': log_usage, 'voip-summary': voip_summary,
+                  'schema-status': schema_status}[operation]()
     print(json.dumps(result, indent=2, ensure_ascii=True))
     return 0
 
