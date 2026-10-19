@@ -15,13 +15,14 @@ import sys
 from urllib.parse import urlsplit
 
 CONFIG_DIR = Path('/etc/mnscloud')
-FILES = ('api', 'app', 'nginx', 'workers', 'rabbitmq', 'db', 'authentication', 'openvault')
+FILES = ('api', 'app', 'nginx', 'workers', 'rabbitmq', 'db', 'authentication', 'openvault', 'logs')
 UNITS = ('nginx', 'mariadb', 'rabbitmq-server', 'mnscloud-api',
          'mnscloud-workers', 'mnscloud-agent', 'asterisk', 'freeswitch', 'kamailio',
          'opensips', 'rtpengine-daemon', 'mnscloud-media-heartbeat', 'coturn',
          'mnscloud-turn-sync', 'mnscloud-webrtc-sync', 'mnscloud-authentication',
          'mnscloud-authentication-config', 'mnscloud-openvault', 'mnscloud-openvault-tls-renew',
-         'mnscloud-webapps', 'mnscloud-webapps-sync', 'incus', 'mnscloud-grow-rootfs')
+         'mnscloud-webapps', 'mnscloud-webapps-sync', 'incus', 'mnscloud-grow-rootfs',
+         'mnscloud-logs-storage', 'mnscloud-logs-ingest', 'mnscloud-logs-config')
 # Fixed log files readable through logs-text. Never accept paths from the client.
 LOG_FILES = {
     'install': Path('/var/log/mnscloud-install.log'),
@@ -86,13 +87,17 @@ REQUIRED = {
     'authentication': ('MNSCLOUD_API_BASE_URL', 'AUTHENTICATION_SERVER_UUID',
                        'AUTHENTICATION_LISTEN_ADDRESS', 'DB_HOST', 'DB_NAME', 'DB_USER', 'DB_PASS'),
     'openvault': ('OPENVAULT_MODE', 'OPENVAULT_PRIVATE_HOST', 'OPENVAULT_NODE_ID'),
+    # Node principals live in logs-secrets.env, which diagnostics never reads.
+    'logs': ('MNSCLOUD_API_BASE_URL', 'LOGS_SERVER_UUID', 'LOGS_ROLE', 'LOGS_LISTEN_ADDRESS',
+             'LOGS_SYSLOG_UDP_PORT', 'LOGS_SYSLOG_TCP_PORT'),
 }
 HOST_KEYS = {'DB_HOST', 'APP_HOST', 'APP_LISTEN_ADDR', 'MNSCLOUD_API_LISTEN_ADDR',
              'MNSCLOUD_PRIMARY_DOMAIN', 'MNSCLOUD_API_DOMAIN', 'MNSCLOUD_WEBSITE_DOMAIN',
              'MNSCLOUD_RABBITMQ_HOSTNAME', 'MNSCLOUD_NODE_ADDRESS',
-             'AUTHENTICATION_LISTEN_ADDRESS', 'OPENVAULT_PRIVATE_HOST'}
+             'AUTHENTICATION_LISTEN_ADDRESS', 'OPENVAULT_PRIVATE_HOST', 'LOGS_LISTEN_ADDRESS'}
 PORT_KEYS = {'DB_PORT', 'APP_PORT', 'APP_LISTEN_PORT', 'MNSCLOUD_API_LISTEN_PORT',
-             'MNSCLOUD_RABBITMQ_AMQP_PORT', 'MNSCLOUD_RABBITMQ_MANAGEMENT_PORT'}
+             'MNSCLOUD_RABBITMQ_AMQP_PORT', 'MNSCLOUD_RABBITMQ_MANAGEMENT_PORT',
+             'LOGS_SYSLOG_UDP_PORT', 'LOGS_SYSLOG_TCP_PORT'}
 URL_KEYS = {'RABBITMQ_URL', 'MNSCLOUD_API_BASE_URL', 'APP_API_BASE_URL',
             'MNSCLOUD_RELEASE_API_BASE_URL', 'MNSCLOUD_APP_UPSTREAMS',
             'MNSCLOUD_API_UPSTREAMS', 'MNSCLOUD_WEBSITE_UPSTREAM',
@@ -439,10 +444,10 @@ def journal(request):
 
 
 def versions():
-    output = {'diagnostics': '3.8'}
+    output = {'diagnostics': '3.9'}
     for package in ('nginx', 'mariadb-server', 'rabbitmq-server', 'docker-ce',
                     'freeswitch', 'kamailio', 'opensips', 'rtpengine-daemon', 'coturn',
-                    'freeradius', 'incus'):
+                    'freeradius', 'incus', 'clickhouse-server', 'vector'):
         try:
             value = run(['/usr/bin/dpkg-query', '-W', '-f=${Version}', package]).strip()
             output[package] = value if re.fullmatch(r'[A-Za-z0-9.+:~_-]{1,100}', value) else 'UNKNOWN'
