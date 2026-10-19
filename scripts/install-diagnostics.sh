@@ -34,7 +34,20 @@ converge() {
   log 'Converged.'
 }
 
+# Database hosts only: the passwordless unix_socket account used by `schema-status` (diagnostics 4.0).
+# Idempotent and cheap, so it runs on every Agent install/update even when the files are current.
+converge_db_account() {
+  [[ -f /etc/mnscloud/db.env && -x /usr/bin/mariadb ]] || return 0
+  id mns-diagnostics >/dev/null 2>&1 || return 0
+  local result
+  result="$(python3 -I "$SOURCE_DIR/db_account.py")" || { log "Database account: ${result:-failed}"; return 1; }
+  log "Database account: ${result}"
+}
+
 if ! converge; then
   log 'WARNING: diagnostics convergence failed; the Agent continues and retries on its next update.'
+fi
+if ! converge_db_account; then
+  log 'WARNING: diagnostics database account convergence failed; schema-status stays unavailable until the next update.'
 fi
 exit 0

@@ -35,10 +35,23 @@ privilege; failures never block the Agent and are retried on its next update.
 | `versions` | Selected package versions (including `freeswitch`, `kamailio`, `opensips`, `rtpengine-daemon` and `coturn`; Asterisk is source-built) and root-controlled checkout VERSION files (including `mnscloud-{asterisk,freeswitch,kamailio-softswitch,opensips-sbc,media,turn,kamailio-webrtc}`) |
 | `connectivity` | At most 12 configured endpoints; TCP and verified TLS only, 2-second socket timeout |
 | `asterisk-odbc` | Asterisk ODBC pool state from `asterisk -rx "odbc show"`: pool names, active/max connections and `CONNECTED`/`NO_ACTIVE_CONNECTION`; no SQL, credentials or DSN values |
+| `artifacts` | What the host serves and runs: App `build.json` + `index.html` SHA-256 under `/var/www/mnscloud-app`, each webapps app under `/opt/mnscloud/webapps/current` (release name, `build.json`, index hash), the `build.json`/`VERSION` of every `/opt/mnscloud/mnscloud-*` runtime checkout the Agent reports, the Agent install and `db_release_version`. Runs unprivileged |
+| `health` | Fixed local GET probes: API `/api/v1/health`, App `/build.json` (+ `Cache-Control`), webapps listener `/healthz`, OpenVault `/v1/sys/health`, Logs ClickHouse `/ping` and Vector `/health`; status, latency and listed fields only |
+| `agent` | Agent service state and version, last start, latest resource sample and the last 60 job events of 24 h of its journal (listed fields only, errors masked) |
+| `host` | Hostname, OS, kernel, architecture, CPUs, boot time, virtualization, NTP sync and timezone. Runs unprivileged |
+| `network` | Interfaces and addresses, default routes, listening TCP/UDP ports (no processes or peers) and resolvers. Runs unprivileged |
+| `timers` | `mnscloud-*` and certbot timers: next/last run and the result of the activated service. Runs unprivileged |
+| `edge` | `nginx -t` of the system and webapps configurations (masked messages), vhost file names and Let's Encrypt certificate expiry; never configuration content |
+| `access-summary [MINUTES]` | Edge access log counts by method, normalized path (ids/values replaced) and status for the last `MINUTES` (1-1440, default 15), from the newest 32 MiB; no client addresses, users, queries, referrers or agents |
+| `log-usage` | Size of fixed log/data directories, journal disk usage and the 10 largest files under `/var/log` |
+| `voip-summary` | Registration, call and session counters of Kamailio, OpenSIPS, Asterisk, FreeSWITCH and rtpengine when installed; numbers only |
+| `schema-status` | Database hosts: active `SchemaAppliedRevision` rows and the last 10 `SchemaReconcileJob` stages/status/error codes, through the passwordless local diagnostics database account |
 
-The extended commands accept no arguments, except `journal`. The privileged collector has a
-40-second overall deadline. Paths, commands and subprocess arguments are fixed.
-Inputs with extra arguments, shell syntax or unknown operations are rejected.
+The extended commands accept no arguments, except `journal` and `access-summary`. The privileged
+collector has a 40-second overall deadline. Paths, commands and subprocess arguments are fixed.
+Inputs with extra arguments, shell syntax or unknown operations are rejected. Since 4.0 the
+dispatcher ignores a leading `mns-diagnostics ` and one trailing ` 2>/dev/null` or ` 2>&1`
+(textual normalization only; nothing is evaluated, the rest must match exactly).
 
 `journal` (diagnostics 3.7, 2026-10-15, user decision) replaces ad hoc `journalctl` for
 troubleshooting when the 60-minute/120-line `logs-text` window is not enough (for example the
@@ -59,8 +72,9 @@ reported as `UNREADABLE_OR_UNSAFE`; do not weaken permissions to work around thi
 Passwords, tokens, JWT/signing keys, unknown fields and unapproved values are never
 returned. Endpoint output strips userinfo, paths, queries and fragments. No secret
 hashes/fingerprints are exposed for cross-host comparison. `SET` is not proof that
-credentials match or work. This version does not authenticate to databases/brokers,
-execute SQL, inspect customer records or test HTTP application routes.
+credentials match or work. Diagnostics never authenticate to brokers, never inspect customer
+records and never call application routes other than the fixed local health endpoints of `health`;
+the only SQL is the two fixed `schema-status` SELECTs through the column-scoped account above.
 
 `logs` deliberately discards raw messages. Categories include connection, timeout,
 authentication, TLS, memory and generic failure. It does not read Docker container
@@ -132,6 +146,32 @@ Version 3.9 (2026-10-19) adds the Logs node the same way: `mnscloud-logs-storage
 principals file `logs-secrets.env` is never read), the `mnscloud-logs` checkout and the
 `clickhouse-server`/`vector` packages. No new commands or sudo changes.
 
+Version 4.0 (2026-10-19, user decision) adds `artifacts`, `health`, `agent`, `host`, `network`,
+`timers`, `edge`, `access-summary`, `log-usage`, `voip-summary` and `schema-status` to the same fixed
+sudo rule (one exact entry per operation, no wildcard), so a rollout can be verified on the host
+instead of trusting the checkout version. Design rules of these operations:
+
+- **Least privilege inside the collector.** `artifacts`, `host`, `network` and `timers` drop to the
+  `mns-diagnostics` account before reading anything. `health` and `schema-status` read their root-only
+  configuration first and drop privileges before any network or database I/O.
+- **`health` is loopback/local only.** Targets are fixed paths on `127.0.0.1` or on an address assigned
+  to the host itself (checked by binding to it), with ports from the root-owned module env files or
+  fixed defaults. GET only, no cookies, tokens or client input, 2-second timeout, 64 KiB body cap, and
+  only listed response fields are returned. OpenVault's local self-signed TLS is reported as
+  `LOCAL_UNVERIFIED`. Edge/public reachability is verified separately (workspace
+  `scripts/ops/verify.sh`).
+- **Coverage without releases.** `services`, `logs`, `logs-text` and `journal` cover every installed
+  `mnscloud-*` unit (names validated against `mnscloud-[a-z0-9-]`) in addition to the fixed third-party
+  units, so a new module timer such as `mnscloud-asterisk-logs` needs no diagnostics change. A contract
+  test fails when the Agent reports a runtime product that `artifacts`/`versions` do not read.
+- **Passwordless database account.** On database hosts the Agent installer runs
+  `diagnostics/db_account.py`, which converges `'mns-diagnostics'@'localhost' IDENTIFIED VIA unix_socket`
+  with column-level `SELECT` on `SchemaAppliedRevision` (`SarClusterKey`, `SarDbReleaseTag`,
+  `SarAppliedAt`, `SarStatus`, `SarDateDeleted`) and `SchemaReconcileJob` (`SrjStage`, `SrjDbReleaseTag`,
+  `SrjStatus`, `SrjStartedAt`, `SrjFinishedAt`, `SrjLastErrorCode`, `SrjDateCreated`, `SrjDateDeleted`).
+  Only the OS account of the same name can use it, over the local socket; any other grant found is
+  revoked on the next convergence. Messages, payloads and JSON columns stay unreadable.
+
 Security depends on root-controlled code and existing host SSH/PAM/sudo policy.
 Other administrative identities are unaffected. Review pre-existing broad sudo rules;
 this installer does not remove unrelated grants. A compromised root can bypass the
@@ -188,7 +228,7 @@ at the same pinned revision when needed.
    restrictions. Keep the normal `known_hosts` files; conflicting entries are not automatically
    replaced and may still produce warnings. This accepts the loss of host-identity protection
    against changed keys, as defined in the SSH access policy. No root fallback is allowed.
-2. Through that alias run all thirteen commands (`journal` with a fixed unit). Review missing/unsafe files without
+2. Through that alias run every command of `help` (`journal` with a fixed unit). Review missing/unsafe files without
    exposing or changing secrets. Config endpoints are private operational evidence.
 3. Send harmless `sh -c id` through the same alias: expect denial and exit 126.
    Connection failure/255 is not proof of enforcement. No destructive denial tests.
