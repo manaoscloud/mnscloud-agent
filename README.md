@@ -507,12 +507,13 @@ averages are not claimed as instantaneous values.
 Each module host connects to MariaDB with its own account (mnscloud-db `docs/db-patterns.md` →
 Per-module database principals). `database.principal` jobs carry only a lease and a step:
 
-- `create` / `revoke` run on the DB host (`mnscloud.database.principal.v1`, advertised when the
+- `create` / `revoke` (also the `legacy` retirement of a pre-principal account) run on the DB host (`mnscloud.database.principal.v1`, advertised when the
   schema-release executor and `/etc/mnscloud/db.env` exist) with `scripts/database-principal.py` of
   the applied DB release (immutable verified release worktree, like the Authentication principal).
 - `deliver` runs on the module host (`mnscloud.module.database.credential.v1`, advertised when
   `python3` and an adapter of a supported module exist: `api` → `/opt/mnscloud/mnscloud-api`,
-  `workers` → `/opt/mnscloud/mnscloud-workers`) with that checkout's
+  `workers` → `/opt/mnscloud/mnscloud-workers`, `asterisk-realtime` → `/opt/mnscloud/mnscloud-asterisk`)
+  with that checkout's
   `scripts/apply-database-credential.py`, which switches the credential, restarts the module and
   proves database health or restores the previous file.
 

@@ -20,11 +20,17 @@ export const MODULE_DATABASE_CREDENTIAL_ADAPTERS: Record<string, ModuleCredentia
     adapter: "scripts/apply-database-credential.py",
     envPath: "/etc/mnscloud/workers.env",
   },
+  "asterisk-realtime": {
+    repo: "/opt/mnscloud/mnscloud-asterisk",
+    adapter: "scripts/apply-database-credential.py",
+    envPath: "/etc/mnscloud/pabx/db.conf",
+  },
 };
 
 /** Codes an adapter may report; anything else becomes the generic code of its step. */
 const FORWARDED_CODES = new Set([
   "DATABASE_PRINCIPAL_HOST_MISMATCH",
+  "DATABASE_PRINCIPAL_LEGACY_IN_USE",
   "MODULE_DATABASE_CREDENTIAL_INVALID",
   "MODULE_DATABASE_CREDENTIAL_UNHEALTHY",
   "MODULE_DATABASE_ENDPOINT_MISMATCH",
