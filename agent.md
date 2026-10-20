@@ -700,7 +700,7 @@ plans and diagnostics, without storing migration credentials in them.
 
 The `runtime.reconcile` registry also supports `mnscloud-workers` / `workers.handlers`. The fixed
 module adapter and `/etc/mnscloud/workers.env` are selected locally; payloads cannot supply paths or
-commands. The control plane authorizes a DNS-only additive plan and apply digest. An installed
+commands. The control plane authorizes a single DNS or storage additive plan and apply digest. An installed
 Workers checkout and env advertise the capability after Agent update. Use an exact Workers release
 that supplies the adapter; that adapter owns activation, health verification and rollback. Runtime
 update and configuration reconcile remain separate recorded jobs.
@@ -722,3 +722,12 @@ DB protocol update. Other typed jobs retain their existing contracts. Validate `
 and the FreeSWITCH module behavioral suite, then verify registration and renewal in DEV.
 
 Runtime update diagnostics retain bounded failure highlights and the output tail so verbose setup or rollback cannot hide the failing step.
+
+### Private storage transfer proxy
+
+Generated HTTP and HTTPS ThemeDomain hosts include the Nginx product's
+`proxy-storage-transfer.conf` snippet for `/api/v1/hosting/storage/transfers/`.
+Install the matching Nginx release before this Agent release: the snippet owns
+streaming, upload size, idle timeouts, retry prevention and capability-safe logging.
+The API remains responsible for authorization and financial policy. Agent domain
+reconciliation validates the resulting Nginx configuration before reload.

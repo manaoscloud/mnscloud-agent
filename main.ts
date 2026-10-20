@@ -2999,6 +2999,11 @@ ${frontendSecurityHeaders()}
 
   ${envJsBlock}
 
+  location ^~ /api/v1/hosting/storage/transfers/ {
+    include /etc/nginx/mnscloud/snippets/proxy-storage-transfer.conf;
+    proxy_pass ${apiUpstream};
+  }
+
   location ^~ /api/v1/hosting/vps/internal/ {
     proxy_http_version 1.1;
     proxy_connect_timeout 3s;
@@ -3082,6 +3087,11 @@ ${frontendSecurityHeaders()}
   }
 
   ${envJsBlock}
+
+  location ^~ /api/v1/hosting/storage/transfers/ {
+    include /etc/nginx/mnscloud/snippets/proxy-storage-transfer.conf;
+    proxy_pass ${apiUpstream};
+  }
 
   location ^~ /api/v1/hosting/vps/internal/ {
     proxy_http_version 1.1;
