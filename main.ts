@@ -68,6 +68,7 @@ import {
   parseNetworkCounters,
   parseNetworkLinks,
   parsePrivateAddresses,
+  parsePublicIpv6Addresses,
   type ResourceSample,
 } from "./host-resources.ts";
 type AgentConfig = {
@@ -1399,18 +1400,22 @@ $d=Get-CimInstance Win32_LogicalDisk | Where-Object { $_.DeviceID -eq $o.SystemD
   }
 }
 
-let privateAddressCache: { at: number; addresses: string[] } | null = null;
-/** Private host addresses for prefilling private endpoints; refreshed every 5 minutes. */
-async function collectPrivateAddresses(config: AgentConfig) {
+let privateAddressCache: { at: number; addresses: string[]; publicIpv6: string[] } | null = null;
+/** Host addresses (private, and stable global IPv6) refreshed every 5 minutes. */
+async function collectHostAddresses(config: AgentConfig) {
   if (config.os !== "linux") return undefined;
   if (privateAddressCache && Date.now() - privateAddressCache.at < 300000) {
-    return privateAddressCache.addresses;
+    return privateAddressCache;
   }
   const result = await runLocalCommand("ip", ["-j", "addr", "show"], 5000)
     .catch(() => ({ code: 1, stdout: "" }));
   if (result.code !== 0) return undefined;
-  privateAddressCache = { at: Date.now(), addresses: parsePrivateAddresses(result.stdout) };
-  return privateAddressCache.addresses;
+  privateAddressCache = {
+    at: Date.now(),
+    addresses: parsePrivateAddresses(result.stdout),
+    publicIpv6: parsePublicIpv6Addresses(result.stdout),
+  };
+  return privateAddressCache;
 }
 
 let heartbeatInFlight: Promise<void> | null = null;
@@ -1461,6 +1466,7 @@ async function performHeartbeat(
   const webapps = config.capabilities["mnscloud.webapps.update"]
     ? await collectWebappsStatus()
     : null;
+  const hostAddresses = await collectHostAddresses(config);
   await jsonRequest(config, "/agent/heartbeat", agentToken, agentUUID, {
     name: config.name,
     hostname: config.hostname,
@@ -1496,7 +1502,8 @@ async function performHeartbeat(
     cyberSecurityStatus: cyberSecurityStatus ?? undefined,
     hostMetrics: hostMetrics ?? undefined,
     openvaultStatus: openvaultStatus ?? undefined,
-    privateAddresses: await collectPrivateAddresses(config),
+    privateAddresses: hostAddresses?.addresses,
+    publicIpv6Addresses: hostAddresses?.publicIpv6,
   });
 }
 
