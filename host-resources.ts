@@ -142,19 +142,22 @@ export function parsePublicIpv6Addresses(text: string): string[] {
   const result: string[] = [];
   for (const link of links) {
     const entries = (link as { addr_info?: unknown })?.addr_info;
-    if (!Array.isArray(entries)) continue;
-    for (const entry of entries) {
-      const item = entry as Record<string, unknown>;
-      const local = String(item?.local ?? "").toLowerCase();
-      if (
-        item?.family !== "inet6" || item?.scope !== "global" || item?.temporary === true ||
-        item?.deprecated === true || !/^[23][0-9a-f]{0,3}:[0-9a-f:]+$/.test(local)
-      ) continue;
-      if (!result.includes(local)) result.push(local);
+    for (const entry of Array.isArray(entries) ? entries : []) {
+      const address = stablePublicIpv6(entry);
+      if (address && !result.includes(address)) result.push(address);
       if (result.length === 8) return result;
     }
   }
   return result;
+}
+
+/** The address of a stable global IPv6 unicast entry of `ip -j addr`, or null. */
+function stablePublicIpv6(entry: unknown): string | null {
+  const item = entry as Record<string, unknown> | null;
+  if (item?.family !== "inet6" || item.scope !== "global") return null;
+  if (item.temporary === true || item.deprecated === true) return null;
+  const local = typeof item.local === "string" ? item.local.toLowerCase() : "";
+  return /^[23][0-9a-f]{0,3}:[0-9a-f:]+$/.test(local) ? local : null;
 }
 
 function isPrivateAddress(address: string) {

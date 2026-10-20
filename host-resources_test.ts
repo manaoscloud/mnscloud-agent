@@ -62,23 +62,23 @@ Deno.test("public IPv6: stable global unicast only, no temporary, deprecated, UL
     {
       ifname: "eth0",
       addr_info: [
-        { family: "inet", local: "172.17.0.113", scope: "global" },
+        { family: "inet", local: "192.0.2.13", scope: "global" },
         {
           family: "inet6",
-          local: "2804:8094:1000:3:BE24:11FF:FE5F:892F",
+          local: "2001:DB8:1000:3:BE24:11FF:FE5F:892F",
           scope: "global",
           dynamic: true,
         },
-        { family: "inet6", local: "2804:8094:1000:3::abcd", scope: "global", temporary: true },
-        { family: "inet6", local: "2804:8094:1000:3::dead", scope: "global", deprecated: true },
+        { family: "inet6", local: "2001:db8:1000:3::abcd", scope: "global", temporary: true },
+        { family: "inet6", local: "2001:db8:1000:3::dead", scope: "global", deprecated: true },
         { family: "inet6", local: "fd00::1", scope: "global" },
         { family: "inet6", local: "fe80::1", scope: "link" },
-        { family: "inet6", local: "2804:8094:1000:3:be24:11ff:fe5f:892f", scope: "global" },
+        { family: "inet6", local: "2001:db8:1000:3:be24:11ff:fe5f:892f", scope: "global" },
       ],
     },
   ]);
   const found = parsePublicIpv6Addresses(sample);
-  if (JSON.stringify(found) !== JSON.stringify(["2804:8094:1000:3:be24:11ff:fe5f:892f"])) {
+  if (JSON.stringify(found) !== JSON.stringify(["2001:db8:1000:3:be24:11ff:fe5f:892f"])) {
     throw new Error(JSON.stringify(found));
   }
   if (parsePublicIpv6Addresses("x").length !== 0) throw new Error("invalid input");
