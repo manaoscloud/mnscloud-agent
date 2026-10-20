@@ -1,4 +1,9 @@
-import { parseFilesystems, parseNetworkCounters, parsePrivateAddresses } from "./host-resources.ts";
+import {
+  parseFilesystems,
+  parseNetworkCounters,
+  parsePrivateAddresses,
+  parsePublicIpv6Addresses,
+} from "./host-resources.ts";
 function check(value: unknown) {
   if (!value) throw new Error("Assertion failed");
 }
@@ -50,4 +55,31 @@ Deno.test("private addresses come from ip -j addr, private ranges only", () => {
   check(JSON.stringify(found) === JSON.stringify(["172.17.0.198", "fd00::198", "10.88.0.1"]));
   check(parsePrivateAddresses("not json").length === 0);
   check(parsePrivateAddresses("{}").length === 0);
+});
+
+Deno.test("public IPv6: stable global unicast only, no temporary, deprecated, ULA or link-local", () => {
+  const sample = JSON.stringify([
+    {
+      ifname: "eth0",
+      addr_info: [
+        { family: "inet", local: "192.0.2.13", scope: "global" },
+        {
+          family: "inet6",
+          local: "2001:DB8:1000:3:BE24:11FF:FE5F:892F",
+          scope: "global",
+          dynamic: true,
+        },
+        { family: "inet6", local: "2001:db8:1000:3::abcd", scope: "global", temporary: true },
+        { family: "inet6", local: "2001:db8:1000:3::dead", scope: "global", deprecated: true },
+        { family: "inet6", local: "fd00::1", scope: "global" },
+        { family: "inet6", local: "fe80::1", scope: "link" },
+        { family: "inet6", local: "2001:db8:1000:3:be24:11ff:fe5f:892f", scope: "global" },
+      ],
+    },
+  ]);
+  const found = parsePublicIpv6Addresses(sample);
+  if (JSON.stringify(found) !== JSON.stringify(["2001:db8:1000:3:be24:11ff:fe5f:892f"])) {
+    throw new Error(JSON.stringify(found));
+  }
+  if (parsePublicIpv6Addresses("x").length !== 0) throw new Error("invalid input");
 });

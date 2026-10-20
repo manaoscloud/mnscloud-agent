@@ -126,6 +126,40 @@ export function parsePrivateAddresses(text: string): string[] {
   return result;
 }
 
+/**
+ * Stable global IPv6 unicast addresses (2000::/3) of the host, for services that a platform master
+ * explicitly publishes on IPv6 (e.g. Logs ingest). Temporary (privacy) and deprecated addresses
+ * change on their own and are never reported.
+ */
+export function parsePublicIpv6Addresses(text: string): string[] {
+  let links: unknown;
+  try {
+    links = JSON.parse(text);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(links)) return [];
+  const result: string[] = [];
+  for (const link of links) {
+    const entries = (link as { addr_info?: unknown })?.addr_info;
+    for (const entry of Array.isArray(entries) ? entries : []) {
+      const address = stablePublicIpv6(entry);
+      if (address && !result.includes(address)) result.push(address);
+      if (result.length === 8) return result;
+    }
+  }
+  return result;
+}
+
+/** The address of a stable global IPv6 unicast entry of `ip -j addr`, or null. */
+function stablePublicIpv6(entry: unknown): string | null {
+  const item = entry as Record<string, unknown> | null;
+  if (item?.family !== "inet6" || item.scope !== "global") return null;
+  if (item.temporary === true || item.deprecated === true) return null;
+  const local = typeof item.local === "string" ? item.local.toLowerCase() : "";
+  return /^[23][0-9a-f]{0,3}:[0-9a-f:]+$/.test(local) ? local : null;
+}
+
 function isPrivateAddress(address: string) {
   const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(address);
   if (v4) {
