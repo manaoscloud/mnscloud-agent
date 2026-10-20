@@ -700,7 +700,7 @@ plans and diagnostics, without storing migration credentials in them.
 
 The `runtime.reconcile` registry also supports `mnscloud-workers` / `workers.handlers`. The fixed
 module adapter and `/etc/mnscloud/workers.env` are selected locally; payloads cannot supply paths or
-commands. The control plane authorizes a DNS-only additive plan and apply digest. An installed
+commands. The control plane authorizes a single DNS or storage additive plan and apply digest. An installed
 Workers checkout and env advertise the capability after Agent update. Use an exact Workers release
 that supplies the adapter; that adapter owns activation, health verification and rollback. Runtime
 update and configuration reconcile remain separate recorded jobs.
