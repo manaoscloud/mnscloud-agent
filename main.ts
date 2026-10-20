@@ -42,6 +42,7 @@ import {
   RUNTIME_RECONCILE_PRODUCTS,
   runtimeReconcileProductAvailable,
 } from "./runtime-reconcile.ts";
+import { LOGS_REFRESH_JOB_TYPE, runLogsRefresh } from "./logs-refresh.ts";
 import { JOB_LONG_POLL_MAX_SECONDS, jobLongPollSeconds, runLane } from "./scheduler.ts";
 import {
   byteBudget,
@@ -6477,6 +6478,25 @@ async function completeRuntimeReconcileJob(
 /** Dedicated database executor: secret material is fetched just in time and travels over stdin.
  * No request value can choose a command, path, environment file or SQL statement.
  */
+/** Logs push revocation: start the node configuration pull now (the job carries no command). */
+async function executeLogsRefreshJob(job: LeaseJob) {
+  const started = await runLogsRefresh(async (args) => {
+    const output = await new Deno.Command(args[0], {
+      args: args.slice(1),
+      stdout: "null",
+      stderr: "null",
+    }).output().catch(() => null);
+    return Boolean(output?.success);
+  });
+  log(
+    started ? "info" : "warn",
+    started
+      ? "Logs configuration refresh started."
+      : "Logs configuration refresh unavailable on this host.",
+    { jobUUID: job.jobUUID },
+  );
+}
+
 async function executeAuthenticationLifecycleJob(
   job: LeaseJob,
   config: AgentConfig,
@@ -6920,6 +6940,8 @@ async function pollJobs(
       await executeDatabaseTableMaintenanceJob(job, config, agentUUID, agentToken);
     } else if (job.jobType === RUNTIME_RECONCILE_JOB_TYPE) {
       await executeRuntimeReconcileJob(job, config, agentUUID, agentToken);
+    } else if (job.jobType === LOGS_REFRESH_JOB_TYPE) {
+      await executeLogsRefreshJob(job);
     } else {
       await uploadJob(job, config, agentUUID, agentToken);
     }
