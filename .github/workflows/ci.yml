@@ -43,6 +43,12 @@ jobs:
         run: bash scripts/test-deno-selection.sh
       - name: apt/dpkg lock wait
         run: bash scripts/test-apt-lock-wait.sh
+      - name: Gitleaks secret scan
+        run: |
+          docker run --rm -v "$PWD:/repo:ro" ghcr.io/gitleaks/gitleaks:latest dir /repo --config=/repo/.gitleaks.toml --redact --verbose --exit-code=1
+      - name: Trivy security scan
+        run: |
+          docker run --rm -v "$PWD:/repo:ro" aquasec/trivy:latest fs --scanners vuln,misconfig --severity HIGH,CRITICAL --ignore-unfixed --exit-code=1 /repo
       - name: Prepare release candidate
         if: github.event_name == 'push'
         run: >-

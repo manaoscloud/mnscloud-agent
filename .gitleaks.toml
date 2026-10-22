@@ -1,0 +1,6 @@
+[allowlist]
+description = "Allowlist test suites that verify secret redaction"
+paths = [
+  '''tests/ssh_diagnostics_contract\.py'''
+]
+
