@@ -477,6 +477,15 @@ every 10 minutes, after a failed or rejected heartbeat and when the API answers 
 owns matching to tenant extensions and the online/offline/never state; the Agent only reports what
 the local runtime exposes.
 
+Between heartbeats, engine events bring the change within seconds (`pabx-events.ts`): Asterisk AMI
+`ContactStatus` (class `system`, the `mnscloud` account of `/etc/asterisk/manager.conf`) and
+FreeSWITCH ESL `sofia::register|unregister|expire` (password from `freeswitch_esl_password`,
+`/etc/mnscloud/pabx/freeswitch-esl.secret` or `event_socket.conf.xml`). Explicit
+`asterisk_ami_*` / `freeswitch_esl_*` configuration wins. An event is only a wake signal: the Agent
+reads the engine (at most once every 5 s, coalesced) and posts the changes to
+`POST /agent/pabx/presence`; lost events are covered by the heartbeat. The connection retries with
+backoff and logs one line per new problem.
+
 ## Cyber Security
 
 Cyber security uses the same runtime. Jobs such as nftables and CrowdSec installation/configuration

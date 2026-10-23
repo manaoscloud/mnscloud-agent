@@ -801,6 +801,7 @@ main() {
   run "cp '${AGENT_SOURCE_DIR}/pabx-state.ts' '${install_dir}/pabx-state.ts'"
   run "cp '${AGENT_SOURCE_DIR}/pabx-registration-insight.ts' '${install_dir}/pabx-registration-insight.ts'"
   run "cp '${AGENT_SOURCE_DIR}/pabx-presence.ts' '${install_dir}/pabx-presence.ts'"
+  run "cp '${AGENT_SOURCE_DIR}/pabx-events.ts' '${install_dir}/pabx-events.ts'"
   run "cp '${AGENT_SOURCE_DIR}/logs-refresh.ts' '${install_dir}/logs-refresh.ts'"
   run "cp '${AGENT_SOURCE_DIR}/deno.jsonc' '${install_dir}/deno.jsonc'"
   write_agent_build_metadata "$install_dir" "$(agent_version)" "$(agent_build_ref)"
