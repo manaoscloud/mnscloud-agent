@@ -134,29 +134,32 @@ function hostOf(value: string) {
 
 /**
  * `asterisk -rx "pjsip show contacts"`. The AOR is `<extension>@<domain>` (the PJSIP realtime id),
- * which identifies the extension; the contact URI only carries the device address.
+ * which identifies the extension; the contact URI only carries the device address. Asterisk cuts
+ * the `Aor/ContactUri` column at a fixed width, so with a long domain the URI may be reduced to
+ * `/sip` or vanish: the AOR alone is enough, the address is optional.
  */
 export function parseAsteriskPjsipContacts(output: string) {
   const reports: Array<PresenceObservation & { engine: "asterisk"; contact: string }> = [];
   for (const rawLine of output.split(/\r?\n/)) {
     const line = rawLine.trim();
-    const match = /^Contact:\s+([^\s/]+)\/(sips?:\S+)/i.exec(line);
+    const match = /^Contact:\s+([^\s/]+)(?:\/(\S*))?/i.exec(line);
     if (!match || match[1].startsWith("<")) continue;
     const aor = match[1];
-    const uri = match[2];
-    const uriTarget = uri.replace(/^sips?:/i, "");
+    const uri = match[2] ?? "";
+    const uriTarget = /^sips?:/i.test(uri) ? uri.replace(/^sips?:/i, "") : "";
     const uriUser = uriTarget.includes("@") ? uriTarget.slice(0, uriTarget.indexOf("@")) : "";
-    const uriHost = hostOf(
-      uriTarget.includes("@") ? uriTarget.slice(uriTarget.indexOf("@") + 1) : uriTarget,
-    );
+    const uriHost = uriTarget
+      ? hostOf(uriTarget.includes("@") ? uriTarget.slice(uriTarget.indexOf("@") + 1) : uriTarget)
+      : "";
     const at = aor.lastIndexOf("@");
+    if (at <= 0 && !uriHost) continue;
     const username = at > 0 ? aor.slice(0, at) : (uriUser || aor);
     const domain = at > 0 ? aor.slice(at + 1).toLowerCase() : uriHost.toLowerCase();
     reports.push({
       engine: "asterisk",
       username,
       domain,
-      contact: `${aor}/${uri}`,
+      contact: uri ? `${aor}/${uri}` : aor,
       networkIP: uriHost || null,
     });
   }

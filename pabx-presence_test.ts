@@ -80,14 +80,18 @@ Deno.test("Asterisk contacts identify the extension by AOR, not by the device ad
     "  Contact:  2001@pbx.example.com/sip:zoiper123@198.51.100.7:5060;ob  5d8e9a0b1c Avail  21.310",
     "  Contact:  2001@pbx.example.com/sip:2001@[2001:db8::7]:5061;transport=tls  aa11 Avail  9.1",
     "  Contact:  2002/sip:2002@203.0.113.4  bb22 Unavail  nan",
+    "  Contact:  7001@efdcbba8cf12.pbx.dev.example.com/sip 72b49194e9 Unavail         nan",
+    "  Contact:  7002@efdcbba8cf12.pbx.dev.example.com 82b49194e9 Avail         12.0",
     "",
-    "Objects found: 3",
+    "Objects found: 5",
   ].join("\n");
   const reports = parseAsteriskPjsipContacts(output);
   assertEquals(reports.map((item) => [item.username, item.domain, item.networkIP]), [
     ["2001", "pbx.example.com", "198.51.100.7"],
     ["2001", "pbx.example.com", "2001:db8::7"],
     ["2002", "203.0.113.4", "203.0.113.4"],
+    ["7001", "efdcbba8cf12.pbx.dev.example.com", null],
+    ["7002", "efdcbba8cf12.pbx.dev.example.com", null],
   ]);
   const tracker = new PabxPresenceTracker();
   const report = tracker.build({ asterisk: reports }, 0).report;
