@@ -316,9 +316,11 @@ async function applyRuntimeCapabilities(config: AgentConfig) {
   config.capabilities["mnscloud.logs.update"] = await isExecutableFile(
     "/opt/mnscloud/mnscloud-logs/scripts/update-logs.sh",
   );
-  config.capabilities["mnscloud.dns.update"] = await isExecutableFile(
-    "/opt/mnscloud/mnscloud-dns/scripts/update-dns.sh",
-  );
+  for (const name of CONVENTIONAL_MODULE_RUNTIMES) {
+    config.capabilities[`mnscloud.${name}.update`] = await isExecutableFile(
+      `${moduleRuntimeDir(name)}/scripts/update-${name}.sh`,
+    );
+  }
   config.capabilities["mnscloud.freeswitch.update"] = await isExecutableFile(
     "/opt/mnscloud/mnscloud-freeswitch/scripts/update-freeswitch.sh",
   );
@@ -911,11 +913,13 @@ async function collectRuntimeVersions(config: AgentConfig) {
       "/opt/mnscloud/mnscloud-logs",
       config,
     ),
-    runtimeVersionReport(
-      "mnscloud-dns",
-      "mnscloud.dns.update",
-      "/opt/mnscloud/mnscloud-dns",
-      config,
+    ...CONVENTIONAL_MODULE_RUNTIMES.map((name) =>
+      runtimeVersionReport(
+        `mnscloud-${name}`,
+        `mnscloud.${name}.update`,
+        moduleRuntimeDir(name),
+        config,
+      )
     ),
     runtimeVersionReport(
       "mnscloud-freeswitch",
@@ -3698,14 +3702,25 @@ function assertSafeRuntimeUpdateRef(ref: string) {
 }
 
 /**
- * Update target of a module runtime that converges with `scripts/update-<name>.sh` and its private
- * environment `/etc/mnscloud/<name>.env` after checking out the approved release.
+ * Module runtimes that follow the plain convention: checkout `/opt/mnscloud/mnscloud-<name>`,
+ * converge with `scripts/update-<name>.sh` and private environment `/etc/mnscloud/<name>.env`.
+ * New modules are added here instead of repeating the capability, version and update entries.
  */
-function checkoutRuntimeTarget(label: string, name: string) {
+const CONVENTIONAL_MODULE_RUNTIMES = ["dns"] as const;
+const MODULE_RUNTIME_LABELS: Record<(typeof CONVENTIONAL_MODULE_RUNTIMES)[number], string> = {
+  dns: "DNS",
+};
+
+function moduleRuntimeDir(name: string) {
+  return `/opt/mnscloud/mnscloud-${name}`;
+}
+
+/** Update target of a conventional module runtime after checking out the approved release. */
+function checkoutRuntimeTarget(name: (typeof CONVENTIONAL_MODULE_RUNTIMES)[number]) {
   return {
-    label,
+    label: MODULE_RUNTIME_LABELS[name],
     capability: `mnscloud.${name}.update`,
-    repoDir: `/opt/mnscloud/mnscloud-${name}`,
+    repoDir: moduleRuntimeDir(name),
     command: (targetRef: string) => [
       "bash",
       "-lc",
@@ -3842,7 +3857,9 @@ function runtimeUpdateTarget(product: string) {
         } && bash scripts/update-logs.sh --env /etc/mnscloud/logs.env`,
       ],
     },
-    "mnscloud-dns": checkoutRuntimeTarget("DNS", "dns"),
+    ...Object.fromEntries(
+      CONVENTIONAL_MODULE_RUNTIMES.map((name) => [`mnscloud-${name}`, checkoutRuntimeTarget(name)]),
+    ),
     "mnscloud-freeswitch": {
       label: "FreeSWITCH PABX",
       capability: "mnscloud.freeswitch.update",

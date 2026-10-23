@@ -281,6 +281,9 @@ class DiagnosticsV4Contract(unittest.TestCase):
         main = (ROOT / 'main.ts').read_text()
         block = main.split('async function collectRuntimeVersions', 1)[1].split('runtimeVersionCache = {', 1)[0]
         products = set(__import__('re').findall(r'"/opt/mnscloud/mnscloud-([a-z0-9-]+)"', block))
+        # Conventional module runtimes are reported from one list (main.ts CONVENTIONAL_MODULE_RUNTIMES).
+        conventional = main.split('const CONVENTIONAL_MODULE_RUNTIMES = [', 1)[1].split(']', 1)[0]
+        products |= set(__import__('re').findall(r'"([a-z0-9-]+)"', conventional))
         self.assertTrue(products)
         self.assertEqual(products, set(collector.RUNTIME_CHECKOUTS))
         for product in products:
