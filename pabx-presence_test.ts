@@ -28,7 +28,10 @@ Deno.test("first report is complete, then only changes are sent", () => {
     freeswitch: [fs("1001", { networkIP: "198.51.100.9" }), fs("1003")],
   }, 121_000);
   assertEquals(delta.report.full, false);
-  assertEquals(delta.report.registrations.map((item) => item.username).sort(), ["1001", "1003"]);
+  assertEquals(
+    delta.report.registrations.map((item) => item.username).sort((a, b) => a.localeCompare(b)),
+    ["1001", "1003"],
+  );
   assertEquals(delta.report.removed, [{
     engine: "freeswitch",
     username: "1002",

@@ -67,8 +67,8 @@ export function aggregatePresence(observations: PresenceObservation[]) {
 }
 
 function changed(before: PresenceEntry | undefined, after: PresenceEntry) {
-  return !before || before.contactCount !== after.contactCount ||
-    before.userAgent !== after.userAgent || before.networkIP !== after.networkIP;
+  return before?.contactCount !== after.contactCount ||
+    before?.userAgent !== after.userAgent || before?.networkIP !== after.networkIP;
 }
 
 export class PabxPresenceTracker {
@@ -83,7 +83,7 @@ export class PabxPresenceTracker {
     observed: Partial<Record<PresenceEngine, PresenceObservation[]>>,
     now = Date.now(),
   ): PresencePending {
-    const engines = (Object.keys(observed) as PresenceEngine[]).sort();
+    const engines = (Object.keys(observed) as PresenceEngine[]).sort((a, b) => a.localeCompare(b));
     const snapshot = aggregatePresence(engines.flatMap((engine) => observed[engine] ?? []));
     const full = this.forceFull || this.baseline === null ||
       now - this.lastFullAt >= this.fullIntervalMs;
@@ -140,7 +140,7 @@ export function parseAsteriskPjsipContacts(output: string) {
   const reports: Array<PresenceObservation & { engine: "asterisk"; contact: string }> = [];
   for (const rawLine of output.split(/\r?\n/)) {
     const line = rawLine.trim();
-    const match = line.match(/^Contact:\s+([^\s/]+)\/(sips?:\S+)/i);
+    const match = /^Contact:\s+([^\s/]+)\/(sips?:\S+)/i.exec(line);
     if (!match || match[1].startsWith("<")) continue;
     const aor = match[1];
     const uri = match[2];
