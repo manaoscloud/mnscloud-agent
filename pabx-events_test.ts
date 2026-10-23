@@ -66,13 +66,11 @@ Deno.test("AMI ContactStatus events wake the presence report and the listener re
       await conn.write(encoder.encode("Asterisk Call Manager/9.0.0\r\n"));
       const loginText = await readSome(conn);
       if (loginText.includes("Secret: right")) logins++;
-      await conn.write(
-        encoder.encode("Response: Success\r\nMessage: Authentication accepted\r\n\r\n"),
-      );
-      await conn.write(encoder.encode("Event: FullyBooted\r\n\r\n"));
-      await conn.write(
-        encoder.encode("Event: ContactStatus\r\nContactStatus: Created\r\nAOR: 7001@pbx\r\n\r\n"),
-      );
+      // Login reply and the first event in one write: the event must not be lost with the reply.
+      await conn.write(encoder.encode(
+        "Response: Success\r\nMessage: Authentication accepted\r\n\r\n" +
+          "Event: ContactStatus\r\nContactStatus: Created\r\nAOR: 7001@pbx\r\n\r\n",
+      ));
       await new Promise((resolve) => setTimeout(resolve, 50));
       conn.close();
     }
