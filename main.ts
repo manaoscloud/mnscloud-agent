@@ -3697,6 +3697,27 @@ function assertSafeRuntimeUpdateRef(ref: string) {
   }
 }
 
+/**
+ * Update target of a module runtime that converges with `scripts/update-<name>.sh` and its private
+ * environment `/etc/mnscloud/<name>.env` after checking out the approved release.
+ */
+function checkoutRuntimeTarget(label: string, name: string) {
+  return {
+    label,
+    capability: `mnscloud.${name}.update`,
+    repoDir: `/opt/mnscloud/mnscloud-${name}`,
+    command: (targetRef: string) => [
+      "bash",
+      "-lc",
+      [
+        "git fetch --tags --prune origin",
+        `git checkout ${shellQuote(targetRef)}`,
+        `bash scripts/update-${name}.sh --env /etc/mnscloud/${name}.env`,
+      ].join(" && "),
+    ],
+  };
+}
+
 function runtimeUpdateTarget(product: string) {
   const targets: Record<
     string,
@@ -3821,18 +3842,7 @@ function runtimeUpdateTarget(product: string) {
         } && bash scripts/update-logs.sh --env /etc/mnscloud/logs.env`,
       ],
     },
-    "mnscloud-dns": {
-      label: "DNS",
-      capability: "mnscloud.dns.update",
-      repoDir: "/opt/mnscloud/mnscloud-dns",
-      command: (targetRef) => [
-        "bash",
-        "-lc",
-        `git fetch --tags --prune origin && git checkout ${
-          shellQuote(targetRef)
-        } && bash scripts/update-dns.sh --env /etc/mnscloud/dns.env`,
-      ],
-    },
+    "mnscloud-dns": checkoutRuntimeTarget("DNS", "dns"),
     "mnscloud-freeswitch": {
       label: "FreeSWITCH PABX",
       capability: "mnscloud.freeswitch.update",

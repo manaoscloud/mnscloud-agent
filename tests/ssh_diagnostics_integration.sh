@@ -33,7 +33,7 @@ python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["served"][
 python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["total"] == 1 and v["top"][0]["path"] == "/api/v1/health"' /tmp/access-summary.json
 python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["status"] == "NOT_A_DATABASE_HOST"' /tmp/schema-status.json
 runuser -u mns-diagnostics -- env SSH_ORIGINAL_COMMAND='access-summary 60' /usr/local/sbin/mns-diagnostics | grep -q '"sinceMinutes": 60'
-runuser -u mns-diagnostics -- env SSH_ORIGINAL_COMMAND='mns-diagnostics versions 2>/dev/null' /usr/local/sbin/mns-diagnostics | grep -q '"diagnostics": "4.0"'
+runuser -u mns-diagnostics -- env SSH_ORIGINAL_COMMAND='mns-diagnostics versions 2>/dev/null' /usr/local/sbin/mns-diagnostics | grep -q '"diagnostics": "4.1"'
 for request in 'access-summary 0' 'access-summary x' 'artifacts /etc/shadow' 'health 8.8.8.8'; do
   if runuser -u mns-diagnostics -- env SSH_ORIGINAL_COMMAND="$request" /usr/local/sbin/mns-diagnostics; then exit 1; fi
 done
@@ -66,5 +66,5 @@ sha256sum -c /tmp/key-check
 bash /agent/scripts/install-diagnostics.sh | grep -q 'Converged'
 runuser -u mns-diagnostics -- env SSH_ORIGINAL_COMMAND=help /usr/local/sbin/mns-diagnostics | grep -q 'journal UNIT'
 sha256sum -c /tmp/key-check
-printf 'PASS: Agent-managed install/idempotence/update, collectors (diagnostics 4.0), masked usernames, denied sudo, key/UID preservation and rollback.\n'
+printf 'PASS: Agent-managed install/idempotence/update, collectors (diagnostics 4.1), masked usernames, denied sudo, key/UID preservation and rollback.\n'
 TEST
