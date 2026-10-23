@@ -104,6 +104,7 @@ async function readUntil(
   return text;
 }
 
+/** Logs in and subscribes; returns what was read after the login reply (it may hold events). */
 async function login(connection: Connection, endpoint: EventEndpoint, timeoutMs: number) {
   if (endpoint.engine === "asterisk") {
     await readUntil(connection, (text) => text.includes("Asterisk Call Manager"), timeoutMs);
@@ -116,7 +117,7 @@ async function login(connection: Connection, endpoint: EventEndpoint, timeoutMs:
       timeoutMs,
     );
     if (!/Response:\s*Success/i.test(reply)) throw new Error("AMI login refused");
-    return;
+    return reply;
   }
   await readUntil(connection, (text) => text.includes("auth/request"), timeoutMs);
   await connection.write(encoder.encode(`auth ${endpoint.secret}\n\n`));
@@ -125,6 +126,7 @@ async function login(connection: Connection, endpoint: EventEndpoint, timeoutMs:
   await connection.write(
     encoder.encode("event plain CUSTOM sofia::register sofia::unregister sofia::expire\n\n"),
   );
+  return "";
 }
 
 /**
@@ -160,12 +162,15 @@ export function listenPabxEvents(options: EventListenerOptions) {
       }
       try {
         current = await connect(endpoint.hostname, endpoint.port);
-        await login(current, endpoint, loginTimeoutMs);
+        const early = await login(current, endpoint, loginTimeoutMs);
         options.log("info", "PABX registration events connected.", { engine: endpoint.engine });
         lastProblem = "";
         delay = retryMs;
         // A fresh subscription may have missed changes while disconnected.
         options.onEvent(endpoint.engine);
+        // Events may arrive in the same read as the login reply.
+        const afterLogin = early.replace(/^[\s\S]*?Response:\s*Success[^\n]*\n/i, "");
+        if (wakes(endpoint.engine, afterLogin)) options.onEvent(endpoint.engine);
         const buffer = new Uint8Array(16384);
         let tail = "";
         while (!stopped) {
