@@ -44,6 +44,13 @@ import {
 } from "./runtime-reconcile.ts";
 import { LOGS_REFRESH_JOB_TYPE, runLogsRefresh } from "./logs-refresh.ts";
 import {
+  amiEndpointFromManagerConf,
+  coalesce,
+  eslPasswordFromConfig,
+  type EventEndpoint,
+  listenPabxEvents,
+} from "./pabx-events.ts";
+import {
   PabxPresenceTracker,
   parseAsteriskPjsipContacts as parseAsteriskContactLines,
   type PresenceEngine,
@@ -1337,6 +1344,13 @@ export type HostMetrics = {
 let previousCpu: { total: number; idle: number } | null = null;
 let lastHostMetricsAt = 0;
 const pabxPresenceTracker = new PabxPresenceTracker();
+// The heartbeat and the event-driven reports share the presence baseline: one at a time.
+let pabxPresenceQueue: Promise<unknown> = Promise.resolve();
+function withPabxPresenceLock<T>(task: () => Promise<T>): Promise<T> {
+  const run = pabxPresenceQueue.then(task, task);
+  pabxPresenceQueue = run.catch(() => undefined);
+  return run;
+}
 
 export function parseLinuxCpu(value: string) {
   const fields = value.split("\n")[0].trim().split(/\s+/).slice(1, 9).map(Number);
@@ -1470,12 +1484,88 @@ function heartbeat(
   cyberSecurityStatus?: Record<string, unknown> | null,
 ) {
   if (!heartbeatInFlight) {
-    heartbeatInFlight = performHeartbeat(config, agentUUID, agentToken, cyberSecurityStatus)
+    heartbeatInFlight = withPabxPresenceLock(() =>
+      performHeartbeat(config, agentUUID, agentToken, cyberSecurityStatus)
+    )
       .finally(() => {
         heartbeatInFlight = null;
       });
   }
   return heartbeatInFlight;
+}
+
+type PabxPresenceAnswer = { data?: { pabxPresence?: { applied?: unknown; needsFull?: unknown } } };
+
+/** Registration changes right after an engine event, between heartbeats (only when something changed). */
+function sendPabxPresenceChanges(config: AgentConfig, agentUUID: string, agentToken: string) {
+  return withPabxPresenceLock(async () => {
+    const pending = pabxPresenceTracker.build(await collectPabxPresenceObservations(config));
+    const report = pending.report;
+    if (!report.engines.length) return;
+    if (!report.full && !report.registrations.length && !report.removed.length) return;
+    let answer: PabxPresenceAnswer | null = null;
+    try {
+      answer = await jsonRequest<PabxPresenceAnswer>(
+        config,
+        "/agent/pabx/presence",
+        agentToken,
+        agentUUID,
+        { pabxPresence: report },
+      );
+    } catch (error) {
+      log("warn", "PABX presence change report failed; the heartbeat resends it.", String(error));
+    } finally {
+      pabxPresenceTracker.acknowledge(pending, answer?.data?.pabxPresence);
+    }
+  });
+}
+
+async function asteriskEventEndpoint(config: AgentConfig): Promise<EventEndpoint | null> {
+  if (!config.capabilities["voip.asterisk.manage"]) return null;
+  if (config.asteriskAmiUsername && config.asteriskAmiSecret) {
+    return {
+      engine: "asterisk",
+      hostname: config.asteriskAmiHost,
+      port: config.asteriskAmiPort,
+      username: config.asteriskAmiUsername,
+      secret: config.asteriskAmiSecret,
+    };
+  }
+  const managerConf = await optionalRead("/etc/asterisk/manager.conf");
+  return managerConf ? amiEndpointFromManagerConf(managerConf) : null;
+}
+
+async function freeswitchEventEndpoint(config: AgentConfig): Promise<EventEndpoint | null> {
+  if (!config.capabilities["voip.freeswitch.manage"]) return null;
+  const secret = config.freeswitchEslPassword ||
+    (await optionalRead("/etc/mnscloud/pabx/freeswitch-esl.secret"))?.trim() ||
+    eslPasswordFromConfig(
+      await optionalRead("/etc/freeswitch/autoload_configs/event_socket.conf.xml") ?? "",
+    );
+  if (!secret) return null;
+  return {
+    engine: "freeswitch",
+    hostname: config.freeswitchEslHost,
+    port: config.freeswitchEslPort,
+    secret,
+  };
+}
+
+/**
+ * Engine registration events (AMI ContactStatus, ESL sofia::register/unregister/expire) send the
+ * presence change within seconds; reads are coalesced to at most one every 5 s.
+ */
+function startPabxPresenceEvents(config: AgentConfig, agentUUID: string) {
+  if (IS_WINDOWS) return;
+  const wake = coalesce(async () => {
+    const agentToken = await optionalRead(config.agentTokenFile);
+    if (agentToken) await sendPabxPresenceChanges(config, agentUUID, agentToken);
+  });
+  const logEvent = (level: "info" | "warn", message: string, details?: unknown) =>
+    log(level, message, details);
+  for (const resolve of [asteriskEventEndpoint, freeswitchEventEndpoint]) {
+    listenPabxEvents({ resolve: () => resolve(config), onEvent: wake.trigger, log: logEvent });
+  }
 }
 
 async function performHeartbeat(
@@ -7022,6 +7112,7 @@ async function main() {
     agentUUID,
   });
 
+  startPabxPresenceEvents(config, agentUUID);
   let lastHeartbeat = 0;
   let lastCyberSecuritySync = 0;
   let lastCapabilitiesRefresh = Date.now();
