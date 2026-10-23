@@ -1535,6 +1535,10 @@ function sendPabxPresenceChanges(config: AgentConfig, agentUUID: string, agentTo
 
 async function asteriskEventEndpoint(config: AgentConfig): Promise<EventEndpoint | null> {
   if (!config.capabilities["voip.asterisk.manage"]) return null;
+  // manager.conf is what Asterisk itself enforces on this host; Agent settings may be stale.
+  const managerConf = await optionalRead("/etc/asterisk/manager.conf");
+  const local = managerConf ? amiEndpointFromManagerConf(managerConf) : null;
+  if (local) return local;
   if (config.asteriskAmiUsername && config.asteriskAmiSecret) {
     return {
       engine: "asterisk",
@@ -1544,8 +1548,7 @@ async function asteriskEventEndpoint(config: AgentConfig): Promise<EventEndpoint
       secret: config.asteriskAmiSecret,
     };
   }
-  const managerConf = await optionalRead("/etc/asterisk/manager.conf");
-  return managerConf ? amiEndpointFromManagerConf(managerConf) : null;
+  return null;
 }
 
 async function freeswitchEventEndpoint(config: AgentConfig): Promise<EventEndpoint | null> {

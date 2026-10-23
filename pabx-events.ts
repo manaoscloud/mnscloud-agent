@@ -116,7 +116,10 @@ async function login(connection: Connection, endpoint: EventEndpoint, timeoutMs:
       (text) => /Response:\s*(Success|Error)/i.test(text),
       timeoutMs,
     );
-    if (!/Response:\s*Success/i.test(reply)) throw new Error("AMI login refused");
+    if (!/Response:\s*Success/i.test(reply)) {
+      const message = reply.match(/Message:\s*([^\r\n]{0,120})/i)?.[1]?.trim();
+      throw new Error(`AMI login refused${message ? `: ${message}` : ""}`);
+    }
     return reply;
   }
   await readUntil(connection, (text) => text.includes("auth/request"), timeoutMs);
