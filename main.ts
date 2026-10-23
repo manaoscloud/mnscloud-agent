@@ -43,6 +43,12 @@ import {
   runtimeReconcileProductAvailable,
 } from "./runtime-reconcile.ts";
 import { LOGS_REFRESH_JOB_TYPE, runLogsRefresh } from "./logs-refresh.ts";
+import {
+  PabxPresenceTracker,
+  parseAsteriskPjsipContacts as parseAsteriskContactLines,
+  type PresenceEngine,
+  type PresenceObservation,
+} from "./pabx-presence.ts";
 import { JOB_LONG_POLL_MAX_SECONDS, jobLongPollSeconds, runLane } from "./scheduler.ts";
 import {
   byteBudget,
@@ -1179,8 +1185,10 @@ function parseFreeSwitchRegistrationsText(
   return registrations;
 }
 
-async function collectPabxRegistrations(config: AgentConfig) {
-  if (!config.capabilities["voip.freeswitch.manage"]) return [];
+/** FreeSWITCH registrations, or null when the engine could not be read. */
+async function collectFreeSwitchRegistrations(
+  config: AgentConfig,
+): Promise<PabxRegistrationReport[] | null> {
   try {
     const result = await runLocalCommand(
       config.freeswitchCli,
@@ -1206,9 +1214,7 @@ async function collectPabxRegistrations(config: AgentConfig) {
       ["-x", "show registrations"],
       config.commandTimeoutMs,
     );
-    if (result.code === 0 && result.stdout) {
-      return parseFreeSwitchRegistrationsText(result.stdout);
-    }
+    if (result.code === 0) return parseFreeSwitchRegistrationsText(result.stdout);
   } catch (error) {
     log(
       "warn",
@@ -1216,7 +1222,44 @@ async function collectPabxRegistrations(config: AgentConfig) {
       String(error),
     );
   }
-  return [];
+  return null;
+}
+
+/** Asterisk contacts, or null when the engine could not be read. */
+async function collectAsteriskRegistrations(config: AgentConfig) {
+  try {
+    const result = await runLocalCommand(
+      config.asteriskCli,
+      ["-rx", "pjsip show contacts"],
+      config.commandTimeoutMs,
+    );
+    if (result.code === 0) return parseAsteriskContactLines(result.stdout);
+  } catch (error) {
+    log("warn", "Asterisk contact collection failed.", String(error));
+  }
+  return null;
+}
+
+/** Registrations of every engine this Agent manages and could read now (one read per heartbeat). */
+async function collectPabxPresenceObservations(config: AgentConfig) {
+  const observed: Partial<Record<PresenceEngine, PresenceObservation[]>> = {};
+  if (config.capabilities["voip.freeswitch.manage"]) {
+    const rows = await collectFreeSwitchRegistrations(config);
+    if (rows) {
+      observed.freeswitch = rows.map((row) => ({
+        engine: "freeswitch",
+        username: row.username,
+        domain: row.domain ?? null,
+        userAgent: row.userAgent ?? null,
+        networkIP: row.networkIP ?? null,
+      }));
+    }
+  }
+  if (config.capabilities["voip.asterisk.manage"]) {
+    const rows = await collectAsteriskRegistrations(config);
+    if (rows) observed.asterisk = rows;
+  }
+  return observed;
 }
 
 function boundedText(value: string, limit = 240) {
@@ -1293,6 +1336,7 @@ export type HostMetrics = {
 
 let previousCpu: { total: number; idle: number } | null = null;
 let lastHostMetricsAt = 0;
+const pabxPresenceTracker = new PabxPresenceTracker();
 
 export function parseLinuxCpu(value: string) {
   const fields = value.split("\n")[0].trim().split(/\s+/).slice(1, 9).map(Number);
@@ -1445,7 +1489,7 @@ async function performHeartbeat(
     hostMetrics = await collectHostMetrics();
     lastHostMetricsAt = Date.now();
   }
-  const pabxRegistrations = await collectPabxRegistrations(config);
+  const pabxPresence = pabxPresenceTracker.build(await collectPabxPresenceObservations(config));
   const runtimeVersions = await collectRuntimeVersions(config);
   const sbcNodeUUID = config.capabilities["voip.sbc.manage"]
     ? (await optionalRead(config.sbcNodeUUIDFile))?.trim()
@@ -1467,44 +1511,50 @@ async function performHeartbeat(
     ? await collectWebappsStatus()
     : null;
   const hostAddresses = await collectHostAddresses(config);
-  await jsonRequest(config, "/agent/heartbeat", agentToken, agentUUID, {
-    name: config.name,
-    hostname: config.hostname,
-    version: config.version,
-    buildRef: config.buildRef,
-    buildDate: config.buildDate,
-    updateChannel: config.updateChannel,
-    os: config.os,
-    uptimeSeconds: Math.floor(performance.now() / 1000),
-    recordingsRoots: config.recordingsRoots,
-    recordingMounts: config.recordingMounts,
-    mediaRoots: config.mediaRoots,
-    mediaMounts: config.mediaMounts,
-    runtimeVersions,
-    webapps: webapps ?? undefined,
-    capabilities: config.capabilities,
-    sbcRuntime: sbcNodeUUID
-      ? {
-        nodeUUID: sbcNodeUUID,
-        engine: "opensips",
-        needsSync: !sbcRuntimeConfig,
-      }
-      : undefined,
-    softswitchRuntime: softswitchNodeUUID
-      ? {
-        nodeUUID: softswitchNodeUUID,
-        engine: "kamailio",
-        needsSync: !softswitchRuntimeConfig,
-        inventory: softswitchInventory,
-      }
-      : undefined,
-    pabxRegistrations,
-    cyberSecurityStatus: cyberSecurityStatus ?? undefined,
-    hostMetrics: hostMetrics ?? undefined,
-    openvaultStatus: openvaultStatus ?? undefined,
-    privateAddresses: hostAddresses?.addresses,
-    publicIpv6Addresses: hostAddresses?.publicIpv6,
-  });
+  let heartbeat: { data?: { pabxPresence?: { applied?: unknown; needsFull?: unknown } } } | null =
+    null;
+  try {
+    heartbeat = await jsonRequest(config, "/agent/heartbeat", agentToken, agentUUID, {
+      name: config.name,
+      hostname: config.hostname,
+      version: config.version,
+      buildRef: config.buildRef,
+      buildDate: config.buildDate,
+      updateChannel: config.updateChannel,
+      os: config.os,
+      uptimeSeconds: Math.floor(performance.now() / 1000),
+      recordingsRoots: config.recordingsRoots,
+      recordingMounts: config.recordingMounts,
+      mediaRoots: config.mediaRoots,
+      mediaMounts: config.mediaMounts,
+      runtimeVersions,
+      webapps: webapps ?? undefined,
+      capabilities: config.capabilities,
+      sbcRuntime: sbcNodeUUID
+        ? {
+          nodeUUID: sbcNodeUUID,
+          engine: "opensips",
+          needsSync: !sbcRuntimeConfig,
+        }
+        : undefined,
+      softswitchRuntime: softswitchNodeUUID
+        ? {
+          nodeUUID: softswitchNodeUUID,
+          engine: "kamailio",
+          needsSync: !softswitchRuntimeConfig,
+          inventory: softswitchInventory,
+        }
+        : undefined,
+      pabxPresence: pabxPresence.report,
+      cyberSecurityStatus: cyberSecurityStatus ?? undefined,
+      hostMetrics: hostMetrics ?? undefined,
+      openvaultStatus: openvaultStatus ?? undefined,
+      privateAddresses: hostAddresses?.addresses,
+      publicIpv6Addresses: hostAddresses?.publicIpv6,
+    });
+  } finally {
+    pabxPresenceTracker.acknowledge(pabxPresence, heartbeat?.data?.pabxPresence);
+  }
 }
 
 function normalizePath(path: string) {
@@ -2118,20 +2168,13 @@ function pabxExtensionRuntimeTargets(payload: Record<string, unknown> | null | u
 }
 
 function parseAsteriskPjsipContacts(output: string): PabxRegistrationReport[] {
-  const reports: PabxRegistrationReport[] = [];
-  for (const rawLine of output.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    const match = line.match(/Contact:\s+([^\s/]+)\/sip:([^@;>]+)@([^;>\s]+)/i);
-    if (!match) continue;
-    reports.push({
-      engine: "asterisk",
-      username: match[2],
-      domain: normalizeDomain(match[3]),
-      contact: match[0].replace(/^Contact:\s+/i, ""),
-      networkIP: match[3],
-    });
-  }
-  return reports;
+  return parseAsteriskContactLines(output).map((item) => ({
+    engine: "asterisk",
+    username: item.username,
+    domain: item.domain ?? undefined,
+    contact: item.contact,
+    networkIP: item.networkIP ?? undefined,
+  }));
 }
 
 async function runPabxExtensionRegistrationDiagnostic(engine: string, config: AgentConfig) {

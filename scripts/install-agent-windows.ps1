@@ -275,6 +275,7 @@ Invoke-Step {
   Copy-Item -Path "$PSScriptRoot\..\database-principal.ts" -Destination "$InstallDir\database-principal.ts" -Force
   Copy-Item -Path "$PSScriptRoot\..\pabx-state.ts" -Destination "$InstallDir\pabx-state.ts" -Force
   Copy-Item -Path "$PSScriptRoot\..\pabx-registration-insight.ts" -Destination "$InstallDir\pabx-registration-insight.ts" -Force
+  Copy-Item -Path "$PSScriptRoot\..\pabx-presence.ts" -Destination "$InstallDir\pabx-presence.ts" -Force
   Copy-Item -Path "$PSScriptRoot\..\logs-refresh.ts" -Destination "$InstallDir\logs-refresh.ts" -Force
   Copy-Item -Path "$PSScriptRoot\..\deno.jsonc" -Destination "$InstallDir\deno.jsonc" -Force
 }

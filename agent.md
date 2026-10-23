@@ -459,17 +459,23 @@ With a compatible assignment and capability, the Agent can:
 - sync recording uploads;
 - remove local recordings after confirmed upload;
 - sync offline media files;
-- report live SIP registrations from FreeSWITCH heartbeats for dashboard/runtime status;
+- report SIP extension presence (FreeSWITCH and Asterisk) on the heartbeat for the extension list,
+  dashboard and runtime status;
 - report sanitized Softswitch runtime inventory from Kamailio hosts for the API to store in the
   central Monitoring resource inventory, including engine version, OS distribution, kernel,
   architecture, systemd service state, and UAC RPC method availability;
 - run typed local commands allowed by jobs;
 - use local AMI/ESL when configured, or local CLI as fallback.
 
-FreeSWITCH registration status is collected with `fs_cli -x "show registrations as json"` and sent
-as `pabxRegistrations` in the standard heartbeat. The API owns matching those rows to tenant PABX
-extensions and deciding whether a registration is current; the Agent only reports what the local
-runtime exposes.
+Extension presence is read once per heartbeat, never per page view: FreeSWITCH with
+`fs_cli -x "show registrations as json"`, Asterisk with `asterisk -rx "pjsip show contacts"` (the AOR
+`<extension>@<domain>` identifies the extension; the contact URI only gives the device address). It
+is sent as `pabxPresence` (`pabx-presence.ts`): `engines` lists only the engines read successfully,
+so a failed read never turns extensions offline; `registrations` and `removed` carry only the
+changes since the last report the API applied, and a complete report (`full: true`) goes on start,
+every 10 minutes, after a failed or rejected heartbeat and when the API answers `needsFull`. The API
+owns matching to tenant extensions and the online/offline/never state; the Agent only reports what
+the local runtime exposes.
 
 ## Cyber Security
 
