@@ -18,17 +18,18 @@ import subprocess
 import sys
 from urllib.parse import urlsplit
 
-DIAGNOSTICS_VERSION = '4.0'
+DIAGNOSTICS_VERSION = '4.1'
 DIAGNOSTICS_USER = 'mns-diagnostics'
 CONFIG_DIR = Path('/etc/mnscloud')
-FILES = ('api', 'app', 'nginx', 'workers', 'rabbitmq', 'db', 'authentication', 'openvault', 'logs')
+FILES = ('api', 'app', 'nginx', 'workers', 'rabbitmq', 'db', 'authentication', 'openvault', 'logs', 'dns')
 UNITS = ('nginx', 'mariadb', 'rabbitmq-server', 'mnscloud-api',
          'mnscloud-workers', 'mnscloud-agent', 'asterisk', 'freeswitch', 'kamailio',
          'opensips', 'rtpengine-daemon', 'mnscloud-media-heartbeat', 'coturn',
          'mnscloud-turn-sync', 'mnscloud-webrtc-sync', 'mnscloud-authentication',
          'mnscloud-authentication-config', 'mnscloud-openvault', 'mnscloud-openvault-tls-renew',
          'mnscloud-webapps', 'mnscloud-webapps-sync', 'incus', 'mnscloud-grow-rootfs',
-         'mnscloud-logs-storage', 'mnscloud-logs-ingest', 'mnscloud-logs-config')
+         'mnscloud-logs-storage', 'mnscloud-logs-ingest', 'mnscloud-logs-config',
+         'pdns', 'pdns-recursor', 'dnsdist', 'mnscloud-dns-config')
 # Any installed MNSCloud unit is covered without a diagnostics release (diagnostics 4.0): names are
 # validated against this pattern before they reach systemctl/journalctl.
 MNSCLOUD_UNIT = re.compile(r'mnscloud-[a-z0-9]+(?:-[a-z0-9]+){0,8}')
@@ -99,11 +100,14 @@ REQUIRED = {
     # Node principals live in logs-secrets.env, which diagnostics never reads.
     'logs': ('MNSCLOUD_API_BASE_URL', 'LOGS_SERVER_UUID', 'LOGS_ROLE', 'LOGS_LISTEN_ADDRESS',
              'LOGS_SYSLOG_UDP_PORT', 'LOGS_SYSLOG_TCP_PORT'),
+    # Engine API keys live in dns-secrets.env, which diagnostics never reads.
+    'dns': ('MNSCLOUD_API_BASE_URL', 'DNS_SERVER_UUID', 'DNS_ROLES', 'DNS_NODE_ADDRESS'),
 }
 HOST_KEYS = {'DB_HOST', 'APP_HOST', 'APP_LISTEN_ADDR', 'MNSCLOUD_API_LISTEN_ADDR',
              'MNSCLOUD_PRIMARY_DOMAIN', 'MNSCLOUD_API_DOMAIN', 'MNSCLOUD_WEBSITE_DOMAIN',
              'MNSCLOUD_RABBITMQ_HOSTNAME', 'MNSCLOUD_NODE_ADDRESS',
-             'AUTHENTICATION_LISTEN_ADDRESS', 'OPENVAULT_PRIVATE_HOST', 'LOGS_LISTEN_ADDRESS'}
+             'AUTHENTICATION_LISTEN_ADDRESS', 'OPENVAULT_PRIVATE_HOST', 'LOGS_LISTEN_ADDRESS',
+             'DNS_NODE_ADDRESS'}
 PORT_KEYS = {'DB_PORT', 'APP_PORT', 'APP_LISTEN_PORT', 'MNSCLOUD_API_LISTEN_PORT',
              'MNSCLOUD_RABBITMQ_AMQP_PORT', 'MNSCLOUD_RABBITMQ_MANAGEMENT_PORT',
              'LOGS_SYSLOG_UDP_PORT', 'LOGS_SYSLOG_TCP_PORT'}
@@ -471,7 +475,8 @@ def versions():
     output = {'diagnostics': DIAGNOSTICS_VERSION}
     for package in ('nginx', 'mariadb-server', 'rabbitmq-server', 'docker-ce',
                     'freeswitch', 'kamailio', 'opensips', 'rtpengine-daemon', 'coturn',
-                    'freeradius', 'incus', 'clickhouse-server', 'vector'):
+                    'freeradius', 'incus', 'clickhouse-server', 'vector', 'pdns-server', 'pdns-recursor',
+                    'dnsdist'):
         try:
             value = run(['/usr/bin/dpkg-query', '-W', '-f=${Version}', package]).strip()
             output[package] = value if re.fullmatch(r'[A-Za-z0-9.+:~_-]{1,100}', value) else 'UNKNOWN'
@@ -609,7 +614,7 @@ APP_ROOT = Path('/var/www/mnscloud-app')
 WEBAPPS_ROOT = Path('/opt/mnscloud/webapps')
 AGENT_INSTALL = Path('/opt/mnscloud/agent')
 # Runtime products whose checkout the Agent reports as installed (main.ts collectRuntimeVersions).
-RUNTIME_CHECKOUTS = ('api', 'app', 'nginx', 'rabbitmq', 'workers', 'authentication', 'logs', 'freeswitch',
+RUNTIME_CHECKOUTS = ('api', 'app', 'nginx', 'rabbitmq', 'workers', 'authentication', 'logs', 'dns', 'freeswitch',
                      'asterisk', 'opensips-sbc', 'kamailio-softswitch', 'kamailio-webrtc', 'turn', 'media',
                      'webapps', 'openvault')
 

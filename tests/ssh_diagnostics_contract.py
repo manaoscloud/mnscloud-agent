@@ -170,8 +170,9 @@ class DiagnosticsContract(unittest.TestCase):
         with patch.object(collector, 'run', side_effect=OSError), \
                 patch.object(collector, 'trusted_read', side_effect=OSError):
             result = collector.versions()
-        self.assertEqual(result['diagnostics'], '4.0')
-        for key in ('rtpengine-daemon', 'coturn', 'clickhouse-server', 'vector', 'media_checkout_version',
+        self.assertEqual(result['diagnostics'], '4.1')
+        for key in ('rtpengine-daemon', 'coturn', 'clickhouse-server', 'vector', 'pdns-server', 'pdns-recursor',
+                    'dnsdist', 'dns_checkout_version', 'media_checkout_version',
                     'turn_checkout_version', 'logs_checkout_version',
                     'kamailio-webrtc_checkout_version'):
             self.assertEqual(result[key], 'UNAVAILABLE')
@@ -224,10 +225,10 @@ class DiagnosticsContract(unittest.TestCase):
         for unit in ('mnscloud-authentication', 'mnscloud-authentication-config', 'mnscloud-openvault',
                      'mnscloud-openvault-tls-renew', 'mnscloud-webapps', 'mnscloud-webapps-sync', 'incus',
                      'mnscloud-grow-rootfs', 'mnscloud-agent', 'mnscloud-logs-storage', 'mnscloud-logs-ingest',
-                     'mnscloud-logs-config'):
+                     'mnscloud-logs-config', 'pdns', 'pdns-recursor', 'dnsdist'):
             self.assertIn(unit, collector.UNITS)
             self.assertIn(unit + '.service', dispatcher)
-        for name in ('authentication', 'openvault', 'logs'):
+        for name in ('authentication', 'openvault', 'logs', 'dns'):
             self.assertIn(name, collector.FILES)
         for checkout in ('webapps', 'agent'):
             self.assertIn(checkout, collector.CHECKOUTS)
@@ -280,6 +281,9 @@ class DiagnosticsV4Contract(unittest.TestCase):
         main = (ROOT / 'main.ts').read_text()
         block = main.split('async function collectRuntimeVersions', 1)[1].split('runtimeVersionCache = {', 1)[0]
         products = set(__import__('re').findall(r'"/opt/mnscloud/mnscloud-([a-z0-9-]+)"', block))
+        # Conventional module runtimes are reported from one list (main.ts CONVENTIONAL_MODULE_RUNTIMES).
+        conventional = main.split('const CONVENTIONAL_MODULE_RUNTIMES = [', 1)[1].split(']', 1)[0]
+        products |= set(__import__('re').findall(r'"([a-z0-9-]+)"', conventional))
         self.assertTrue(products)
         self.assertEqual(products, set(collector.RUNTIME_CHECKOUTS))
         for product in products:

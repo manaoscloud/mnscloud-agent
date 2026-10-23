@@ -316,6 +316,11 @@ async function applyRuntimeCapabilities(config: AgentConfig) {
   config.capabilities["mnscloud.logs.update"] = await isExecutableFile(
     "/opt/mnscloud/mnscloud-logs/scripts/update-logs.sh",
   );
+  for (const name of CONVENTIONAL_MODULE_RUNTIMES) {
+    config.capabilities[`mnscloud.${name}.update`] = await isExecutableFile(
+      `${moduleRuntimeDir(name)}/scripts/update-${name}.sh`,
+    );
+  }
   config.capabilities["mnscloud.freeswitch.update"] = await isExecutableFile(
     "/opt/mnscloud/mnscloud-freeswitch/scripts/update-freeswitch.sh",
   );
@@ -907,6 +912,14 @@ async function collectRuntimeVersions(config: AgentConfig) {
       "mnscloud.logs.update",
       "/opt/mnscloud/mnscloud-logs",
       config,
+    ),
+    ...CONVENTIONAL_MODULE_RUNTIMES.map((name) =>
+      runtimeVersionReport(
+        `mnscloud-${name}`,
+        `mnscloud.${name}.update`,
+        moduleRuntimeDir(name),
+        config,
+      )
     ),
     runtimeVersionReport(
       "mnscloud-freeswitch",
@@ -3688,6 +3701,38 @@ function assertSafeRuntimeUpdateRef(ref: string) {
   }
 }
 
+/**
+ * Module runtimes that follow the plain convention: checkout `/opt/mnscloud/mnscloud-<name>`,
+ * converge with `scripts/update-<name>.sh` and private environment `/etc/mnscloud/<name>.env`.
+ * New modules are added here instead of repeating the capability, version and update entries.
+ */
+const CONVENTIONAL_MODULE_RUNTIMES = ["dns"] as const;
+const MODULE_RUNTIME_LABELS: Record<(typeof CONVENTIONAL_MODULE_RUNTIMES)[number], string> = {
+  dns: "DNS",
+};
+
+function moduleRuntimeDir(name: string) {
+  return `/opt/mnscloud/mnscloud-${name}`;
+}
+
+/** Update target of a conventional module runtime after checking out the approved release. */
+function checkoutRuntimeTarget(name: (typeof CONVENTIONAL_MODULE_RUNTIMES)[number]) {
+  return {
+    label: MODULE_RUNTIME_LABELS[name],
+    capability: `mnscloud.${name}.update`,
+    repoDir: moduleRuntimeDir(name),
+    command: (targetRef: string) => [
+      "bash",
+      "-lc",
+      [
+        "git fetch --tags --prune origin",
+        `git checkout ${shellQuote(targetRef)}`,
+        `bash scripts/update-${name}.sh --env /etc/mnscloud/${name}.env`,
+      ].join(" && "),
+    ],
+  };
+}
+
 function runtimeUpdateTarget(product: string) {
   const targets: Record<
     string,
@@ -3812,6 +3857,9 @@ function runtimeUpdateTarget(product: string) {
         } && bash scripts/update-logs.sh --env /etc/mnscloud/logs.env`,
       ],
     },
+    ...Object.fromEntries(
+      CONVENTIONAL_MODULE_RUNTIMES.map((name) => [`mnscloud-${name}`, checkoutRuntimeTarget(name)]),
+    ),
     "mnscloud-freeswitch": {
       label: "FreeSWITCH PABX",
       capability: "mnscloud.freeswitch.update",

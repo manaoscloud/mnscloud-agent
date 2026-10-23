@@ -151,6 +151,11 @@ Version 4.0 (2026-10-19, user decision) adds `artifacts`, `health`, `agent`, `ho
 sudo rule (one exact entry per operation, no wildcard), so a rollout can be verified on the host
 instead of trusting the checkout version. Design rules of these operations:
 
+Version 4.1 (2026-10-23) adds the DNS node: `pdns`, `pdns-recursor` and `dnsdist` units
+(`mnscloud-dns-config` is already covered by the `mnscloud-*` pattern), `dns.env` (non-secret keys
+only; the engine API keys file `dns-secrets.env` is never read), the `mnscloud-dns` checkout and the
+`pdns-server`/`pdns-recursor`/`dnsdist` packages. No new commands or sudo changes.
+
 - **Least privilege inside the collector.** `artifacts`, `host`, `network` and `timers` drop to the
   `mns-diagnostics` account before reading anything. `health` and `schema-status` read their root-only
   configuration first and drop privileges before any network or database I/O.
