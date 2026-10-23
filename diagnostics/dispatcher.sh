@@ -22,7 +22,7 @@ collector() {
 case "$COMMAND" in
   help|"")
     printf '%s\n' \
-      "Allowed diagnostic commands (diagnostics 4.0):" \
+      "Allowed diagnostic commands (diagnostics 4.1):" \
       "  identity" \
       "  memory" \
       "  disk" \
@@ -100,6 +100,9 @@ case "$COMMAND" in
       freeradius.service \
       clickhouse-server.service \
       vector.service \
+      pdns.service \
+      pdns-recursor.service \
+      dnsdist.service \
       'mnscloud-*'
     ;;
   config|config-check|logs|logs-text|versions|connectivity|asterisk-odbc|artifacts|health|agent|host|network|timers|edge|log-usage|voip-summary|schema-status)

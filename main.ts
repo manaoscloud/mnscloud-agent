@@ -316,6 +316,9 @@ async function applyRuntimeCapabilities(config: AgentConfig) {
   config.capabilities["mnscloud.logs.update"] = await isExecutableFile(
     "/opt/mnscloud/mnscloud-logs/scripts/update-logs.sh",
   );
+  config.capabilities["mnscloud.dns.update"] = await isExecutableFile(
+    "/opt/mnscloud/mnscloud-dns/scripts/update-dns.sh",
+  );
   config.capabilities["mnscloud.freeswitch.update"] = await isExecutableFile(
     "/opt/mnscloud/mnscloud-freeswitch/scripts/update-freeswitch.sh",
   );
@@ -906,6 +909,12 @@ async function collectRuntimeVersions(config: AgentConfig) {
       "mnscloud-logs",
       "mnscloud.logs.update",
       "/opt/mnscloud/mnscloud-logs",
+      config,
+    ),
+    runtimeVersionReport(
+      "mnscloud-dns",
+      "mnscloud.dns.update",
+      "/opt/mnscloud/mnscloud-dns",
       config,
     ),
     runtimeVersionReport(
@@ -3810,6 +3819,18 @@ function runtimeUpdateTarget(product: string) {
         `git fetch --tags --prune origin && git checkout ${
           shellQuote(targetRef)
         } && bash scripts/update-logs.sh --env /etc/mnscloud/logs.env`,
+      ],
+    },
+    "mnscloud-dns": {
+      label: "DNS",
+      capability: "mnscloud.dns.update",
+      repoDir: "/opt/mnscloud/mnscloud-dns",
+      command: (targetRef) => [
+        "bash",
+        "-lc",
+        `git fetch --tags --prune origin && git checkout ${
+          shellQuote(targetRef)
+        } && bash scripts/update-dns.sh --env /etc/mnscloud/dns.env`,
       ],
     },
     "mnscloud-freeswitch": {

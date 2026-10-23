@@ -170,8 +170,9 @@ class DiagnosticsContract(unittest.TestCase):
         with patch.object(collector, 'run', side_effect=OSError), \
                 patch.object(collector, 'trusted_read', side_effect=OSError):
             result = collector.versions()
-        self.assertEqual(result['diagnostics'], '4.0')
-        for key in ('rtpengine-daemon', 'coturn', 'clickhouse-server', 'vector', 'media_checkout_version',
+        self.assertEqual(result['diagnostics'], '4.1')
+        for key in ('rtpengine-daemon', 'coturn', 'clickhouse-server', 'vector', 'pdns-server', 'pdns-recursor',
+                    'dnsdist', 'dns_checkout_version', 'media_checkout_version',
                     'turn_checkout_version', 'logs_checkout_version',
                     'kamailio-webrtc_checkout_version'):
             self.assertEqual(result[key], 'UNAVAILABLE')
@@ -224,10 +225,10 @@ class DiagnosticsContract(unittest.TestCase):
         for unit in ('mnscloud-authentication', 'mnscloud-authentication-config', 'mnscloud-openvault',
                      'mnscloud-openvault-tls-renew', 'mnscloud-webapps', 'mnscloud-webapps-sync', 'incus',
                      'mnscloud-grow-rootfs', 'mnscloud-agent', 'mnscloud-logs-storage', 'mnscloud-logs-ingest',
-                     'mnscloud-logs-config'):
+                     'mnscloud-logs-config', 'pdns', 'pdns-recursor', 'dnsdist'):
             self.assertIn(unit, collector.UNITS)
             self.assertIn(unit + '.service', dispatcher)
-        for name in ('authentication', 'openvault', 'logs'):
+        for name in ('authentication', 'openvault', 'logs', 'dns'):
             self.assertIn(name, collector.FILES)
         for checkout in ('webapps', 'agent'):
             self.assertIn(checkout, collector.CHECKOUTS)
