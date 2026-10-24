@@ -278,6 +278,7 @@ Invoke-Step {
   Copy-Item -Path "$PSScriptRoot\..\pabx-presence.ts" -Destination "$InstallDir\pabx-presence.ts" -Force
   Copy-Item -Path "$PSScriptRoot\..\pabx-events.ts" -Destination "$InstallDir\pabx-events.ts" -Force
   Copy-Item -Path "$PSScriptRoot\..\logs-refresh.ts" -Destination "$InstallDir\logs-refresh.ts" -Force
+  Copy-Item -Path "$PSScriptRoot\..\dns-probe.ts" -Destination "$InstallDir\dns-probe.ts" -Force
   Copy-Item -Path "$PSScriptRoot\..\deno.jsonc" -Destination "$InstallDir\deno.jsonc" -Force
 }
 Write-AgentBuildMetadata
