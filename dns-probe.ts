@@ -7,7 +7,8 @@
 export const DNS_PROBE_JOB_TYPE = "dns.probe";
 export const DNS_PROBE_CAPABILITY = "mnscloud.dns.probe";
 
-export const PUBLIC_RESOLVERS = ["1.1.1.1", "8.8.8.8", "9.9.9.9", "208.67.222.222"] as const;
+// Well-known public resolvers compared with the host resolver (the diagnosis itself, not configuration).
+export const PUBLIC_RESOLVERS = ["1.1.1.1", "8.8.8.8", "9.9.9.9", "208.67.222.222"] as const; // NOSONAR
 const RESOLVE_TIMEOUT_MS = 3_000;
 const CONNECT_TIMEOUT_MS = 4_000;
 const HTTP_TIMEOUT_MS = 8_000;
@@ -97,7 +98,8 @@ export function parseTarget(raw: unknown): ProbeTarget {
     if (url.username || url.password) throw new Error("invalid probe target");
     const host = url.hostname.replace(/^\[|\]$/g, "");
     if (!ipVersion(host) && !HOSTNAME.test(host)) throw new Error("invalid probe target");
-    const port = url.port ? Number(url.port) : url.protocol === "https:" ? 443 : 80;
+    const defaultPort = url.protocol === "https:" ? 443 : 80;
+    const port = url.port ? Number(url.port) : defaultPort;
     return { kind: "url", host: host.toLowerCase(), port, url: url.toString() };
   }
   if (ipVersion(value)) return { kind: "ip", host: value, port: 443, url: null };
@@ -117,7 +119,8 @@ function inV4(address: string, base: string, bits: number): boolean {
   return Math.floor(v4Number(address) / size) === Math.floor(v4Number(base) / size);
 }
 
-const V4_PRIVATE: Array<[string, number]> = [
+// IANA special-purpose IPv4 ranges the probe must never contact.
+const V4_PRIVATE: Array<[string, number]> = [ // NOSONAR
   ["0.0.0.0", 8],
   ["10.0.0.0", 8],
   ["100.64.0.0", 10],
@@ -142,7 +145,7 @@ export function isPublicAddress(address: string): boolean {
   const mapped = /^::ffff:([0-9.]+)$/.exec(normalized);
   if (mapped) return isPublicAddress(mapped[1]);
   if (normalized === "::" || normalized === "::1") return false;
-  const first = parseInt(normalized.split(":")[0] || "0", 16);
+  const first = Number.parseInt(normalized.split(":")[0] || "0", 16);
   // Global unicast is 2000::/3; documentation 2001:db8::/32 is excluded too.
   if (first < 0x2000 || first > 0x3fff) return false;
   return !normalized.startsWith("2001:db8:") && !normalized.startsWith("2001:db8::");
@@ -172,82 +175,85 @@ async function timed<T>(now: () => number, task: () => Promise<T>) {
   }
 }
 
+async function resolveAll(target: ProbeTarget, deps: ProbeDeps): Promise<ResolutionStep[]> {
+  const resolvers: Array<string | null> = [null, ...PUBLIC_RESOLVERS];
+  return await Promise.all(
+    resolvers.flatMap((resolver) =>
+      (["A", "AAAA"] as const).map(async (type) => {
+        const step = await timed(
+          deps.now,
+          () => deps.resolve(target.host, type, resolver, AbortSignal.timeout(RESOLVE_TIMEOUT_MS)),
+        );
+        const answers = (step.value ?? []).slice(0, MAX_ANSWERS);
+        const status: StepStatus = step.status === "ok" && !answers.length ? "nodata" : step.status;
+        return { resolver: resolver ?? "system", type, status, answers, ms: step.ms };
+      })
+    ),
+  );
+}
+
+/** Addresses this host itself would use: the target IP, or the first system answer per family. */
+function connectAddresses(target: ProbeTarget, resolution: ResolutionStep[]): Map<string, 4 | 6> {
+  const addresses = new Map<string, 4 | 6>();
+  if (target.kind === "ip") {
+    addresses.set(target.host, ipVersion(target.host) as 4 | 6);
+    return addresses;
+  }
+  for (const step of resolution.filter((item) => item.resolver === "system")) {
+    const first = step.answers[0];
+    if (first) addresses.set(first, step.type === "A" ? 4 : 6);
+  }
+  return addresses;
+}
+
+async function connectStep(
+  target: ProbeTarget,
+  address: string,
+  family: 4 | 6,
+  deps: ProbeDeps,
+): Promise<ConnectStep> {
+  const base = { family, address, port: target.port };
+  if (!isPublicAddress(address)) return { ...base, tcp: { status: "blocked", ms: 0 }, tls: null };
+  const tlsName = target.port === 443 && target.kind !== "ip" ? target.host : null;
+  const step = await timed(deps.now, () => deps.connect(address, target.port, tlsName));
+  return {
+    ...base,
+    tcp: { status: step.status, ms: step.value?.tcpMs ?? step.ms },
+    tls: step.value?.tls ?? null,
+  };
+}
+
+async function httpStep(
+  target: ProbeTarget,
+  addresses: Map<string, 4 | 6>,
+  deps: ProbeDeps,
+): Promise<ProbeResult["http"]> {
+  if (!target.url || !addresses.size) return null;
+  // The HTTP client resolves by itself: it runs only when every known answer is public.
+  if (![...addresses.keys()].every(isPublicAddress)) {
+    return { status: "blocked", code: null, ms: 0 };
+  }
+  const url = target.url;
+  const step = await timed(deps.now, () => deps.http(url, AbortSignal.timeout(HTTP_TIMEOUT_MS)));
+  return { status: step.status, code: step.value, ms: step.ms };
+}
+
 /** Runs the fixed catalog for one target. Every step is bounded; a failing step never stops the others. */
 export async function runDnsProbe(target: ProbeTarget, deps: ProbeDeps): Promise<ProbeResult> {
   const started = deps.now();
   const egress = await timed(deps.now, deps.egress);
-  const resolution: ResolutionStep[] = [];
-  const addresses = new Map<string, 4 | 6>();
-  if (target.kind === "ip") {
-    addresses.set(target.host, ipVersion(target.host) as 4 | 6);
-  } else {
-    const resolvers: Array<string | null> = [null, ...PUBLIC_RESOLVERS];
-    const steps = await Promise.all(
-      resolvers.flatMap((resolver) =>
-        (["A", "AAAA"] as const).map(async (type) => {
-          const step = await timed(
-            deps.now,
-            () =>
-              deps.resolve(target.host, type, resolver, AbortSignal.timeout(RESOLVE_TIMEOUT_MS)),
-          );
-          const answers = (step.value ?? []).slice(0, MAX_ANSWERS);
-          const status: StepStatus = step.status === "ok" && !answers.length
-            ? "nodata"
-            : step.status;
-          return { resolver: resolver ?? "system", type, status, answers, ms: step.ms };
-        })
-      ),
-    );
-    resolution.push(...steps);
-    // Connections use what this host itself would use: the system resolver answers.
-    for (const step of steps.filter((item) => item.resolver === "system")) {
-      for (const answer of step.answers.slice(0, 1)) {
-        addresses.set(answer, step.type === "A" ? 4 : 6);
-      }
-    }
-  }
-  const connect: ConnectStep[] = [];
-  for (const [address, family] of addresses) {
-    if (!isPublicAddress(address)) {
-      connect.push({
-        family,
-        address,
-        port: target.port,
-        tcp: { status: "blocked", ms: 0 },
-        tls: null,
-      });
-      continue;
-    }
-    const tlsName = target.port === 443 && target.kind !== "ip" ? target.host : null;
-    const step = await timed(deps.now, () => deps.connect(address, target.port, tlsName));
-    connect.push({
-      family,
-      address,
-      port: target.port,
-      tcp: { status: step.status, ms: step.value?.tcpMs ?? step.ms },
-      tls: step.value?.tls ?? null,
-    });
-  }
-  let http: ProbeResult["http"] = null;
-  const everyPublic = [...addresses.keys()].every(isPublicAddress);
-  if (target.url && addresses.size) {
-    if (!everyPublic) {
-      http = { status: "blocked", code: null, ms: 0 };
-    } else {
-      const step = await timed(
-        deps.now,
-        () => deps.http(target.url as string, AbortSignal.timeout(HTTP_TIMEOUT_MS)),
-      );
-      http = { status: step.status, code: step.value, ms: step.ms };
-    }
-  }
+  const resolution = target.kind === "ip" ? [] : await resolveAll(target, deps);
+  const addresses = connectAddresses(target, resolution);
+  const connect = await Promise.all(
+    [...addresses].map(([address, family]) => connectStep(target, address, family, deps)),
+  );
   return {
     version: 1,
     target,
     egress: { address: egress.value ?? null, status: egress.status },
     resolution,
     connect,
-    http,
+    http: await httpStep(target, addresses, deps),
     durationMs: deps.now() - started,
   };
 }
