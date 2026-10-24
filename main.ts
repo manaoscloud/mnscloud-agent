@@ -3690,6 +3690,24 @@ async function websiteCertificateExpiry(config: AgentConfig, base: string) {
   return result.code === 0 ? parseOpensslEndDate(result.stdout) : null;
 }
 
+/** Publishes one hook request and answers the hook with ok.<id> or err.<id>; never throws. */
+async function answerWebsiteHookRequest(
+  deps: Parameters<typeof publishWebsiteChallenge>[0],
+  base: string,
+  id: string,
+  text: string,
+  open: Map<string, string>,
+) {
+  try {
+    const request = parseHookRequest(text, base);
+    open.set(id, await publishWebsiteChallenge(deps, request.name, request.value));
+    await writeAtomic(`${WEBSITE_ACME_DIR}/ok.${id}`, "ok\n");
+  } catch (error) {
+    await writeAtomic(`${WEBSITE_ACME_DIR}/err.${id}`, `${String(error).slice(0, 500)}\n`)
+      .catch(() => undefined);
+  }
+}
+
 /**
  * Runs certbot DNS-01 for `*.<base>`; while it runs, answers the hook requests (publish through the
  * API, wait for the authoritative TXT) and releases each challenge on cleanup or at the end.
@@ -3762,17 +3780,8 @@ async function issueWebsiteWildcard(
           handling.add(entry.name);
           const text = await Deno.readTextFile(path);
           await Deno.remove(path).catch(() => undefined);
-          (async () => {
-            try {
-              const request = parseHookRequest(text, base);
-              open.set(id, await publishWebsiteChallenge(deps, request.name, request.value));
-              await writeAtomic(`${WEBSITE_ACME_DIR}/ok.${id}`, "ok\n");
-            } catch (error) {
-              await writeAtomic(`${WEBSITE_ACME_DIR}/err.${id}`, `${String(error).slice(0, 500)}\n`);
-            } finally {
-              handling.delete(entry.name);
-            }
-          })();
+          // Answered in the background: certbot waits on the hook while other files keep flowing.
+          void answerWebsiteHookRequest(deps, base, id, text, open).finally(() => handling.delete(entry.name));
         } else if (kind === "cleanup") {
           await Deno.remove(path).catch(() => undefined);
           const challengeUUID = open.get(id);
