@@ -14,6 +14,22 @@ import { collectOpenVaultStatus } from "./openvault-status.ts";
 import { collectWebappsStatus } from "./webapps-status.ts";
 import { webappsUpdateScript } from "./webapps-update.ts";
 import {
+  certbotWildcardArgs,
+  needsWildcardRenewal,
+  parseHookRequest,
+  parseOpensslEndDate,
+  publishWebsiteChallenge,
+  renderWebsiteEdgeConfig,
+  sha256Hex,
+  WEBSITE_SITE_CAPABILITY,
+  WEBSITE_SITE_MAX_ARCHIVE_BYTES,
+  websiteAcmeHookScript,
+  websiteBase,
+  websiteEdgeConfigFile,
+  websiteSiteCommand,
+  wildcardCertName,
+} from "./website-edge.ts";
+import {
   DEFAULT_NGINX_EDGE_WEBAPPS_PATHS,
   edgeSecurityHeaders,
   type EdgeSurface,
@@ -125,6 +141,7 @@ type AgentConfig = {
   mediaMounts: Array<{ hostRoot: string; containerRoot: string }>;
   capabilities: Record<string, boolean>;
   nginxEdgeConfigDir: string;
+  nginxEdgeWebsiteDir: string;
   nginxEdgeAcmeRoot: string;
   nginxEdgeSslLiveDir: string;
   nginxEdgeSslArchiveDir: string;
@@ -357,6 +374,10 @@ async function applyRuntimeCapabilities(config: AgentConfig) {
   );
   config.capabilities["mnscloud.webapps.update"] = await isExecutableFile(
     "/opt/mnscloud/mnscloud-webapps/scripts/update-webapps.sh",
+  );
+  // Hosted website snapshots need the webapps runtime that ships the site scripts.
+  config.capabilities[WEBSITE_SITE_CAPABILITY] = await isExecutableFile(
+    "/opt/mnscloud/mnscloud-webapps/scripts/site-install.sh",
   );
   config.capabilities["mnscloud.openvault.update"] = await isExecutableFile(
     "/opt/mnscloud/mnscloud-openvault/scripts/update-openvault.sh",
@@ -634,6 +655,12 @@ async function loadConfig(): Promise<AgentConfig> {
       "nginx.edge",
       "config_dir",
       "/etc/nginx/mnscloud/theme-domains",
+    ),
+    nginxEdgeWebsiteDir: getConfigValue(
+      parsed,
+      "nginx.edge",
+      "website_dir",
+      "/etc/nginx/mnscloud/website",
     ),
     nginxEdgeAcmeRoot: getConfigValue(
       parsed,
@@ -3606,6 +3633,309 @@ async function inspectCertbotCertificate(
   };
 }
 
+// --- Website edge serving (storefront S1b) ---------------------------------------------------
+const WEBSITE_ACME_DIR = "/var/lib/mnscloud/agent/website-acme";
+const WEBAPPS_REPO_DIR = "/opt/mnscloud/mnscloud-webapps";
+const WEBAPPS_ENV_FILE = "/etc/mnscloud/webapps/webapps.env";
+
+async function agentApiRequest(
+  config: AgentConfig,
+  method: "GET" | "POST" | "DELETE",
+  path: string,
+  agentToken: string,
+  agentUUID: string,
+  body?: Record<string, unknown>,
+) {
+  return await withResponse(
+    apiUrl(config, path),
+    {
+      method,
+      headers: bearerHeaders(agentToken, agentUUID),
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    },
+    config.requestTimeoutMs,
+    async (response) => {
+      const payload = await readJson(response) as Record<string, unknown> | null;
+      if (!response.ok) {
+        const detail = typeof payload?.error === "string" ? `: ${payload.error.slice(0, 300)}` : "";
+        throw new Error(`${path} returned HTTP ${response.status}${detail}`);
+      }
+      return (payload?.data ?? {}) as Record<string, unknown>;
+    },
+  );
+}
+
+/** True when every authoritative nameserver of the base answers the TXT value. */
+async function websiteTxtVisible(base: string, name: string, value: string) {
+  try {
+    const nameservers = await Deno.resolveDns(base, "NS");
+    if (!nameservers.length) return false;
+    for (const nameserver of nameservers) {
+      const addresses = await Deno.resolveDns(nameserver.replace(/\.$/, ""), "A").catch(() => []);
+      if (!addresses.length) return false;
+      const records = await Deno.resolveDns(name, "TXT", { nameServer: { ipAddr: addresses[0], port: 53 } })
+        .catch(() => [] as string[][]);
+      if (!records.some((chunks) => chunks.join("") === value)) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function websiteCertificateExpiry(config: AgentConfig, base: string) {
+  const file = `${config.nginxEdgeSslLiveDir.replace(/\/+$/, "")}/${wildcardCertName(base)}/fullchain.pem`;
+  if (!await fileExists(file)) return null;
+  const result = await runLocalCommand("openssl", ["x509", "-enddate", "-noout", "-in", file], 15_000);
+  return result.code === 0 ? parseOpensslEndDate(result.stdout) : null;
+}
+
+/**
+ * Runs certbot DNS-01 for `*.<base>`; while it runs, answers the hook requests (publish through the
+ * API, wait for the authoritative TXT) and releases each challenge on cleanup or at the end.
+ */
+async function issueWebsiteWildcard(
+  config: AgentConfig,
+  agentUUID: string,
+  agentToken: string,
+  base: string,
+  email: string,
+) {
+  await Deno.mkdir(WEBSITE_ACME_DIR, { recursive: true, mode: 0o700 });
+  for await (const entry of Deno.readDir(WEBSITE_ACME_DIR)) {
+    if (entry.name !== "hook.sh") await Deno.remove(`${WEBSITE_ACME_DIR}/${entry.name}`).catch(() => undefined);
+  }
+  const hook = `${WEBSITE_ACME_DIR}/hook.sh`;
+  await writeAtomic(hook, websiteAcmeHookScript());
+  await Deno.chmod(hook, 0o700);
+  const api = {
+    create: async (name: string, value: string) => {
+      const data = await agentApiRequest(config, "POST", "/agent/website/acme-challenges", agentToken, agentUUID, {
+        name,
+        value,
+      });
+      return { challengeUUID: String(data.challengeUUID), state: String(data.state) };
+    },
+    get: async (challengeUUID: string) => {
+      const data = await agentApiRequest(
+        config,
+        "GET",
+        `/agent/website/acme-challenges/${challengeUUID}`,
+        agentToken,
+        agentUUID,
+      );
+      return { state: String(data.state), errorCode: data.errorCode };
+    },
+    release: async (challengeUUID: string) => {
+      await agentApiRequest(config, "DELETE", `/agent/website/acme-challenges/${challengeUUID}`, agentToken, agentUUID);
+    },
+  };
+  const deps = {
+    api,
+    txtVisible: (name: string, value: string) => websiteTxtVisible(base, name, value),
+    sleep: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+    now: () => Date.now(),
+  };
+  const open = new Map<string, string>(); // hook id -> challenge UUID
+  const handling = new Set<string>();
+  const releaseAll = async () => {
+    for (const [id, challengeUUID] of open) {
+      await api.release(challengeUUID).catch((error) => log("warn", "Website ACME release failed.", String(error)));
+      open.delete(id);
+    }
+  };
+  let done = false;
+  const certbot = runLocalCommand(
+    config.certbotCommand,
+    certbotWildcardArgs({ base, hook, email }),
+    1_800_000,
+  ).finally(() => {
+    done = true;
+  });
+  try {
+    while (!done) {
+      for await (const entry of Deno.readDir(WEBSITE_ACME_DIR)) {
+        const [kind, id] = entry.name.split(".");
+        if (!id || entry.name.endsWith(".tmp") || handling.has(entry.name)) continue;
+        const path = `${WEBSITE_ACME_DIR}/${entry.name}`;
+        if (kind === "req") {
+          handling.add(entry.name);
+          const text = await Deno.readTextFile(path);
+          await Deno.remove(path).catch(() => undefined);
+          (async () => {
+            try {
+              const request = parseHookRequest(text, base);
+              open.set(id, await publishWebsiteChallenge(deps, request.name, request.value));
+              await writeAtomic(`${WEBSITE_ACME_DIR}/ok.${id}`, "ok\n");
+            } catch (error) {
+              await writeAtomic(`${WEBSITE_ACME_DIR}/err.${id}`, `${String(error).slice(0, 500)}\n`);
+            } finally {
+              handling.delete(entry.name);
+            }
+          })();
+        } else if (kind === "cleanup") {
+          await Deno.remove(path).catch(() => undefined);
+          const challengeUUID = open.get(id);
+          if (challengeUUID) {
+            open.delete(id);
+            await api.release(challengeUUID).catch((error) => log("warn", "Website ACME release failed.", String(error)));
+          }
+        }
+      }
+      await deps.sleep(1000);
+    }
+    const result = await certbot;
+    if (result.code !== 0) {
+      throw new Error(diagnosticExcerpt(result.stderr || result.stdout || "certbot failed", 2000));
+    }
+  } finally {
+    await releaseAll();
+  }
+}
+
+async function activateWebsiteEdge(config: AgentConfig, base: string, sslEnabled: boolean) {
+  const path = websiteEdgeConfigFile(config.nginxEdgeWebsiteDir, base);
+  await Deno.mkdir(config.nginxEdgeWebsiteDir, { recursive: true });
+  await Deno.mkdir(config.nginxEdgeAcmeRoot, { recursive: true });
+  const previous = await fileExists(path) ? await Deno.readTextFile(path) : null;
+  const rendered = renderWebsiteEdgeConfig({
+    base,
+    sslEnabled,
+    acmeRoot: config.nginxEdgeAcmeRoot,
+    apiUpstream: config.nginxEdgeApiUpstream,
+    webappsUpstream: config.nginxEdgeWebappsUpstream,
+    certificateDir: `${config.nginxEdgeSslLiveDir.replace(/\/+$/, "")}/${wildcardCertName(base)}`,
+    securityHeaders: frontendSecurityHeaders("    ", "webapp"),
+  });
+  if (previous === rendered) return { path, changed: false };
+  await writeAtomic(path, rendered);
+  try {
+    await testNginxEdge(config);
+  } catch (error) {
+    if (previous === null) await Deno.remove(path).catch(() => undefined);
+    else await writeAtomic(path, previous);
+    throw error;
+  }
+  await reloadNginxEdge(config);
+  return { path, changed: true };
+}
+
+/** website.edge.ensure: wildcard certificate (issue or renew within 30 days) + edge server, reported. */
+async function ensureWebsiteEdge(
+  config: AgentConfig,
+  agentUUID: string,
+  agentToken: string,
+  payload: Record<string, unknown>,
+) {
+  assertCapability(config, "certbot.manage");
+  assertCapability(config, "nginx-edge.manage");
+  const base = websiteBase(payloadString(payload, "base"));
+  const email = payloadString(payload, "email", config.certbotDefaultEmail);
+  const report = (status: string, expiresAt: Date | null, error?: string) =>
+    jsonRequest(config, "/agent/website/edge-certificates", agentToken, agentUUID, {
+      base,
+      status,
+      expiresAt: expiresAt?.toISOString() ?? null,
+      error: error ?? null,
+    }).catch((reportError) => log("warn", "Website edge certificate report failed.", String(reportError)));
+  try {
+    let expiresAt = await websiteCertificateExpiry(config, base);
+    // Port 80 first: ACME and, until the certificate exists, the sites over HTTP.
+    await activateWebsiteEdge(config, base, expiresAt !== null);
+    let issued = false;
+    if (needsWildcardRenewal(expiresAt)) {
+      await issueWebsiteWildcard(config, agentUUID, agentToken, base, email);
+      expiresAt = await websiteCertificateExpiry(config, base);
+      if (!expiresAt) throw new Error(`certbot finished without ${wildcardCertName(base)}`);
+      issued = true;
+    }
+    const edge = await activateWebsiteEdge(config, base, true);
+    // A renewed certificate under the same path needs a reload even when the config is unchanged.
+    if (issued && !edge.changed) await reloadNginxEdge(config);
+    await report("issued", expiresAt);
+    return { base, issued, expiresAt: expiresAt?.toISOString() ?? null, path: edge.path };
+  } catch (error) {
+    await report("failed", null, String(error instanceof Error ? error.message : error).slice(0, 500));
+    throw error;
+  }
+}
+
+/** Streams an https artifact to disk with a size cap, the API bearer only for the API's own origin. */
+async function downloadWebsiteSnapshot(
+  config: AgentConfig,
+  agentUUID: string,
+  agentToken: string,
+  url: string,
+  target: string,
+) {
+  const sameApi = new URL(url).origin === new URL(config.apiBase).origin;
+  await withResponse(
+    url,
+    { headers: sameApi ? bearerHeaders(agentToken, agentUUID) : {} },
+    300_000,
+    async (response) => {
+      if (!response.ok || !response.body) throw new Error(`Website snapshot download returned HTTP ${response.status}`);
+      const file = await Deno.open(target, { write: true, create: true, truncate: true, mode: 0o600 });
+      let total = 0;
+      try {
+        for await (const chunk of response.body) {
+          total += chunk.byteLength;
+          if (total > WEBSITE_SITE_MAX_ARCHIVE_BYTES) throw new Error("Website snapshot exceeds 100 MB");
+          let written = 0;
+          while (written < chunk.byteLength) written += await file.write(chunk.subarray(written));
+        }
+      } finally {
+        file.close();
+      }
+    },
+  );
+}
+
+async function executeWebsiteSiteJob(
+  job: LeaseJob,
+  config: AgentConfig,
+  agentUUID: string,
+  agentToken: string,
+) {
+  const command = String(job.commandType ?? job.payload?.command ?? "");
+  let workDir: string | null = null;
+  try {
+    assertCapability(config, WEBSITE_SITE_CAPABILITY);
+    const site = websiteSiteCommand(command, job.payload ?? {});
+    const script = `${WEBAPPS_REPO_DIR}/scripts/${site.script}`;
+    if (!await isExecutableFile(script)) throw new Error(`${site.script} is missing; update mnscloud-webapps first`);
+    const args = [script, "--env", WEBAPPS_ENV_FILE, ...site.args];
+    if (site.artifactUrl && site.sha256) {
+      workDir = await Deno.makeTempDir({ prefix: "mnscloud-website-" });
+      const archive = `${workDir}/site.tar.gz`;
+      await downloadWebsiteSnapshot(config, agentUUID, agentToken, site.artifactUrl, archive);
+      const actual = await sha256Hex(await Deno.readFile(archive));
+      if (actual !== site.sha256) throw new Error(`Website snapshot checksum mismatch: got ${actual}`);
+      args.push("--archive", archive);
+    }
+    const result = await runLocalCommand("bash", args, 600_000);
+    if (result.code !== 0) {
+      throw new Error(diagnosticExcerpt(result.stderr || result.stdout || `${site.script} failed`, 2000));
+    }
+    await jsonRequest(config, `/agent/jobs/${job.jobUUID}/complete`, agentToken, agentUUID, {
+      jobType: "website.site",
+      result: { command, output: diagnosticExcerpt(result.stdout, 2000) },
+    });
+  } catch (error) {
+    await failJob(
+      config,
+      job.jobUUID,
+      agentUUID,
+      agentToken,
+      command === "remove" ? "WEBSITE_SITE_REMOVE_FAILED" : "WEBSITE_SITE_INSTALL_FAILED",
+      String(error instanceof Error ? error.message : error).slice(0, 500),
+      "website.site",
+    );
+  } finally {
+    if (workDir) await Deno.remove(workDir, { recursive: true }).catch(() => undefined);
+  }
+}
+
 async function executeCertbotJob(
   job: LeaseJob,
   config: AgentConfig,
@@ -3623,6 +3953,8 @@ async function executeCertbotJob(
       result = await renewCertbotCertificates(config);
     } else if (command === "certbot.certificate.inspect") {
       result = await inspectCertbotCertificate(config, job.payload ?? {});
+    } else if (command === "website.edge.ensure") {
+      result = await ensureWebsiteEdge(config, agentUUID, agentToken, job.payload ?? {});
     } else {
       await failJob(
         config,
@@ -7205,6 +7537,8 @@ async function pollJobs(
       await executeNginxEdgeJob(job, config, agentUUID, agentToken);
     } else if (job.jobType === "certbot") {
       await executeCertbotJob(job, config, agentUUID, agentToken);
+    } else if (job.jobType === "website.site") {
+      await executeWebsiteSiteJob(job, config, agentUUID, agentToken);
     } else if (job.jobType === "realtime.webrtc.edge") {
       await executeWebRtcEdgeJob(job, config, agentUUID, agentToken);
     } else if (job.jobType === "voip.sbc.runtime") {
