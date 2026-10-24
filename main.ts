@@ -51,6 +51,12 @@ import {
   runDnsProbe,
 } from "./dns-probe.ts";
 import {
+  denoMonitorQuery,
+  DNS_MONITOR_CAPABILITY,
+  DNS_MONITOR_JOB_TYPE,
+  runDnsMonitor,
+} from "./dns-monitor.ts";
+import {
   amiEndpointFromManagerConf,
   coalesce,
   eslPasswordFromConfig,
@@ -301,6 +307,7 @@ async function isExecutableFile(path: string) {
 async function applyRuntimeCapabilities(config: AgentConfig) {
   // Network diagnosis needs no installed runtime: every Agent (Linux and Windows) can probe.
   config.capabilities[DNS_PROBE_CAPABILITY] = true;
+  config.capabilities[DNS_MONITOR_CAPABILITY] = true;
   config.capabilities["mnscloud.api.update"] = await isExecutableFile(
     "/opt/mnscloud/mnscloud-api/scripts/update-api.sh",
   );
@@ -6714,6 +6721,48 @@ async function executeDnsProbeJob(
   log("info", "DNS probe completed.", { jobUUID: job.jobUUID });
 }
 
+let dnsMonitorRunning = false;
+
+/**
+ * DNS continuous monitoring cycle: measured in the background so the job lane keeps leasing other
+ * work; a cycle that arrives while the previous one still runs is dropped (the API offers the next
+ * one 5 minutes later).
+ */
+function startDnsMonitorJob(
+  job: LeaseJob,
+  config: AgentConfig,
+  agentUUID: string,
+  agentToken: string,
+) {
+  if (dnsMonitorRunning) {
+    log("warn", "DNS monitor cycle skipped: the previous one is still running.", {
+      jobUUID: job.jobUUID,
+    });
+    return;
+  }
+  dnsMonitorRunning = true;
+  (async () => {
+    const started = Date.now();
+    const cycle = await runDnsMonitor(job.payload?.["targets"], {
+      ...denoProbeDeps(),
+      query: denoMonitorQuery(),
+    });
+    await jsonRequest(config, `/agent/jobs/${job.jobUUID}/complete`, agentToken, agentUUID, {
+      jobType: DNS_MONITOR_JOB_TYPE,
+      ...cycle,
+    });
+    log("info", "DNS monitor cycle completed.", {
+      jobUUID: job.jobUUID,
+      targets: cycle.results.length,
+      durationMs: Date.now() - started,
+    });
+  })().catch((error) =>
+    log("warn", "DNS monitor cycle failed.", { jobUUID: job.jobUUID, error: String(error) })
+  ).finally(() => {
+    dnsMonitorRunning = false;
+  });
+}
+
 /** Logs push revocation: start the node configuration pull now (the job carries no command). */
 async function executeLogsRefreshJob(job: LeaseJob) {
   const started = await runLogsRefresh(async (args) => {
@@ -7180,6 +7229,8 @@ async function pollJobs(
       await executeLogsRefreshJob(job);
     } else if (job.jobType === DNS_PROBE_JOB_TYPE) {
       await executeDnsProbeJob(job, config, agentUUID, agentToken);
+    } else if (job.jobType === DNS_MONITOR_JOB_TYPE) {
+      startDnsMonitorJob(job, config, agentUUID, agentToken);
     } else {
       await uploadJob(job, config, agentUUID, agentToken);
     }

@@ -151,7 +151,7 @@ export function isPublicAddress(address: string): boolean {
   return !normalized.startsWith("2001:db8:") && !normalized.startsWith("2001:db8::");
 }
 
-function statusOf(error: unknown): StepStatus {
+export function statusOf(error: unknown): StepStatus {
   const name = error instanceof Error ? error.name : "";
   const message = error instanceof Error ? error.message.toLowerCase() : "";
   if (name === "TimeoutError" || name === "AbortError" || message.includes("timed out")) {
@@ -166,7 +166,7 @@ function statusOf(error: unknown): StepStatus {
   return "error";
 }
 
-async function timed<T>(now: () => number, task: () => Promise<T>) {
+export async function timed<T>(now: () => number, task: () => Promise<T>) {
   const started = now();
   try {
     return { value: await task(), status: "ok" as StepStatus, ms: now() - started };
@@ -175,8 +175,12 @@ async function timed<T>(now: () => number, task: () => Promise<T>) {
   }
 }
 
-async function resolveAll(target: ProbeTarget, deps: ProbeDeps): Promise<ResolutionStep[]> {
-  const resolvers: Array<string | null> = [null, ...PUBLIC_RESOLVERS];
+async function resolveAll(
+  target: ProbeTarget,
+  deps: ProbeDeps,
+  publicResolvers: boolean,
+): Promise<ResolutionStep[]> {
+  const resolvers: Array<string | null> = publicResolvers ? [null, ...PUBLIC_RESOLVERS] : [null];
   return await Promise.all(
     resolvers.flatMap((resolver) =>
       (["A", "AAAA"] as const).map(async (type) => {
@@ -238,11 +242,20 @@ async function httpStep(
   return { status: step.status, code: step.value, ms: step.ms };
 }
 
-/** Runs the fixed catalog for one target. Every step is bounded; a failing step never stops the others. */
-export async function runDnsProbe(target: ProbeTarget, deps: ProbeDeps): Promise<ProbeResult> {
+/**
+ * Runs the fixed catalog for one target. Every step is bounded; a failing step never stops the others.
+ * The continuous monitor (D4c) skips the public resolvers: it measures them as targets of their own.
+ */
+export async function runDnsProbe(
+  target: ProbeTarget,
+  deps: ProbeDeps,
+  options: { publicResolvers?: boolean } = {},
+): Promise<ProbeResult> {
   const started = deps.now();
   const egress = await timed(deps.now, deps.egress);
-  const resolution = target.kind === "ip" ? [] : await resolveAll(target, deps);
+  const resolution = target.kind === "ip"
+    ? []
+    : await resolveAll(target, deps, options.publicResolvers ?? true);
   const addresses = connectAddresses(target, resolution);
   const connect = await Promise.all(
     [...addresses].map(([address, family]) => connectStep(target, address, family, deps)),
