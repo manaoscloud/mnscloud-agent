@@ -44,6 +44,13 @@ import {
 } from "./runtime-reconcile.ts";
 import { LOGS_REFRESH_JOB_TYPE, runLogsRefresh } from "./logs-refresh.ts";
 import {
+  denoProbeDeps,
+  DNS_PROBE_CAPABILITY,
+  DNS_PROBE_JOB_TYPE,
+  parseTarget,
+  runDnsProbe,
+} from "./dns-probe.ts";
+import {
   amiEndpointFromManagerConf,
   coalesce,
   eslPasswordFromConfig,
@@ -292,6 +299,8 @@ async function isExecutableFile(path: string) {
 }
 
 async function applyRuntimeCapabilities(config: AgentConfig) {
+  // Network diagnosis needs no installed runtime: every Agent (Linux and Windows) can probe.
+  config.capabilities[DNS_PROBE_CAPABILITY] = true;
   config.capabilities["mnscloud.api.update"] = await isExecutableFile(
     "/opt/mnscloud/mnscloud-api/scripts/update-api.sh",
   );
@@ -6679,6 +6688,42 @@ async function completeRuntimeReconcileJob(
 /** Dedicated database executor: secret material is fetched just in time and travels over stdin.
  * No request value can choose a command, path, environment file or SQL statement.
  */
+/**
+ * DNS module diagnosis: runs the fixed probe catalog against the requested target and reports the
+ * result (or a fixed error code). The job carries only the target; nothing else can be chosen.
+ */
+async function executeDnsProbeJob(
+  job: LeaseJob,
+  config: AgentConfig,
+  agentUUID: string,
+  agentToken: string,
+) {
+  let body: Record<string, unknown>;
+  try {
+    const target = parseTarget(job.payload?.["target"]);
+    const result = await runDnsProbe(
+      target,
+      denoProbeDeps(async () => {
+        const response = await jsonRequest<{ data?: { address?: unknown } }>(
+          config,
+          "/agent/egress",
+          agentToken,
+          agentUUID,
+          {},
+        );
+        const address = response?.data?.address;
+        return typeof address === "string" ? address : null;
+      }),
+    );
+    body = { jobType: DNS_PROBE_JOB_TYPE, result };
+  } catch (error) {
+    log("warn", "DNS probe could not run.", { jobUUID: job.jobUUID, error: String(error) });
+    body = { jobType: DNS_PROBE_JOB_TYPE, errorCode: "DNS_PROBE_INVALID_TARGET" };
+  }
+  await jsonRequest(config, `/agent/jobs/${job.jobUUID}/complete`, agentToken, agentUUID, body);
+  log("info", "DNS probe completed.", { jobUUID: job.jobUUID });
+}
+
 /** Logs push revocation: start the node configuration pull now (the job carries no command). */
 async function executeLogsRefreshJob(job: LeaseJob) {
   const started = await runLogsRefresh(async (args) => {
@@ -7143,6 +7188,8 @@ async function pollJobs(
       await executeRuntimeReconcileJob(job, config, agentUUID, agentToken);
     } else if (job.jobType === LOGS_REFRESH_JOB_TYPE) {
       await executeLogsRefreshJob(job);
+    } else if (job.jobType === DNS_PROBE_JOB_TYPE) {
+      await executeDnsProbeJob(job, config, agentUUID, agentToken);
     } else {
       await uploadJob(job, config, agentUUID, agentToken);
     }
