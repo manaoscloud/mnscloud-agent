@@ -55,7 +55,7 @@ export function websiteSiteDomains(value: unknown): string[] {
     if (!HOST.test(domain)) throw new Error(`Invalid website site domain: ${String(item ?? "")}`);
     domains.add(domain);
   }
-  return [...domains].sort();
+  return [...domains].sort((a, b) => a.localeCompare(b));
 }
 
 /** Reads the stored state; a missing or damaged file means no site-mode domain (App mode). */
