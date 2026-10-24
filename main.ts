@@ -18,6 +18,7 @@ import {
   needsWildcardRenewal,
   parseHookRequest,
   parseOpensslEndDate,
+  parseWebsiteSiteDomainsState,
   publishWebsiteChallenge,
   renderWebsiteEdgeConfig,
   sha256Hex,
@@ -27,6 +28,8 @@ import {
   websiteBase,
   websiteEdgeConfigFile,
   websiteSiteCommand,
+  websiteSiteDomains,
+  websiteSiteDomainsFile,
   wildcardCertName,
 } from "./website-edge.ts";
 import {
@@ -3146,9 +3149,14 @@ function renderNginxEdgeDomainConfig(
   config: AgentConfig,
   domain: string,
   sslEnabled: boolean,
+  siteMode = false,
 ) {
   const acmeRoot = config.nginxEdgeAcmeRoot;
-  const appUpstream = config.nginxEdgeAppUpstream;
+  // Site mode (a ThemeDomain that serves a published website): `/` goes to webapps, which routes
+  // it by Host to the site snapshot; /api/ and the webapps paths stay as in App mode.
+  const serveSite = siteMode && config.nginxEdgeWebappsEnabled && !!config.nginxEdgeWebappsUpstream;
+  const appUpstream = serveSite ? config.nginxEdgeWebappsUpstream : config.nginxEdgeAppUpstream;
+  const rootSurface: EdgeSurface = serveSite ? "webapp" : "app";
   const apiUpstream = config.nginxEdgeApiUpstream;
   const webappsLocations = renderNginxEdgeWebappsLocations(config);
   const envJsBlock = `location = /env.js {
@@ -3160,7 +3168,7 @@ ${frontendSecurityHeaders()}
   const httpAppLocation = sslEnabled
     ? "location / { return 301 https://$host$request_uri; }"
     : `location / {
-${frontendSecurityHeaders()}
+${frontendSecurityHeaders("    ", rootSurface)}
     proxy_http_version 1.1;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
@@ -3334,7 +3342,7 @@ ${frontendSecurityHeaders()}
   ${webappsLocations}
 
   location / {
-${frontendSecurityHeaders()}
+${frontendSecurityHeaders("    ", rootSurface)}
     proxy_http_version 1.1;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
@@ -3396,9 +3404,10 @@ async function activateNginxEdgeDomain(config: AgentConfig, domain: string) {
   const path = nginxEdgeConfigPath(config, domain);
   const previous = await fileExists(path) ? await Deno.readTextFile(path) : null;
   const sslEnabled = await nginxEdgeHasCertificate(config, domain);
+  const siteMode = (await websiteSiteDomainSet(config)).has(domain);
   await writeAtomic(
     path,
-    renderNginxEdgeDomainConfig(config, domain, sslEnabled),
+    renderNginxEdgeDomainConfig(config, domain, sslEnabled, siteMode),
   );
   try {
     await testNginxEdge(config);
@@ -3435,11 +3444,17 @@ async function rerenderNginxEdgeDomains(config: AgentConfig) {
     throw error;
   }
   const domains = [...previous.keys()].sort();
+  const siteDomains = await websiteSiteDomainSet(config);
   try {
     for (const domain of domains) {
       await writeAtomic(
         nginxEdgeConfigPath(config, domain),
-        renderNginxEdgeDomainConfig(config, domain, await nginxEdgeHasCertificate(config, domain)),
+        renderNginxEdgeDomainConfig(
+          config,
+          domain,
+          await nginxEdgeHasCertificate(config, domain),
+          siteDomains.has(domain),
+        ),
       );
     }
     await testNginxEdge(config);
@@ -3508,6 +3523,47 @@ async function inspectNginxEdgeDomain(config: AgentConfig, domain: string) {
   };
 }
 
+async function websiteSiteDomainSet(config: AgentConfig) {
+  const file = websiteSiteDomainsFile(config.nginxEdgeWebsiteDir);
+  return new Set(parseWebsiteSiteDomainsState(await optionalRead(file)));
+}
+
+/**
+ * `website.edge.domains`: stores the ThemeDomains that serve a published site and re-renders every
+ * ThemeDomain vhost (one nginx test; any failure restores the previous list and files).
+ */
+async function syncWebsiteSiteDomains(
+  config: AgentConfig,
+  payload: Record<string, unknown> | null | undefined,
+) {
+  assertCapability(config, "nginx-edge.manage");
+  const domains = websiteSiteDomains(payload?.domains);
+  const file = websiteSiteDomainsFile(config.nginxEdgeWebsiteDir);
+  const previous = await optionalRead(file);
+  if (parseWebsiteSiteDomainsState(previous).join("\n") === domains.join("\n")) {
+    return { command: "website.edge.domains", domains: domains.length, changed: false };
+  }
+  await Deno.mkdir(config.nginxEdgeWebsiteDir, { recursive: true });
+  await writeAtomic(file, `${JSON.stringify({ domains }, null, 2)}\n`);
+  let rendered: string[];
+  try {
+    rendered = await rerenderNginxEdgeDomains(config);
+  } catch (error) {
+    if (previous === null) await Deno.remove(file).catch(() => undefined);
+    else await writeAtomic(file, previous);
+    throw error;
+  }
+  const served = new Set(rendered);
+  return {
+    command: "website.edge.domains",
+    domains: domains.length,
+    changed: true,
+    siteMode: domains.filter((domain) => served.has(domain)),
+    // Domains without an edge vhost yet (certificate pending): they switch on activation.
+    pending: domains.filter((domain) => !served.has(domain)),
+  };
+}
+
 async function executeNginxEdgeJob(
   job: LeaseJob,
   config: AgentConfig,
@@ -3521,7 +3577,9 @@ async function executeNginxEdgeJob(
   try {
     await refreshNginxEdgeWebapps(config);
     let result: Record<string, unknown>;
-    if (command === "nginx.edge.domain.activate") {
+    if (command === "website.edge.domains") {
+      result = await syncWebsiteSiteDomains(config, job.payload);
+    } else if (command === "nginx.edge.domain.activate") {
       result = await activateNginxEdgeDomain(config, domain);
     } else if (command === "nginx.edge.domain.remove") {
       result = await removeNginxEdgeDomain(config, domain);
@@ -3673,7 +3731,9 @@ async function websiteTxtVisible(base: string, name: string, value: string) {
     for (const nameserver of nameservers) {
       const addresses = await Deno.resolveDns(nameserver.replace(/\.$/, ""), "A").catch(() => []);
       if (!addresses.length) return false;
-      const records = await Deno.resolveDns(name, "TXT", { nameServer: { ipAddr: addresses[0], port: 53 } })
+      const records = await Deno.resolveDns(name, "TXT", {
+        nameServer: { ipAddr: addresses[0], port: 53 },
+      })
         .catch(() => [] as string[][]);
       if (!records.some((chunks) => chunks.join("") === value)) return false;
     }
@@ -3684,9 +3744,15 @@ async function websiteTxtVisible(base: string, name: string, value: string) {
 }
 
 async function websiteCertificateExpiry(config: AgentConfig, base: string) {
-  const file = `${config.nginxEdgeSslLiveDir.replace(/\/+$/, "")}/${wildcardCertName(base)}/fullchain.pem`;
+  const file = `${config.nginxEdgeSslLiveDir.replace(/\/+$/, "")}/${
+    wildcardCertName(base)
+  }/fullchain.pem`;
   if (!await fileExists(file)) return null;
-  const result = await runLocalCommand("openssl", ["x509", "-enddate", "-noout", "-in", file], 15_000);
+  const result = await runLocalCommand(
+    "openssl",
+    ["x509", "-enddate", "-noout", "-in", file],
+    15_000,
+  );
   return result.code === 0 ? parseOpensslEndDate(result.stdout) : null;
 }
 

@@ -583,7 +583,7 @@ configured `acme_root`, normally `/var/www/certbot`.
 
 ## Website Edge And Site Jobs
 
-Hosted tenant websites (Website module) use two platform-only contracts:
+Hosted tenant websites (Website module) use three platform-only contracts:
 
 - Certbot command `website.edge.ensure` `{base, email}` (platform edge Agent, `nginx-edge.manage` +
   `certbot.manage`): keeps the wildcard `*.<base>` certificate (`wildcard.<base>`, Let's Encrypt
@@ -598,6 +598,12 @@ Hosted tenant websites (Website module) use two platform-only contracts:
   `/opt/mnscloud/mnscloud-webapps/scripts/site-install.sh` is executable): `install` downloads the
   https snapshot (100 MB cap, Agent bearer only for the API's own origin), verifies its SHA-256 and runs
   `site-install.sh`; `remove` runs `site-remove.sh`.
+- Nginx edge command `website.edge.domains` `{domains}` (platform edge Agent): the tenant ThemeDomains
+  that serve a published site. The list is stored in `[nginx.edge].website_dir/site-domains.json` and
+  every ThemeDomain vhost is re-rendered (one `nginx -t`; a failure restores the list and the files):
+  a listed domain sends `/` to webapps (original Host, webapp security headers) instead of the App;
+  `/api/` and the webapps paths are unchanged. `nginx.edge.domain.activate` of a listed domain whose
+  certificate arrives later renders it in site mode directly. An unchanged list is a no-op.
 
 ## WebRTC Edge Jobs
 

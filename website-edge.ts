@@ -7,6 +7,8 @@
  *   publishes the challenge through the API, waits for the authoritative TXT and releases it.
  * - Platform webapps hosts: `website.site` installs (download, SHA-256, site-install.sh) or removes
  *   (site-remove.sh) the static snapshot of one site.
+ * - Tenant custom domains (S1b-2): `website.edge.domains` stores the ThemeDomains that serve a
+ *   published site; their edge vhost sends `/` to webapps instead of the App.
  */
 
 export const WEBSITE_SITE_CAPABILITY = "mnscloud.webapps.site.v1";
@@ -32,6 +34,39 @@ export function wildcardCertName(base: string) {
 
 export function websiteEdgeConfigFile(dir: string, base: string) {
   return `${dir.replace(/\/+$/, "")}/${websiteBase(base)}.conf`;
+}
+
+export const WEBSITE_SITE_DOMAINS_MAX = 5000;
+
+/** State file of the site-mode ThemeDomains (JSON, not an nginx include: it does not end in .conf). */
+export function websiteSiteDomainsFile(dir: string) {
+  return `${dir.replace(/\/+$/, "")}/site-domains.json`;
+}
+
+/** The custom domains of a `website.edge.domains` job: valid hosts, lower case, unique, sorted. */
+export function websiteSiteDomains(value: unknown): string[] {
+  if (!Array.isArray(value)) throw new Error("Website site domains must be a list");
+  if (value.length > WEBSITE_SITE_DOMAINS_MAX) {
+    throw new Error(`Website site domains are limited to ${WEBSITE_SITE_DOMAINS_MAX}`);
+  }
+  const domains = new Set<string>();
+  for (const item of value) {
+    const domain = String(item ?? "").trim().toLowerCase().replace(/\.$/, "");
+    if (!HOST.test(domain)) throw new Error(`Invalid website site domain: ${String(item ?? "")}`);
+    domains.add(domain);
+  }
+  return [...domains].sort((a, b) => a.localeCompare(b));
+}
+
+/** Reads the stored state; a missing or damaged file means no site-mode domain (App mode). */
+export function parseWebsiteSiteDomainsState(text: string | null): string[] {
+  if (!text) return [];
+  try {
+    const parsed = JSON.parse(text);
+    return websiteSiteDomains(Array.isArray(parsed) ? parsed : parsed?.domains);
+  } catch {
+    return [];
+  }
 }
 
 export interface WebsiteEdgeRenderInput {

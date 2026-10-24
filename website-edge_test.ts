@@ -10,13 +10,17 @@ import {
   needsWildcardRenewal,
   parseHookRequest,
   parseOpensslEndDate,
+  parseWebsiteSiteDomainsState,
   publishWebsiteChallenge,
   renderWebsiteEdgeConfig,
   sha256Hex,
+  WEBSITE_SITE_DOMAINS_MAX,
   websiteAcmeHookScript,
   websiteBase,
   websiteEdgeConfigFile,
   websiteSiteCommand,
+  websiteSiteDomains,
+  websiteSiteDomainsFile,
   wildcardCertName,
 } from "./website-edge.ts";
 
@@ -248,4 +252,40 @@ Deno.test("sha256Hex matches the reference digest", async () => {
     await sha256Hex(new TextEncoder().encode("abc")),
     "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
   );
+});
+
+Deno.test("websiteSiteDomains normalizes, dedupes and sorts the site-mode ThemeDomains", () => {
+  assertEquals(websiteSiteDomains(["Shop.Example.com.", "a.example.org", "shop.example.com"]), [
+    "a.example.org",
+    "shop.example.com",
+  ]);
+  assertEquals(websiteSiteDomains([]), []);
+  assertThrows(() => websiteSiteDomains("shop.example.com"), Error, "list");
+  assertThrows(() => websiteSiteDomains(["evil.test; include /etc/x"]), Error, "Invalid");
+  assertThrows(() => websiteSiteDomains(["localhost"]), Error, "Invalid");
+  assertThrows(
+    () =>
+      websiteSiteDomains(
+        Array.from({ length: WEBSITE_SITE_DOMAINS_MAX + 1 }, (_, i) => `s${i}.example.com`),
+      ),
+    Error,
+    "limited",
+  );
+});
+
+Deno.test("site-mode state file is JSON beside the edge includes and tolerates damage", () => {
+  assertEquals(
+    websiteSiteDomainsFile("/etc/nginx/mnscloud/website/"),
+    "/etc/nginx/mnscloud/website/site-domains.json",
+  );
+  assertEquals(
+    parseWebsiteSiteDomainsState(JSON.stringify({ domains: ["b.example.com", "a.example.com"] })),
+    [
+      "a.example.com",
+      "b.example.com",
+    ],
+  );
+  assertEquals(parseWebsiteSiteDomainsState(null), []);
+  assertEquals(parseWebsiteSiteDomainsState("{not json"), []);
+  assertEquals(parseWebsiteSiteDomainsState(JSON.stringify({ domains: ["bad domain"] })), []);
 });
