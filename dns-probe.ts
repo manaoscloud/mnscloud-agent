@@ -1,6 +1,6 @@
 // dns.probe: on-demand network diagnosis requested by a platform master (DNS module, phase D4a).
 // The job carries only a target (host name, URL or IP); the probe runs a fixed catalog of read-only
-// tests with bounded time and size: egress address, DNS resolution through the system resolver and
+// tests with bounded time and size: public egress address (IPv4/IPv6), DNS resolution through the system resolver and
 // well-known public resolvers, TCP and TLS reachability over IPv4/IPv6, and one HTTP request. It
 // never runs a command and never connects to private, loopback, link-local or multicast addresses.
 
@@ -50,7 +50,7 @@ export type ConnectStep = {
 export type ProbeResult = {
   version: 1;
   target: ProbeTarget;
-  egress: { address: string | null; status: StepStatus };
+  egress: { address: string | null; ipv4: string | null; ipv6: string | null; status: StepStatus };
   resolution: ResolutionStep[];
   connect: ConnectStep[];
   http: { status: StepStatus; code: number | null; ms: number } | null;
@@ -69,7 +69,7 @@ export type ProbeDeps = {
     tls: { status: StepStatus; ms: number } | null;
   }>;
   http: (url: string, signal: AbortSignal) => Promise<number>;
-  egress: () => Promise<string | null>;
+  egress: () => Promise<{ ipv4: string | null; ipv6: string | null }>;
   now: () => number;
 };
 
@@ -250,7 +250,12 @@ export async function runDnsProbe(target: ProbeTarget, deps: ProbeDeps): Promise
   return {
     version: 1,
     target,
-    egress: { address: egress.value ?? null, status: egress.status },
+    egress: {
+      address: egress.value?.ipv4 ?? egress.value?.ipv6 ?? null,
+      ipv4: egress.value?.ipv4 ?? null,
+      ipv6: egress.value?.ipv6 ?? null,
+      status: egress.value?.ipv4 || egress.value?.ipv6 ? "ok" : egress.status,
+    },
     resolution,
     connect,
     http: await httpStep(target, addresses, deps),
@@ -258,8 +263,37 @@ export async function runDnsProbe(target: ProbeTarget, deps: ProbeDeps): Promise
   };
 }
 
+// Google's authoritative servers answer o-o.myaddr.l.google.com TXT with the address that asked:
+// the public egress of this host on the internet (the API only sees the private platform path).
+const EGRESS_NAME = "o-o.myaddr.l.google.com";
+const EGRESS_SERVERS = { ipv4: "216.239.32.10", ipv6: "2001:4860:4802:32::a" } as const; // NOSONAR
+
+async function egressOver(server: string): Promise<string | null> {
+  try {
+    const records = await Deno.resolveDns(EGRESS_NAME, "TXT", {
+      nameServer: { ipAddr: server, port: 53 },
+      signal: AbortSignal.timeout(RESOLVE_TIMEOUT_MS),
+    });
+    const value = records.flat()[0];
+    return value && ipVersion(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Public egress addresses of this host (IPv4 and IPv6), each null when that family has no route. */
+export async function publicEgress() {
+  const [ipv4, ipv6] = await Promise.all([
+    egressOver(EGRESS_SERVERS.ipv4),
+    egressOver(EGRESS_SERVERS.ipv6),
+  ]);
+  return { ipv4, ipv6 };
+}
+
 /** Real network operations of a host (Deno). */
-export function denoProbeDeps(egress: () => Promise<string | null>): ProbeDeps {
+export function denoProbeDeps(
+  egress: () => Promise<{ ipv4: string | null; ipv6: string | null }> = publicEgress,
+): ProbeDeps {
   return {
     resolve: async (name, type, nameServer, signal) =>
       await Deno.resolveDns(name, type, {

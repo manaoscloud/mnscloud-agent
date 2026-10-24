@@ -23,7 +23,7 @@ function fakeDeps(answers: Record<string, string[] | Error>, calls: string[] = [
       calls.push(`http ${url}`);
       return Promise.resolve(200);
     },
-    egress: () => Promise.resolve("198.51.100.20"),
+    egress: () => Promise.resolve({ ipv4: "198.51.100.20", ipv6: null }),
     now: () => clock += 1,
   };
 }
@@ -78,7 +78,12 @@ Deno.test("a name is resolved by the system and every public resolver, then reac
     parseTarget("example.com"),
     fakeDeps({ A: ["93.184.215.14"], AAAA: ["2606:2800:21f:cb07:6820:80da:af6b:8b2c"] }, calls),
   );
-  assertEquals(result.egress, { address: "198.51.100.20", status: "ok" });
+  assertEquals(result.egress, {
+    address: "198.51.100.20",
+    ipv4: "198.51.100.20",
+    ipv6: null,
+    status: "ok",
+  });
   assertEquals(result.resolution.length, (PUBLIC_RESOLVERS.length + 1) * 2);
   assertEquals(result.resolution.every((step) => step.status === "ok"), true);
   assertEquals(result.connect.map((step) => [step.family, step.tcp.status, step.tls?.status]), [

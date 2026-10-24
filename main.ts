@@ -6703,17 +6703,7 @@ async function executeDnsProbeJob(
     const target = parseTarget(job.payload?.["target"]);
     const result = await runDnsProbe(
       target,
-      denoProbeDeps(async () => {
-        const response = await jsonRequest<{ data?: { address?: unknown } }>(
-          config,
-          "/agent/egress",
-          agentToken,
-          agentUUID,
-          {},
-        );
-        const address = response?.data?.address;
-        return typeof address === "string" ? address : null;
-      }),
+      denoProbeDeps(),
     );
     body = { jobType: DNS_PROBE_JOB_TYPE, result };
   } catch (error) {
