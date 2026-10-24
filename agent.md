@@ -581,6 +581,24 @@ Implemented Certbot commands:
 For HTTP-01 validation, the Nginx edge host must serve `/.well-known/acme-challenge/` from the
 configured `acme_root`, normally `/var/www/certbot`.
 
+## Website Edge And Site Jobs
+
+Hosted tenant websites (Website module) use two platform-only contracts:
+
+- Certbot command `website.edge.ensure` `{base, email}` (platform edge Agent, `nginx-edge.manage` +
+  `certbot.manage`): keeps the wildcard `*.<base>` certificate (`wildcard.<base>`, Let's Encrypt
+  DNS-01, `--no-autorenew`, renewed by this command within 30 days) and writes
+  `[nginx.edge].website_dir/<base>.conf` (default `/etc/nginx/mnscloud/website`): port 80 ACME and
+  redirect, 443 `server_name *.<base>`, `/api/` to the API and `/` to webapps with the original Host.
+  The certbot hooks in `/var/lib/mnscloud/agent/website-acme/` only exchange files with the Agent
+  process; the Agent publishes the challenge (`/agent/website/acme-challenges`), waits for
+  `published` and the TXT on every authoritative nameserver, releases it on cleanup and reports
+  `/agent/website/edge-certificates`.
+- Job type `website.site` (capability `mnscloud.webapps.site.v1`, present when
+  `/opt/mnscloud/mnscloud-webapps/scripts/site-install.sh` is executable): `install` downloads the
+  https snapshot (100 MB cap, Agent bearer only for the API's own origin), verifies its SHA-256 and runs
+  `site-install.sh`; `remove` runs `site-remove.sh`.
+
 ## WebRTC Edge Jobs
 
 WebRTC edge provisioning uses a dedicated job contract instead of the generic Nginx edge domain
