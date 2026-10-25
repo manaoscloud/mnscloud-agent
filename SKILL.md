@@ -304,3 +304,10 @@ PABX runtime mutations require `voip.pabx.reconcile.v2` and a fenced renewable l
 Keep `pabx-state.ts` in both platform installers; run `pabx-state_test.ts`.
 Configuration application, SIP registration and carrier removal confirmation are distinct facts.
 Never restore the obsolete `UNREGED` retirement wait or an unconditional gateway replacement loop.
+
+Historical SSH log access uses diagnostics `log-query` with fixed sources, literal filters and
+bounded continuation pages. Preserve pre-match masking, explicit incomplete-result statuses,
+line-boundary cursor checks, race-resistant file opens, and exact sudo rules. Do not replace this
+with an arbitrary path, regex, shell, unbounded subprocess, or raw log download. Run the diagnostic
+contract and disposable-container lifecycle tests; the collector is independent of the resident
+Agent resource soak contract.

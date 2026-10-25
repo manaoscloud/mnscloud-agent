@@ -772,3 +772,12 @@ Install the matching Nginx release before this Agent release: the snippet owns
 streaming, upload size, idle timeouts, retry prevention and capability-safe logging.
 The API remains responsible for authorization and financial policy. Agent domain
 reconciliation validates the resulting Nginx configuration before reload.
+
+## Historical SSH log queries
+
+The Linux diagnostic account supports filtered historical file/journal pages through diagnostics
+4.3 `log-query`. Sources stay allowlisted, secrets are masked before matching, and explicit cursors
+replace tail-only truncation. See [the diagnostic contract](docs/ssh-diagnostics.md#historical-queries-diagnostics-43)
+for timezones, rotations, budgets and incomplete-result statuses. This short-lived collector does
+not change the resident Agent, its API capabilities, or the Windows service. Install/update and
+rollback use the existing diagnostic lifecycle.

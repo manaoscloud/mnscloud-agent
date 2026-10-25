@@ -209,7 +209,7 @@ class DiagnosticsContract(unittest.TestCase):
         with patch.object(collector, 'run', side_effect=OSError), \
                 patch.object(collector, 'trusted_read', side_effect=OSError):
             result = collector.versions()
-        self.assertEqual(result['diagnostics'], '4.2')
+        self.assertEqual(result['diagnostics'], '4.3')
         for key in ('rtpengine-daemon', 'coturn', 'clickhouse-server', 'vector', 'pdns-server', 'pdns-recursor',
                     'dnsdist', 'dns_checkout_version', 'media_checkout_version',
                     'turn_checkout_version', 'logs_checkout_version',
@@ -574,6 +574,131 @@ class DiagnosticsV4Contract(unittest.TestCase):
         self.assertIn("CREATE USER IF NOT EXISTS 'mns-diagnostics'@'localhost' IDENTIFIED VIA unix_socket;", statements)
         self.assertFalse(any('IDENTIFIED BY' in statement or 'PASSWORD' in statement for statement in statements))
         self.assertFalse(any(statement.startswith('REVOKE') for statement in statements))
+
+
+class HistoricalQueryContract(unittest.TestCase):
+    def query(self, **values):
+        q = {'source': 'freeswitch', 'since': '2026-01-02T09:00:00-03:00',
+             'until': '2026-01-02T10:00:00-03:00', 'utcOffset': '-03:00', 'limit': 2}
+        q.update(values)
+        return collector.parse_log_query(collector.query_encode(q))
+
+    def test_invalid_input_and_no_arbitrary_path_or_shell(self):
+        for values in ({'source': '/etc/shadow'}, {'source': 'journal:sshd'},
+                       {'source': 'journal:mnscloud-api;id'}, {'rotation': '/../shadow'},
+                       {'contains': 'x\nid'}, {'limit': True}, {'limit': 501},
+                       {'since': '2026-01-02 09:00:00'}, {'until': '2020-01-01T00:00:00Z'},
+                       {'utcOffset': '+99:00'}, {'shell': 'id'}, {'cursor': '!!'}):
+            with self.subTest(values=values), self.assertRaises(PermissionError):
+                self.query(**values)
+        for text in ('!!', '', 'e30\nx', 'A' * 8194):
+            with self.assertRaises(PermissionError):
+                collector.parse_log_query(text)
+        result = subprocess.run(['python3', '-I', str(SOURCE / 'collector.py'), 'log-query'],
+                                input=b'!!\n', capture_output=True)
+        self.assertEqual(result.returncode, 126)
+        self.assertNotIn(b'Traceback', result.stderr)
+
+    def test_old_matches_all_pages_and_masking_before_filter(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'freeswitch.log'
+            path.write_text('2026-01-02 08:59:59 outside\n' + ''.join(
+                f'2026-01-02 09:20:00 event-{i} token=CANARY\n' for i in range(7)) +
+                '2026-01-02 11:00:00 recent\n' * 150)
+            with patch.dict(collector.LOG_FILES, {'freeswitch': path}):
+                q = self.query(contains='event-')
+                lines = []
+                for _ in range(10):
+                    page = collector.log_query(q)
+                    self.assertEqual(page['status'], 'OK')
+                    lines.extend(page['lines'])
+                    if page['complete']:
+                        break
+                    self.assertTrue(page['nextCursor'])
+                    q['cursor'] = page['nextCursor']
+                self.assertTrue(page['complete'])
+                self.assertEqual(len(lines), 7)
+                self.assertNotIn('CANARY', str(lines))
+                self.assertEqual(collector.log_query(self.query(contains='CANARY'))['lines'], [])
+                page = collector.log_query(self.query())
+                with path.open('a') as out:
+                    out.write('appended\n')
+                changed = collector.log_query(self.query(cursor=page['nextCursor']))
+                self.assertEqual(changed['status'], 'SOURCE_CHANGED')
+                self.assertFalse(changed['complete'])
+
+    def test_scan_budget_continues_even_without_matches(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'freeswitch.log'
+            path.write_text('2026-01-02 08:00:00 outside\n' * 20 + '2026-01-02 09:20:00 match\n')
+            with patch.dict(collector.LOG_FILES, {'freeswitch': path}), patch.object(collector, 'QUERY_SCAN_BYTES', 100):
+                q = self.query()
+                lines = []
+                for _ in range(20):
+                    page = collector.log_query(q)
+                    lines.extend(page['lines'])
+                    if page['complete']:
+                        break
+                    q['cursor'] = page['nextCursor']
+                self.assertTrue(page['complete'])
+                self.assertEqual(len(lines), 1)
+
+    def test_gzip_rotation_long_lines_and_cursor_boundary(self):
+        import gzip
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'freeswitch.log'
+            content = b'2026-01-02 09:20:00 item\n' * 5
+            path.write_bytes(content)
+            with gzip.open(str(path) + '.1.gz', 'wb') as out:
+                out.write(content)
+            with patch.dict(collector.LOG_FILES, {'freeswitch': path}):
+                self.query(rotation='-20260102-120000.gz')
+                q = self.query(rotation='.1.gz')
+                page = collector.log_query(q)
+                q['cursor'] = page['nextCursor']
+                self.assertEqual(len(collector.log_query(q)['lines']), 2)
+                cursor = collector.query_decode(page['nextCursor'])
+                cursor['offset'] = 3
+                q['cursor'] = collector.query_encode(cursor)
+                with self.assertRaises(PermissionError):
+                    collector.query_file(q)
+                path.write_bytes(b'x' * 65537)
+                self.assertEqual(collector.log_query(self.query())['status'], 'LINE_TOO_LARGE')
+
+    def test_symlinks_hardlinks_and_non_regular_files(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'log'
+            secret = Path(folder) / 'secret'
+            secret.write_text('CANARY')
+            path.symlink_to(secret)
+            with patch.dict(collector.LOG_FILES, {'freeswitch': path}):
+                self.assertEqual(collector.log_query(self.query())['status'], 'SOURCE_UNAVAILABLE_OR_UNSAFE')
+                path.unlink()
+                os.link(secret, path)
+                self.assertEqual(collector.log_query(self.query())['status'], 'SOURCE_UNAVAILABLE_OR_UNSAFE')
+                path.unlink()
+                os.mkfifo(path)
+                self.assertEqual(collector.log_query(self.query())['status'], 'SOURCE_UNAVAILABLE_OR_UNSAFE')
+
+    def test_journal_cursor_and_masking(self):
+        rows = [json.dumps({'__REALTIME_TIMESTAMP': '1767356400000000', '__CURSOR': 's=test;i='+str(i),
+                            'PRIORITY': '3', 'MESSAGE': 'event token=CANARY'}) for i in range(3)]
+        real_popen = subprocess.Popen
+        calls = []
+        def launch(args, **kwargs):
+            calls.append(args)
+            return real_popen(['python3', '-c', 'import sys;sys.stdout.write(sys.argv[1])', '\n'.join(rows)+'\n'], **kwargs)
+        q = self.query(source='journal:mnscloud-api', since='2026-01-02T00:00:00Z', until='2026-01-03T00:00:00Z')
+        with patch.object(collector.subprocess, 'Popen', side_effect=launch):
+            page = collector.log_query(q)
+            self.assertEqual(page['status'], 'OK')
+            self.assertEqual(len(page['lines']), 2)
+            self.assertNotIn('CANARY', str(page))
+            q['cursor'] = page['nextCursor']
+            collector.log_query(q)
+        self.assertIn('--unit=mnscloud-api.service', calls[0])
+        self.assertTrue(any(a.startswith('--after-cursor=') for a in calls[1]))
+        self.assertFalse(any(a.startswith('--lines=') for a in calls[0]))
 
 
 if __name__ == '__main__':
