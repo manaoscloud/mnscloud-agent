@@ -3,11 +3,11 @@
 set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 docker run --rm -i -v "$ROOT_DIR:/agent:ro" \
-  debian:13-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132 bash -s <<'TEST'
+  debian:12-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251 bash -s <<'TEST'
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y -qq python3 sudo openssh-client procps >/dev/null
+apt-get install -y -qq --no-install-recommends python3 sudo openssh-client procps systemd >/dev/null
 # Fresh host: the Agent installer path creates the account with the approved key.
 bash /agent/scripts/install-diagnostics.sh | tee /tmp/first
 grep -q 'Converged' /tmp/first
@@ -48,6 +48,15 @@ Path('/tmp/query').write_text(base64.urlsafe_b64encode(json.dumps(q).encode()).d
 FIXTURE
 runuser -u mns-diagnostics -- env SSH_ORIGINAL_COMMAND="log-query $(cat /tmp/query)" /usr/local/sbin/mns-diagnostics > /tmp/historical.json
 python3 -c 'import json; s=open("/tmp/historical.json").read(); r=json.loads(s); assert r["complete"] and len(r["lines"]) == 1; assert "CANARY" not in s and "HISTORICAL" in s'
+# Exercise the real oldest-supported journalctl date parser, not a mocked subprocess.
+python3 - <<'JOURNAL'
+import base64, json
+from pathlib import Path
+q = {'source':'journal:mnscloud-agent','since':'2026-01-02T09:00:00-03:00','until':'2026-01-02T10:00:00-03:00'}
+Path('/tmp/query-journal').write_text(base64.urlsafe_b64encode(json.dumps(q).encode()).decode().rstrip('='))
+JOURNAL
+runuser -u mns-diagnostics -- env SSH_ORIGINAL_COMMAND="log-query $(cat /tmp/query-journal)" /usr/local/sbin/mns-diagnostics > /tmp/historical-journal.json
+python3 -c 'import json; r=json.load(open("/tmp/historical-journal.json")); assert r["status"] == "OK" and r["complete"], r'
 if printf '!!\n' | runuser -u mns-diagnostics -- sudo -n /usr/bin/python3 -I /usr/local/lib/mns-diagnostics/collector.py log-query; then exit 1; fi
 if runuser -u mns-diagnostics -- sudo -n /usr/bin/python3 -I /usr/local/lib/mns-diagnostics/collector.py log-query extra; then exit 1; fi
 runuser -u mns-diagnostics -- env SSH_ORIGINAL_COMMAND='journal mnscloud-agent 30 err' /usr/local/sbin/mns-diagnostics > /tmp/journal.json

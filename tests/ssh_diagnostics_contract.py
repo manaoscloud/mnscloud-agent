@@ -697,6 +697,8 @@ class HistoricalQueryContract(unittest.TestCase):
             q['cursor'] = page['nextCursor']
             collector.log_query(q)
         self.assertIn('--unit=mnscloud-api.service', calls[0])
+        self.assertIn('--since=2026-01-02 00:00:00 UTC', calls[0])
+        self.assertIn('--until=2026-01-03 00:00:00 UTC', calls[0])
         self.assertTrue(any(a.startswith('--after-cursor=') for a in calls[1]))
         self.assertFalse(any(a.startswith('--lines=') for a in calls[0]))
 
