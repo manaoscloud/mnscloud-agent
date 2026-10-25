@@ -280,6 +280,7 @@ Invoke-Step {
   Copy-Item -Path "$PSScriptRoot\..\logs-refresh.ts" -Destination "$InstallDir\logs-refresh.ts" -Force
   Copy-Item -Path "$PSScriptRoot\..\dns-probe.ts" -Destination "$InstallDir\dns-probe.ts" -Force
   Copy-Item -Path "$PSScriptRoot\..\dns-monitor.ts" -Destination "$InstallDir\dns-monitor.ts" -Force
+  Copy-Item -Path "$PSScriptRoot\..\job-report.ts" -Destination "$InstallDir\job-report.ts" -Force
   Copy-Item -Path "$PSScriptRoot\..\website-edge.ts" -Destination "$InstallDir\website-edge.ts" -Force
   Copy-Item -Path "$PSScriptRoot\..\deno.jsonc" -Destination "$InstallDir\deno.jsonc" -Force
 }
