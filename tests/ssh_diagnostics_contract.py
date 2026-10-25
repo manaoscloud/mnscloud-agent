@@ -209,7 +209,7 @@ class DiagnosticsContract(unittest.TestCase):
         with patch.object(collector, 'run', side_effect=OSError), \
                 patch.object(collector, 'trusted_read', side_effect=OSError):
             result = collector.versions()
-        self.assertEqual(result['diagnostics'], '4.3')
+        self.assertEqual(result['diagnostics'], '4.4')
         for key in ('rtpengine-daemon', 'coturn', 'clickhouse-server', 'vector', 'pdns-server', 'pdns-recursor',
                     'dnsdist', 'dns_checkout_version', 'media_checkout_version',
                     'turn_checkout_version', 'logs_checkout_version',
@@ -702,6 +702,70 @@ class HistoricalQueryContract(unittest.TestCase):
         self.assertTrue(any(a.startswith('--after-cursor=') for a in calls[1]))
         self.assertFalse(any(a.startswith('--since=') for a in calls[1]))
         self.assertFalse(any(a.startswith('--lines=') for a in calls[0]))
+
+
+class AudioMetadataContract(unittest.TestCase):
+    def query(self, relative='synthetic.wav', source='freeswitch'):
+        return {'source': source, 'relativePath': relative}
+
+    def test_metadata_does_not_return_audio_or_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            audio = root / 'synthetic.wav'
+            audio.write_bytes(b'PRIVATE_AUDIO_CANARY')
+            with patch.object(collector, 'AUDIO_ROOTS', {'freeswitch': root}):
+                result = collector.audio_stat(self.query())
+                self.assertEqual(result['status'], 'OK')
+                self.assertTrue(result['exists'])
+                self.assertEqual(result['sizeBytes'], 20)
+                self.assertEqual(set(result), {'source', 'status', 'exists', 'sizeBytes', 'modifiedAt'})
+                self.assertNotIn('PRIVATE_AUDIO_CANARY', json.dumps(result))
+                self.assertNotIn('synthetic', json.dumps(result))
+                audio.write_bytes(b'')
+                self.assertEqual(collector.audio_stat(self.query())['sizeBytes'], 0)
+
+    def test_paths_and_parameters_are_validated_before_privilege(self):
+        invalid = [self.query(path) for path in (
+            '/etc/shadow.wav', '../secret.wav', 'a/../secret.wav', './synthetic.wav',
+            'a//synthetic.wav', 'a\\synthetic.wav', 'synthetic.wav\n', 'secret.pem',
+            'synthetic.wav;id', '/synthetic.wav', 'x/' * 17 + 'synthetic.wav')]
+        invalid += [self.query(source=source) for source in ('other', [], {}, None, 1)]
+        invalid += [dict(self.query(), root='/etc'), {'source': 'freeswitch'},
+                    self.query(relative=['synthetic.wav']),
+                    self.query('tenants/invalid/voip-pabx/recordings/audio/2026/01/x.wav', 'files'),
+                    self.query('tenants/' + '1' * 32 + '/users/avatar/audio/2026/01/x.wav', 'files')]
+        for q in invalid:
+            encoded = collector.query_encode(q)
+            with self.assertRaises(PermissionError, msg=str(q)):
+                collector.parse_audio_stat(encoded)
+            result = subprocess.run(['python3', '-I', str(SOURCE / 'collector.py'), 'audio-stat'],
+                                    input=(encoded + '\n').encode(), capture_output=True)
+            self.assertEqual(result.returncode, 126)
+            self.assertEqual(result.stdout, b'')
+            self.assertNotIn(b'Traceback', result.stderr)
+        for resource in ('recordings', 'media-files'):
+            q = self.query('tenants/11111111-1111-4111-8111-111111111111/voip-pabx/' + resource +
+                           '/audio/2026/01/02/synthetic-v1.wav', 'files')
+            self.assertEqual(collector.parse_audio_stat(collector.query_encode(q)), q)
+
+    def test_missing_symlink_hardlink_and_special_file_are_distinct(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / 'root'
+            root.mkdir()
+            outside = Path(directory) / 'outside.wav'
+            outside.write_bytes(b'PRIVATE_AUDIO_CANARY')
+            (root / 'link.wav').symlink_to(outside)
+            (root / 'parent').symlink_to(outside.parent, target_is_directory=True)
+            os.link(outside, root / 'hard.wav')
+            os.mkfifo(root / 'pipe.wav')
+            (root / 'directory.wav').mkdir()
+            with patch.object(collector, 'AUDIO_ROOTS', {'freeswitch': root}):
+                missing = collector.audio_stat(self.query('missing.wav'))
+                self.assertEqual(missing, {'source': 'freeswitch', 'exists': False, 'status': 'AUDIO_MISSING'})
+                for relative in ('link.wav', 'parent/outside.wav', 'hard.wav', 'pipe.wav', 'directory.wav'):
+                    result = collector.audio_stat(self.query(relative))
+                    self.assertEqual(result, {'source': 'freeswitch', 'exists': None,
+                                              'status': 'AUDIO_UNAVAILABLE_OR_UNSAFE'})
 
 
 if __name__ == '__main__':

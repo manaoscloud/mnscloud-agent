@@ -30,6 +30,7 @@ privilege; failures never block the Agent and are retried on its next update.
 | `config` | Fixed service env files, explicit safe-value allowlist; other values `SET`/`EMPTY` |
 | `config-check` | Missing/empty required settings, invalid endpoints/ports/enums and production debug checks |
 | `logs` | Last 15 minutes, at most 40 events per fixed systemd unit; timestamps, severity and fixed error categories only |
+| `audio-stat BASE64URL_JSON` | One audio file: existence, byte size and UTC modification time only; see the metadata contract below |
 | `log-query BASE64URL_JSON` | Filtered historical file/journal pages; see the query contract below |
 | `logs-text` | Masked text: last 120 lines of fixed log files and of the last 60 minutes of each fixed systemd unit journal |
 | `journal UNIT [MINUTES] [PRIORITY]` | Masked journal of one fixed systemd unit: last `MINUTES` (1-1440, default 60) at `PRIORITY` or more severe (`err`, `warning`, `notice`, `info`; default `info`), newest 2000 lines, 4 MiB read cap |
@@ -49,8 +50,8 @@ privilege; failures never block the Agent and are retried on its next update.
 | `voip-summary` | Registration, call and session counters of Kamailio, OpenSIPS, Asterisk, FreeSWITCH and rtpengine when installed; numbers only |
 | `schema-status` | Database hosts: active `SchemaAppliedRevision` rows and the last 10 `SchemaReconcileJob` stages/status/error codes, through the passwordless local diagnostics database account |
 
-The extended commands accept no arguments, except `journal`, `container-logs`, `log-query` and `access-summary`. The privileged
-collector has a 40-second overall deadline. Paths, commands and subprocess arguments are fixed.
+The extended commands accept no arguments, except `journal`, `container-logs`, `log-query`, `audio-stat` and `access-summary`. The privileged
+collector has a 40-second overall deadline. Source roots, commands and subprocess arguments are fixed; `audio-stat` accepts only a validated relative audio path.
 Inputs with extra arguments, shell syntax or unknown operations are rejected. Since 4.0 the
 dispatcher ignores a leading `mns-diagnostics ` and one trailing ` 2>/dev/null` or ` 2>&1`
 (textual normalization only; nothing is evaluated, the rest must match exactly).
@@ -74,8 +75,8 @@ reported as `UNREADABLE_OR_UNSAFE`; do not weaken permissions to work around thi
 Passwords, tokens, JWT/signing keys, unknown fields and unapproved values are never
 returned. Endpoint output strips userinfo, paths, queries and fragments. No secret
 hashes/fingerprints are exposed for cross-host comparison. `SET` is not proof that
-credentials match or work. Diagnostics never authenticate to brokers, never inspect customer
-records and never call application routes other than the fixed local health endpoints of `health`;
+credentials match or work. Diagnostics never authenticate to brokers, never query customer database
+records or return audio contents and never call application routes other than the fixed local health endpoints of `health`;
 the only SQL is the two fixed `schema-status` SELECTs through the column-scoped account above.
 
 `logs` deliberately discards raw messages. Categories include connection, timeout,
@@ -324,3 +325,35 @@ install/update converges dispatcher, collector and sudo rule together, preservin
 key; existing backup/rollback applies. No Agent resident scheduler, API, database or Windows behavior
 changes. Validate `python3 tests/ssh_diagnostics_contract.py` and the disposable-container lifecycle
 suite before release. Use normal Agent DEV rollout and verification before an authorized PROD rollout.
+
+
+## Audio metadata (diagnostics 4.4)
+
+`audio-stat BASE64URL_JSON` inspects one known audio file, without reading its contents,
+computing a checksum, listing directories or accepting a custom root. It is an administrative
+SSH diagnostic, not a tenant-facing download endpoint. The request has exactly `source` and
+`relativePath`:
+
+```json
+{"source":"freeswitch","relativePath":"synthetic-call.wav"}
+```
+
+Sources are `freeswitch` (`/var/lib/freeswitch/recordings`), `asterisk`
+(`/var/spool/asterisk/monitor`) and `files` (`/var/lib/mnscloud/files`). The latter accepts only
+canonical tenant PABX `recordings` or `media-files` audio keys. Paths are at most 1024 ASCII
+characters and 16 components, with an audio extension; absolute paths, empty/dot components,
+backslashes, shell syntax and extra fields are rejected before privilege checks. Custom roots
+are not supported and must never be silently substituted.
+
+The fixed collector walks directory descriptors with `O_NOFOLLOW`, opens the final file without
+blocking and requires a regular file with one hard link. Parent/final symlinks, hard links,
+directories and special files are unavailable. It returns `OK`, `exists: true`, `sizeBytes` and
+`modifiedAt` (UTC) for an accessible file, including an explicit size of zero for an empty file.
+`AUDIO_MISSING` means the exact path is absent; `AUDIO_UNAVAILABLE_OR_UNSAFE` leaves `exists: null`
+and must not be reported as missing. No path, filename, owner, audio bytes or hash is returned.
+The collector's 40-second deadline applies; there is no recursive scan or subprocess.
+
+The only new sudo entry is the exact `collector.py audio-stat` operation, with the encoded request
+on stdin. Install/update/rollback preserve the existing account and key. This adds no download
+capability and does not alter the resident Agent or recording/upload settings. Validate the
+security contract and disposable-container install/update/rollback suite before release.
