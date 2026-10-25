@@ -1580,10 +1580,11 @@ def query_journal(q):
         raise PermissionError('Invalid journal cursor')
     args = ['/usr/bin/journalctl', '--no-pager', '--output=json', '--all',
             '--unit=' + q['source'][8:] + '.service',
-            '--since=' + query_date(q['since']).astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC'),
             '--until=' + query_date(q['until']).astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')]
     if after:
         args.append('--after-cursor=' + after)
+    else:
+        args.append('--since=' + query_date(q['since']).astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC'))
     started = time.monotonic()
     output_bytes = 0
     with subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=ENV) as process:
