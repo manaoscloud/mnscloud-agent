@@ -7,7 +7,21 @@ docker run --rm -i -v "$ROOT_DIR:/agent:ro" \
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y -qq --no-install-recommends python3 sudo openssh-client procps systemd >/dev/null
+apt-get install -y -qq --no-install-recommends python3 sudo openssh-client procps systemd systemd-journal-remote >/dev/null
+# Import synthetic records into a real journal, without starting a service or network listener.
+python3 - <<'SEED_JOURNAL'
+from datetime import datetime, timezone
+from pathlib import Path
+import subprocess
+machine = Path('/etc/machine-id').read_text().strip()
+folder = Path('/var/log/journal') / machine
+folder.mkdir(parents=True, exist_ok=True)
+records = []
+for hour, minute, message in ((11, 59, 'outside-before'), (12, 1, 'event-A'), (12, 2, 'event-B'), (12, 3, 'event-C'), (13, 1, 'outside-after')):
+    stamp = int(datetime(2026, 1, 2, hour, minute, tzinfo=timezone.utc).timestamp() * 1000000)
+    records.append(f'__REALTIME_TIMESTAMP={stamp}\n__MONOTONIC_TIMESTAMP={stamp}\n_BOOT_ID=11111111111111111111111111111111\n_MACHINE_ID={machine}\n_HOSTNAME=fixture\n_SYSTEMD_UNIT=mnscloud-agent.service\nPRIORITY=6\nMESSAGE={message} token=CANARY\n\n')
+subprocess.run(['/lib/systemd/systemd-journal-remote', '--output='+str(folder/'fixture.journal'), '-'], input=''.join(records), text=True, check=True)
+SEED_JOURNAL
 # Fresh host: the Agent installer path creates the account with the approved key.
 bash /agent/scripts/install-diagnostics.sh | tee /tmp/first
 grep -q 'Converged' /tmp/first
@@ -57,6 +71,25 @@ Path('/tmp/query-journal').write_text(base64.urlsafe_b64encode(json.dumps(q).enc
 JOURNAL
 runuser -u mns-diagnostics -- env SSH_ORIGINAL_COMMAND="log-query $(cat /tmp/query-journal)" /usr/local/sbin/mns-diagnostics > /tmp/historical-journal.json
 python3 -c 'import json; r=json.load(open("/tmp/historical-journal.json")); assert r["status"] == "OK" and r["complete"], r'
+# Native cursor continuation must be accepted by journalctl and preserve time filtering.
+python3 - <<'PAGES'
+import base64, json, subprocess
+q = {'source':'journal:mnscloud-agent','since':'2026-01-02T09:00:00-03:00','until':'2026-01-02T10:00:00-03:00','limit':1}
+lines = []
+for page in range(6):
+    encoded = base64.urlsafe_b64encode(json.dumps(q).encode()).decode().rstrip('=')
+    raw = subprocess.check_output(['runuser','-u','mns-diagnostics','--','env','SSH_ORIGINAL_COMMAND=log-query '+encoded,'/usr/local/sbin/mns-diagnostics'], text=True)
+    data = json.loads(raw)
+    assert data['status'] == 'OK', data
+    lines.extend(data['lines'])
+    if data['complete']:
+        break
+    assert data['nextCursor']
+    q['cursor'] = data['nextCursor']
+assert data['complete'] and len(lines) == 3, lines
+assert all(f'event-{letter}' in line for letter,line in zip('ABC',lines)), lines
+assert 'CANARY' not in str(lines) and 'outside' not in str(lines)
+PAGES
 if printf '!!\n' | runuser -u mns-diagnostics -- sudo -n /usr/bin/python3 -I /usr/local/lib/mns-diagnostics/collector.py log-query; then exit 1; fi
 if runuser -u mns-diagnostics -- sudo -n /usr/bin/python3 -I /usr/local/lib/mns-diagnostics/collector.py log-query extra; then exit 1; fi
 runuser -u mns-diagnostics -- env SSH_ORIGINAL_COMMAND='journal mnscloud-agent 30 err' /usr/local/sbin/mns-diagnostics > /tmp/journal.json
