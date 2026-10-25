@@ -32,6 +32,7 @@ privilege; failures never block the Agent and are retried on its next update.
 | `logs` | Last 15 minutes, at most 40 events per fixed systemd unit; timestamps, severity and fixed error categories only |
 | `logs-text` | Masked text: last 120 lines of fixed log files and of the last 60 minutes of each fixed systemd unit journal |
 | `journal UNIT [MINUTES] [PRIORITY]` | Masked journal of one fixed systemd unit: last `MINUTES` (1-1440, default 60) at `PRIORITY` or more severe (`err`, `warning`, `notice`, `info`; default `info`), newest 2000 lines, 4 MiB read cap |
+| `container-logs CONTAINER [MINUTES]` | Masked Docker output (stdout and stderr) of one `mnscloud-*` container: last `MINUTES` (1-1440, default 60), newest 2000 lines ordered by timestamp, 4 MiB read cap; `UNAVAILABLE` when Docker or the container is absent |
 | `versions` | Selected package versions (including `freeswitch`, `kamailio`, `opensips`, `rtpengine-daemon` and `coturn`; Asterisk is source-built) and root-controlled checkout VERSION files (including `mnscloud-{asterisk,freeswitch,kamailio-softswitch,opensips-sbc,media,turn,kamailio-webrtc}`) |
 | `connectivity` | At most 12 configured endpoints; TCP and verified TLS only, 2-second socket timeout |
 | `asterisk-odbc` | Asterisk ODBC pool state from `asterisk -rx "odbc show"`: pool names, active/max connections and `CONNECTED`/`NO_ACTIVE_CONNECTION`; no SQL, credentials or DSN values |
@@ -47,7 +48,7 @@ privilege; failures never block the Agent and are retried on its next update.
 | `voip-summary` | Registration, call and session counters of Kamailio, OpenSIPS, Asterisk, FreeSWITCH and rtpengine when installed; numbers only |
 | `schema-status` | Database hosts: active `SchemaAppliedRevision` rows and the last 10 `SchemaReconcileJob` stages/status/error codes, through the passwordless local diagnostics database account |
 
-The extended commands accept no arguments, except `journal` and `access-summary`. The privileged
+The extended commands accept no arguments, except `journal`, `container-logs` and `access-summary`. The privileged
 collector has a 40-second overall deadline. Paths, commands and subprocess arguments are fixed.
 Inputs with extra arguments, shell syntax or unknown operations are rejected. Since 4.0 the
 dispatcher ignores a leading `mns-diagnostics ` and one trailing ` 2>/dev/null` or ` 2>&1`
@@ -150,6 +151,14 @@ Version 4.0 (2026-10-19, user decision) adds `artifacts`, `health`, `agent`, `ho
 `timers`, `edge`, `access-summary`, `log-usage`, `voip-summary` and `schema-status` to the same fixed
 sudo rule (one exact entry per operation, no wildcard), so a rollout can be verified on the host
 instead of trusting the checkout version. Design rules of these operations:
+
+Version 4.2 (2026-10-25, user decision) adds `container-logs CONTAINER [MINUTES]`: modules that run
+in Docker Compose (the workers: `mnscloud-workers.service` only runs `docker compose up -d`) never
+write their application output to the journal, so `journal` showed nothing about them. Same model as
+`journal`: one exact sudo entry (`collector.py container-logs`, no wildcard), parameters only on stdin,
+name validated against `mnscloud-[a-z0-9-]` before `docker logs --timestamps --since Nm --tail 2000`
+runs (no follow mode, other options or containers), every line masked like `logs-text`.
+Example: `ssh mns-workers-prod1 'container-logs mnscloud-workers 60'`.
 
 Version 4.1 (2026-10-23) adds the DNS node: `pdns`, `pdns-recursor` and `dnsdist` units
 (`mnscloud-dns-config` is already covered by the `mnscloud-*` pattern), `dns.env` (non-secret keys

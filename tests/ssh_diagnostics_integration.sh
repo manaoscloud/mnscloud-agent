@@ -33,7 +33,7 @@ python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["served"][
 python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["total"] == 1 and v["top"][0]["path"] == "/api/v1/health"' /tmp/access-summary.json
 python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["status"] == "NOT_A_DATABASE_HOST"' /tmp/schema-status.json
 runuser -u mns-diagnostics -- env SSH_ORIGINAL_COMMAND='access-summary 60' /usr/local/sbin/mns-diagnostics | grep -q '"sinceMinutes": 60'
-runuser -u mns-diagnostics -- env SSH_ORIGINAL_COMMAND='mns-diagnostics versions 2>/dev/null' /usr/local/sbin/mns-diagnostics | grep -q '"diagnostics": "4.1"'
+runuser -u mns-diagnostics -- env SSH_ORIGINAL_COMMAND='mns-diagnostics versions 2>/dev/null' /usr/local/sbin/mns-diagnostics | grep -q '"diagnostics": "4.2"'
 for request in 'access-summary 0' 'access-summary x' 'artifacts /etc/shadow' 'health 8.8.8.8'; do
   if runuser -u mns-diagnostics -- env SSH_ORIGINAL_COMMAND="$request" /usr/local/sbin/mns-diagnostics; then exit 1; fi
 done
@@ -43,6 +43,12 @@ for request in 'journal sshd' 'journal nginx 9999' 'journal nginx debug' 'journa
   if runuser -u mns-diagnostics -- env SSH_ORIGINAL_COMMAND="$request" /usr/local/sbin/mns-diagnostics; then exit 1; fi
 done
 if printf 'sshd\n' | runuser -u mns-diagnostics -- sudo -n /usr/bin/python3 -I /usr/local/lib/mns-diagnostics/collector.py journal; then exit 1; fi
+runuser -u mns-diagnostics -- env SSH_ORIGINAL_COMMAND='container-logs mnscloud-workers 15' /usr/local/sbin/mns-diagnostics > /tmp/container-logs.json
+python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["container"] == "mnscloud-workers" and v["sinceMinutes"] == 15' /tmp/container-logs.json
+for request in 'container-logs' 'container-logs nginx' 'container-logs mnscloud-workers 0' 'container-logs mnscloud-workers --follow'; do
+  if runuser -u mns-diagnostics -- env SSH_ORIGINAL_COMMAND="$request" /usr/local/sbin/mns-diagnostics; then exit 1; fi
+done
+if runuser -u mns-diagnostics -- sudo -n /usr/bin/python3 -I /usr/local/lib/mns-diagnostics/collector.py container-logs mnscloud-workers; then exit 1; fi
 if runuser -u mns-diagnostics -- sudo -n /usr/bin/python3 -I /usr/local/lib/mns-diagnostics/collector.py journal nginx; then exit 1; fi
 grep -q 'Login OK: \[USER\]' /tmp/logs-text.json
 ln -s /etc/shadow /var/log/asterisk-link-test.log
@@ -66,5 +72,5 @@ sha256sum -c /tmp/key-check
 bash /agent/scripts/install-diagnostics.sh | grep -q 'Converged'
 runuser -u mns-diagnostics -- env SSH_ORIGINAL_COMMAND=help /usr/local/sbin/mns-diagnostics | grep -q 'journal UNIT'
 sha256sum -c /tmp/key-check
-printf 'PASS: Agent-managed install/idempotence/update, collectors (diagnostics 4.1), masked usernames, denied sudo, key/UID preservation and rollback.\n'
+printf 'PASS: Agent-managed install/idempotence/update, collectors (diagnostics 4.2), masked usernames, denied sudo, key/UID preservation and rollback.\n'
 TEST

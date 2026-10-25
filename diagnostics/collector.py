@@ -18,7 +18,7 @@ import subprocess
 import sys
 from urllib.parse import urlsplit
 
-DIAGNOSTICS_VERSION = '4.1'
+DIAGNOSTICS_VERSION = '4.2'
 DIAGNOSTICS_USER = 'mns-diagnostics'
 CONFIG_DIR = Path('/etc/mnscloud')
 FILES = ('api', 'app', 'nginx', 'workers', 'rabbitmq', 'db', 'authentication', 'openvault', 'logs', 'dns')
@@ -64,6 +64,10 @@ JOURNAL_DEFAULT_MINUTES = 60
 JOURNAL_PRIORITIES = ('err', 'warning', 'notice', 'info')
 JOURNAL_OUTPUT_BYTES = 4194304
 JOURNAL_REQUEST_BYTES = 256
+# container-logs (diagnostics 4.2): one mnscloud-* Docker container (the worker runs in Compose, so
+# its application output never reaches the journal), bounded window, parameters only through stdin.
+CONTAINER = re.compile(r'mnscloud-[a-z0-9]+(?:-[a-z0-9]+){0,8}')
+CONTAINER_DEFAULT_MINUTES = 60
 # Failure markers searched across the whole tail window, so a long post-failure summary
 # cannot push the real cause out of the returned lines.
 HIGHLIGHT = re.compile(r'(?i)\b(error|errors|failed|failure|fatal|panic|traceback|'
@@ -274,11 +278,11 @@ def config_report(configs, checks=False):
     return output
 
 
-def run(args, limit=262144, timeout=12):
+def run(args, limit=262144, timeout=12, stderr=False):
     # File-backed bounded reads avoid buffering an unbounded command response in RAM.
     import tempfile
     with tempfile.TemporaryFile() as output:
-        subprocess.run(args, stdout=output, stderr=subprocess.DEVNULL,
+        subprocess.run(args, stdout=output, stderr=subprocess.STDOUT if stderr else subprocess.DEVNULL,
                        env=ENV, timeout=timeout, check=True)
         output.seek(0)
         data = output.read(limit + 1)
@@ -470,6 +474,42 @@ def journal(request):
             'limitReached': isinstance(lines, list) and len(lines) >= JOURNAL_LINES,
             'masking': 'SECRETS_TOKENS_AND_KEYS_REDACTED_BEST_EFFORT'}
 
+
+
+def parse_container_request(text):
+    """Validate `CONTAINER [MINUTES]`; anything else is rejected before docker runs."""
+    if text.endswith('\n'):
+        text = text[:-1]
+    if not text or len(text) > JOURNAL_REQUEST_BYTES or not re.fullmatch(r'[a-z0-9-]+(?: [0-9]+)?', text):
+        raise PermissionError('Unsupported container-logs request')
+    name, _, window = text.partition(' ')
+    if not CONTAINER.fullmatch(name):
+        raise PermissionError('Unsupported container')
+    minutes = int(window) if window else CONTAINER_DEFAULT_MINUTES
+    if not 1 <= minutes <= JOURNAL_MAX_MINUTES:
+        raise PermissionError('Unsupported container-logs window')
+    return name, minutes
+
+
+def container_lines(text):
+    """Masked lines ordered by Docker's RFC 3339 timestamp (stdout and stderr arrive apart)."""
+    lines = [mask_line(line) for line in text.splitlines() if line.strip()]
+    return sorted(lines, key=lambda line: line.split(' ', 1)[0])[-JOURNAL_LINES:]
+
+
+def container_logs(request, runner=run):
+    name, minutes = parse_container_request(request)
+    try:
+        text = runner(['/usr/bin/docker', 'logs', '--timestamps', '--since', str(minutes) + 'm',
+                       '--tail', str(JOURNAL_LINES), name], limit=JOURNAL_OUTPUT_BYTES, timeout=30, stderr=True)
+        lines = container_lines(text)
+    except ValueError:
+        lines = 'OUTPUT_TOO_LARGE'
+    except (OSError, subprocess.SubprocessError):
+        lines = 'UNAVAILABLE'
+    return {'container': name, 'sinceMinutes': minutes, 'lineLimit': JOURNAL_LINES, 'lines': lines,
+            'limitReached': isinstance(lines, list) and len(lines) >= JOURNAL_LINES,
+            'masking': 'SECRETS_TOKENS_AND_KEYS_REDACTED_BEST_EFFORT'}
 
 def versions():
     output = {'diagnostics': DIAGNOSTICS_VERSION}
@@ -1333,6 +1373,7 @@ OPERATIONS = {
     'logs': ('logs', False, False),
     'logs-text': ('logs-text', False, False),
     'journal': ('journal', True, False),
+    'container-logs': ('container-logs', True, False),
     'versions': ('versions', False, False),
     'connectivity': ('connectivity', False, False),
     'asterisk-odbc': ('asterisk-odbc', False, False),
@@ -1363,10 +1404,13 @@ def main():
             request = sys.stdin.buffer.read(JOURNAL_REQUEST_BYTES + 2).decode('ascii')
             if operation == 'journal':
                 parse_journal_request(request)
+            elif operation == 'container-logs':
+                parse_container_request(request)
             else:
                 request = parse_access_request(request)
         except (PermissionError, UnicodeDecodeError):
-            usage = ('journal UNIT [MINUTES] [PRIORITY]' if operation == 'journal' else 'access-summary [MINUTES]')
+            usage = {'journal': 'journal UNIT [MINUTES] [PRIORITY]', 'container-logs': 'container-logs CONTAINER [MINUTES]'}.get(
+                operation, 'access-summary [MINUTES]')
             print('DENIED: Unsupported ' + operation + ' request. Use: ' + usage + '.', file=sys.stderr)
             return 126
     if os.geteuid() != 0:
@@ -1377,6 +1421,8 @@ def main():
         drop_privileges()
     if operation == 'journal':
         result = journal(request)
+    elif operation == 'container-logs':
+        result = container_logs(request)
     elif operation == 'access-summary':
         result = access_summary(request)
     elif operation in ('config', 'config-check', 'connectivity'):
