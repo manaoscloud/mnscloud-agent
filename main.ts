@@ -1,3 +1,4 @@
+import { JOB_REPORT_PATH, JOB_REPORT_RETRY_DELAYS_MS, transientReportError } from "./job-report.ts";
 import { trunkRegistrationStatus } from "./pabx-state.ts";
 import {
   lastAsteriskFailure,
@@ -1114,7 +1115,27 @@ async function withProgressHeartbeat<T>(
   }
 }
 
+/** Job results are retried across a short API restart (see job-report.ts). */
 async function jsonRequest<T>(
+  config: AgentConfig,
+  path: string,
+  token: string,
+  agentUUID: string,
+  body: Record<string, unknown>,
+  delays: readonly number[] = JOB_REPORT_PATH.test(path) ? JOB_REPORT_RETRY_DELAYS_MS : [],
+): Promise<T> {
+  for (let attempt = 0;; attempt++) {
+    try {
+      return await jsonRequestOnce<T>(config, path, token, agentUUID, body);
+    } catch (error) {
+      if (attempt >= delays.length || !transientReportError(error)) throw error;
+      log("warn", "Job report not accepted yet; retrying.", String(error));
+      await new Promise((resolve) => setTimeout(resolve, delays[attempt]));
+    }
+  }
+}
+
+async function jsonRequestOnce<T>(
   config: AgentConfig,
   path: string,
   token: string,
