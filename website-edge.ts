@@ -284,10 +284,15 @@ export interface WebsiteSiteCommand {
   sha256?: string;
 }
 
-/** Validated arguments of the webapps site scripts (the archive path is added after download). */
+/**
+ * Validated arguments of the webapps site scripts (the archive path is added after download). An
+ * install names either an https `artifactUrl` or a `snapshot` rendered by the API (S1c), which is
+ * downloaded from `apiUrl(path)` (the Agent's own API, so the Agent bearer is sent).
+ */
 export function websiteSiteCommand(
   command: string,
   payload: Record<string, unknown>,
+  apiUrl?: (path: string) => string,
 ): WebsiteSiteCommand {
   const site = String(payload.site ?? "").trim().toLowerCase();
   if (!SITE_ID.test(site)) throw new Error("Website site id must be 32 hex characters");
@@ -295,7 +300,12 @@ export function websiteSiteCommand(
   if (command !== "install") throw new Error(`Unknown website site command: ${command}`);
   const version = String(payload.version ?? "").trim();
   const sha256 = String(payload.sha256 ?? "").trim().toLowerCase();
-  const artifactUrl = String(payload.artifactUrl ?? "").trim();
+  const snapshot = String(payload.snapshot ?? "").trim().toLowerCase();
+  if (snapshot && !SITE_ID.test(snapshot)) throw new Error("Website snapshot id must be 32 hex characters");
+  if (snapshot && !apiUrl) throw new Error("Website snapshot download needs the Agent API");
+  const artifactUrl = snapshot && apiUrl
+    ? apiUrl(`/agent/website/snapshots/${snapshot}`)
+    : String(payload.artifactUrl ?? "").trim();
   if (!VERSION.test(version)) throw new Error("Website snapshot version is invalid");
   if (!SHA256.test(sha256)) throw new Error("Website snapshot SHA-256 is invalid");
   let url: URL;

@@ -596,7 +596,8 @@ Hosted tenant websites (Website module) use three platform-only contracts:
   `/agent/website/edge-certificates`.
 - Job type `website.site` (capability `mnscloud.webapps.site.v1`, present when
   `/opt/mnscloud/mnscloud-webapps/scripts/site-install.sh` is executable): `install` downloads the
-  https snapshot (100 MB cap, Agent bearer only for the API's own origin), verifies its SHA-256 and runs
+  https snapshot (100 MB cap, Agent bearer only for the API's own origin) or, for `snapshot` (S1c,
+  rendered by the API), `<api_base>/api/v1/agent/website/snapshots/<id>`, verifies its SHA-256 and runs
   `site-install.sh`; `remove` runs `site-remove.sh`.
 - Nginx edge command `website.edge.domains` `{domains}` (platform edge Agent): the tenant ThemeDomains
   that serve a published site. The list is stored in `[nginx.edge].website_dir/site-domains.json` and
