@@ -289,3 +289,42 @@ Deno.test("site-mode state file is JSON beside the edge includes and tolerates d
   assertEquals(parseWebsiteSiteDomainsState("{not json"), []);
   assertEquals(parseWebsiteSiteDomainsState(JSON.stringify({ domains: ["bad domain"] })), []);
 });
+
+Deno.test("websiteSiteCommand downloads an API-rendered snapshot from the Agent API", () => {
+  const site = "0123456789abcdef0123456789abcdef";
+  const base = {
+    site,
+    version: "v3-1a2b3c4d",
+    sha256: "b".repeat(64),
+    hosts: ["shop.example.com"],
+  };
+  const api = (path: string) => `https://nginx-dev1.publichost.cloud/api/v1${path}`;
+  const command = websiteSiteCommand("install", {
+    ...base,
+    snapshot: "ABCDEF0123456789ABCDEF0123456789",
+  }, api);
+  assertEquals(
+    command.artifactUrl,
+    "https://nginx-dev1.publichost.cloud/api/v1/agent/website/snapshots/abcdef0123456789abcdef0123456789",
+  );
+  assertThrows(
+    () => websiteSiteCommand("install", { ...base, snapshot: "../x" }, api),
+    Error,
+    "32 hex",
+  );
+  assertThrows(
+    () => websiteSiteCommand("install", { ...base, snapshot: "a".repeat(32) }),
+    Error,
+    "Agent API",
+  );
+  assertThrows(
+    () =>
+      websiteSiteCommand(
+        "install",
+        { ...base, snapshot: "a".repeat(32) },
+        () => "http://insecure/x",
+      ),
+    Error,
+    "https",
+  );
+});

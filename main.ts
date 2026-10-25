@@ -3976,7 +3976,7 @@ async function executeWebsiteSiteJob(
   let workDir: string | null = null;
   try {
     assertCapability(config, WEBSITE_SITE_CAPABILITY);
-    const site = websiteSiteCommand(command, job.payload ?? {});
+    const site = websiteSiteCommand(command, job.payload ?? {}, (path) => apiUrl(config, path));
     const script = `${WEBAPPS_REPO_DIR}/scripts/${site.script}`;
     if (!await isExecutableFile(script)) throw new Error(`${site.script} is missing; update mnscloud-webapps first`);
     const args = [script, "--env", WEBAPPS_ENV_FILE, ...site.args];
