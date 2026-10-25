@@ -4,7 +4,7 @@ umask 077
 cd /
 
 COMMAND="${SSH_ORIGINAL_COMMAND:-help}"
-# Harmless textual normalization of habits seen in practice (diagnostics 4.0): a leading account
+# Harmless textual normalization of habits seen in practice (diagnostics 4.1): a leading account
 # name and a trailing stderr redirect. Nothing is evaluated; the rest must still match exactly.
 COMMAND="${COMMAND#mns-diagnostics }"
 case "$COMMAND" in
@@ -22,7 +22,7 @@ collector() {
 case "$COMMAND" in
   help|"")
     printf '%s\n' \
-      "Allowed diagnostic commands (diagnostics 4.2):" \
+      "Allowed diagnostic commands (diagnostics 4.3):" \
       "  identity" \
       "  memory" \
       "  disk" \
@@ -32,6 +32,7 @@ case "$COMMAND" in
       "  config-check" \
       "  logs" \
       "  logs-text" \
+      "  log-query BASE64URL_JSON" \
       "  journal UNIT [MINUTES] [PRIORITY]" \
       "  container-logs CONTAINER [MINUTES]" \
       "  versions" \
@@ -111,6 +112,9 @@ case "$COMMAND" in
     ;;
   access-summary)
     printf '\n' | collector access-summary
+    ;;
+  log-query\ *)
+    printf '%s\n' "${COMMAND#* }" | collector log-query
     ;;
   journal\ *|container-logs\ *|access-summary\ *)
     # Only the fixed operation name reaches sudo; its parameters travel on stdin and the collector

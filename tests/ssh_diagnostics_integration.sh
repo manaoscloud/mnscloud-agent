@@ -33,10 +33,23 @@ python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["served"][
 python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["total"] == 1 and v["top"][0]["path"] == "/api/v1/health"' /tmp/access-summary.json
 python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["status"] == "NOT_A_DATABASE_HOST"' /tmp/schema-status.json
 runuser -u mns-diagnostics -- env SSH_ORIGINAL_COMMAND='access-summary 60' /usr/local/sbin/mns-diagnostics | grep -q '"sinceMinutes": 60'
-runuser -u mns-diagnostics -- env SSH_ORIGINAL_COMMAND='mns-diagnostics versions 2>/dev/null' /usr/local/sbin/mns-diagnostics | grep -q '"diagnostics": "4.2"'
+runuser -u mns-diagnostics -- env SSH_ORIGINAL_COMMAND='mns-diagnostics versions 2>/dev/null' /usr/local/sbin/mns-diagnostics | grep -q '"diagnostics": "4.3"'
 for request in 'access-summary 0' 'access-summary x' 'artifacts /etc/shadow' 'health 8.8.8.8'; do
   if runuser -u mns-diagnostics -- env SSH_ORIGINAL_COMMAND="$request" /usr/local/sbin/mns-diagnostics; then exit 1; fi
 done
+# Historical filtering reaches older lines through the exact new sudo operation.
+mkdir -p /var/log/freeswitch
+python3 - <<'FIXTURE'
+import base64, json
+from pathlib import Path
+Path('/var/log/freeswitch/freeswitch.log').write_text('2026-01-02 09:20:00 HISTORICAL token=CANARY_TOKEN\n' + '2026-01-02 11:00:00 recent\n' * 150)
+q = {'source':'freeswitch','since':'2026-01-02T09:00:00Z','until':'2026-01-02T10:00:00Z','contains':'HISTORICAL'}
+Path('/tmp/query').write_text(base64.urlsafe_b64encode(json.dumps(q).encode()).decode().rstrip('='))
+FIXTURE
+runuser -u mns-diagnostics -- env SSH_ORIGINAL_COMMAND="log-query $(cat /tmp/query)" /usr/local/sbin/mns-diagnostics > /tmp/historical.json
+python3 -c 'import json; s=open("/tmp/historical.json").read(); r=json.loads(s); assert r["complete"] and len(r["lines"]) == 1; assert "CANARY" not in s and "HISTORICAL" in s'
+if printf '!!\n' | runuser -u mns-diagnostics -- sudo -n /usr/bin/python3 -I /usr/local/lib/mns-diagnostics/collector.py log-query; then exit 1; fi
+if runuser -u mns-diagnostics -- sudo -n /usr/bin/python3 -I /usr/local/lib/mns-diagnostics/collector.py log-query extra; then exit 1; fi
 runuser -u mns-diagnostics -- env SSH_ORIGINAL_COMMAND='journal mnscloud-agent 30 err' /usr/local/sbin/mns-diagnostics > /tmp/journal.json
 python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["unit"] == "mnscloud-agent" and v["sinceMinutes"] == 30' /tmp/journal.json
 for request in 'journal sshd' 'journal nginx 9999' 'journal nginx debug' 'journal nginx --grep=x'; do
@@ -72,5 +85,5 @@ sha256sum -c /tmp/key-check
 bash /agent/scripts/install-diagnostics.sh | grep -q 'Converged'
 runuser -u mns-diagnostics -- env SSH_ORIGINAL_COMMAND=help /usr/local/sbin/mns-diagnostics | grep -q 'journal UNIT'
 sha256sum -c /tmp/key-check
-printf 'PASS: Agent-managed install/idempotence/update, collectors (diagnostics 4.2), masked usernames, denied sudo, key/UID preservation and rollback.\n'
+printf 'PASS: Agent-managed install/idempotence/update, collectors (diagnostics 4.3), masked usernames, denied sudo, key/UID preservation and rollback.\n'
 TEST

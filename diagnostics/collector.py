@@ -2,6 +2,9 @@
 """Fixed, bounded root collector. Never source env files; log text is always masked."""
 from collections import Counter
 from datetime import datetime, timedelta, timezone
+import base64
+import gzip
+import time
 import hashlib
 import http.client
 import json
@@ -18,7 +21,7 @@ import subprocess
 import sys
 from urllib.parse import urlsplit
 
-DIAGNOSTICS_VERSION = '4.2'
+DIAGNOSTICS_VERSION = '4.3'
 DIAGNOSTICS_USER = 'mns-diagnostics'
 CONFIG_DIR = Path('/etc/mnscloud')
 FILES = ('api', 'app', 'nginx', 'workers', 'rabbitmq', 'db', 'authentication', 'openvault', 'logs', 'dns')
@@ -1366,6 +1369,315 @@ def schema_status(drop=drop_privileges, runner=None):
             'scope': 'SCHEMA_REVISION_AND_RECONCILE_JOB_COLUMNS_ONLY'}
 
 
+# Historical log queries use fixed sources and resumable, bounded pages. The request is data,
+# never a command. Cursors identify a source snapshot; they confer no additional authority.
+QUERY_SCAN_BYTES = 8 * 1024 * 1024
+QUERY_LINE_BYTES = 65536
+QUERY_PAGE_BYTES = 1024 * 1024
+QUERY_SECONDS = 20
+ROTATION_SUFFIX = re.compile(r'(?:-[0-9]{8}-[0-9]{6}|\.[0-9]{1,14}|[-.][0-9]{4}-[0-9]{2}-[0-9]{2}(?:[-.][0-9]{2}[-.][0-9]{2}[-.][0-9]{2})?)(?:\.gz)?')
+QUERY_TIMESTAMP = re.compile(r'(?<!\d)(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})?)')
+
+
+def query_encode(value):
+    return base64.urlsafe_b64encode(json.dumps(value, separators=(',', ':')).encode()).decode().rstrip('=')
+
+
+def query_decode(value):
+    if not isinstance(value, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,8192}', value):
+        raise PermissionError('Invalid query encoding')
+    try:
+        result = json.loads(base64.urlsafe_b64decode(value + '=' * (-len(value) % 4)))
+    except (ValueError, UnicodeError):
+        raise PermissionError('Invalid query JSON') from None
+    if not isinstance(result, dict):
+        raise PermissionError('Invalid query object')
+    return result
+
+
+def query_date(value):
+    if not isinstance(value, str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:Z|[+-]\d{2}:\d{2})', value):
+        raise PermissionError('An explicit timestamp offset is required')
+    try:
+        return datetime.fromisoformat(value.replace('Z', '+00:00'))
+    except ValueError:
+        raise PermissionError('Invalid date') from None
+
+
+def parse_log_query(text):
+    if len(text) > 8193:
+        raise PermissionError('Query too large')
+    q = query_decode(text.removesuffix('\n'))
+    if q == {'list': True}:
+        return q
+    if set(q) - {'source', 'rotation', 'since', 'until', 'utcOffset', 'contains', 'limit', 'cursor'}:
+        raise PermissionError('Unknown query field')
+    source = q.get('source')
+    if not isinstance(source, str):
+        raise PermissionError('Source required')
+    if source.startswith('journal:'):
+        unit = source[8:]
+        if unit not in UNITS and not MNSCLOUD_UNIT.fullmatch(unit):
+            raise PermissionError('Unsupported unit')
+        if q.get('rotation'):
+            raise PermissionError('Journal has no file rotation selector')
+    elif source not in LOG_FILES:
+        raise PermissionError('Unsupported source')
+    rotation = q.get('rotation', '')
+    if not isinstance(rotation, str) or (rotation and not ROTATION_SUFFIX.fullmatch(rotation)):
+        raise PermissionError('Unsupported rotation')
+    since, until = query_date(q.get('since')), query_date(q.get('until'))
+    if since > until:
+        raise PermissionError('Reversed interval')
+    offset = q.get('utcOffset', '+00:00')
+    if not isinstance(offset, str) or not re.fullmatch(r'[+-](?:0\d|1[0-4]):[0-5]\d', offset):
+        raise PermissionError('Invalid file timestamp offset')
+    contains = q.get('contains', '')
+    if not isinstance(contains, str) or len(contains) > 256 or any(ord(c) < 32 or ord(c) == 127 for c in contains):
+        raise PermissionError('Invalid literal filter')
+    limit = q.get('limit', 200)
+    if type(limit) is not int or not 1 <= limit <= 500:
+        raise PermissionError('Invalid page size')
+    if 'cursor' in q:
+        query_decode(q['cursor'])
+    return q
+
+
+def query_mask(text, source):
+    # Redact before matching too: filtering must not become a secret-value oracle.
+    if source in USER_MASKED_LOGS:
+        text = BRACKETED.sub('[USER]', text)
+    text = CONTROL.sub('', text)
+    for pattern, replacement in MASKS:
+        text = pattern.sub(replacement, text)
+    # Standalone PEM/base64 continuation lines can occur without a key header on this page.
+    text = re.sub(r'(?m)^\s*[A-Za-z0-9+/=]{32,}\s*$', REDACTED, text)
+    return text
+
+
+def query_matches(text, q, stamp):
+    return (stamp is not None and query_date(q['since']) <= stamp <= query_date(q['until'])
+            and q.get('contains', '').casefold() in text.casefold())
+
+
+def query_binding(q):
+    return hashlib.sha256(json.dumps({k: v for k, v in q.items() if k != 'cursor'}, sort_keys=True).encode()).hexdigest()
+
+
+def query_open(path):
+    # Walk using directory descriptors: no parent symlink swap can escape the allowlist.
+    fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for component in path.parts[1:-1]:
+            new_fd = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            os.close(fd)
+            fd = new_fd
+        result = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+    finally:
+        os.close(fd)
+    info = os.fstat(result)
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+        os.close(result)
+        raise ValueError('Unsafe log')
+    return os.fdopen(result, 'rb')
+
+
+def query_file(q):
+    path = LOG_FILES[q['source']]
+    path = path.with_name(path.name + q.get('rotation', ''))
+    result = {'source': q['source'], 'lines': [], 'nextCursor': None, 'complete': False,
+              'scannedBytes': 0, 'unparsedLines': 0, 'status': 'OK'}
+    cursor = query_decode(q['cursor']) if q.get('cursor') else {}
+    binding = query_binding(q)
+    if cursor and cursor.get('query') != binding:
+        raise PermissionError('Cursor belongs to another query')
+    started = time.monotonic()
+    with query_open(path) as raw:
+        info = os.fstat(raw.fileno())
+        identity = [info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns]
+        # Fail explicitly on rotation, truncation or append; never silently skip a changed source.
+        if cursor and cursor.get('identity') != identity:
+            return dict(result, status='SOURCE_CHANGED')
+        offset = cursor.get('offset', 0)
+        if type(offset) is not int or offset < 0 or offset > 2**63 - 1:
+            raise PermissionError('Invalid cursor offset')
+        compressed = q.get('rotation', '').endswith('.gz')
+        stream = gzip.GzipFile(fileobj=raw) if compressed else raw
+        try:
+            # Gzip seek replays decompression with a deadline; it never allocates the whole file.
+            skipped = 0
+            if compressed:
+                while skipped < offset:
+                    if time.monotonic() - started > QUERY_SECONDS:
+                        return dict(result, status='COMPRESSED_SEEK_BUDGET_EXCEEDED')
+                    chunk = stream.read(min(65536, offset - skipped))
+                    if not chunk:
+                        raise PermissionError('Cursor beyond file')
+                    skipped += len(chunk)
+                if offset and chunk[-1:] != b'\n':
+                    raise PermissionError('Cursor must start at a line boundary')
+            elif offset:
+                stream.seek(offset - 1)
+                if stream.read(1) != b'\n':
+                    raise PermissionError('Cursor must start at a line boundary')
+            previous = cursor.get('stamp')
+            stamp = datetime.fromisoformat(previous) if isinstance(previous, str) else None
+            if stamp is not None and stamp.tzinfo is None:
+                raise PermissionError('Invalid cursor timestamp')
+            output_bytes = 0
+            while result['scannedBytes'] < QUERY_SCAN_BYTES and time.monotonic() - started < QUERY_SECONDS:
+                position = stream.tell()
+                line = stream.readline(QUERY_LINE_BYTES + 1)
+                if not line:
+                    result['complete'] = True
+                    break
+                if len(line) > QUERY_LINE_BYTES:
+                    return dict(result, status='LINE_TOO_LARGE')
+                result['scannedBytes'] += len(line)
+                text = line.decode('utf-8', errors='replace').rstrip('\r\n')
+                match = QUERY_TIMESTAMP.search(text)
+                if match:
+                    try:
+                        stamp = datetime.fromisoformat(match[1].replace('Z', '+00:00'))
+                        if stamp.tzinfo is None:
+                            zone = datetime.fromisoformat('2000-01-01T00:00:00' + q.get('utcOffset', '+00:00')).tzinfo
+                            stamp = stamp.replace(tzinfo=zone)
+                    except ValueError:
+                        stamp = None
+                if stamp is None:
+                    result['unparsedLines'] += 1
+                text = query_mask(text, q['source'])
+                if query_matches(text, q, stamp):
+                    size = len(json.dumps(text).encode())
+                    if output_bytes + size > QUERY_PAGE_BYTES:
+                        stream.seek(position)
+                        break
+                    result['lines'].append(text)
+                    output_bytes += size
+                    if len(result['lines']) >= q.get('limit', 200):
+                        break
+            if not result['complete']:
+                result['nextCursor'] = query_encode({'query': binding, 'identity': identity,
+                    'offset': stream.tell(), 'stamp': stamp.isoformat() if stamp else None})
+            if os.fstat(raw.fileno()).st_mtime_ns != identity[3]:
+                result.update(status='SOURCE_CHANGED', complete=False, nextCursor=None)
+        finally:
+            if compressed:
+                stream.close()
+    return result
+
+
+def query_journal(q):
+    import select
+    result = {'source': q['source'], 'lines': [], 'nextCursor': None, 'complete': False,
+              'scannedBytes': 0, 'unparsedLines': 0, 'status': 'OK'}
+    binding = query_binding(q)
+    cursor = query_decode(q['cursor']) if q.get('cursor') else {}
+    if cursor and cursor.get('query') != binding:
+        raise PermissionError('Cursor belongs to another query')
+    after = cursor.get('after')
+    if after is not None and (not isinstance(after, str) or not re.fullmatch(r'[A-Za-z0-9;=_-]{1,512}', after)):
+        raise PermissionError('Invalid journal cursor')
+    args = ['/usr/bin/journalctl', '--no-pager', '--output=json', '--all',
+            '--unit=' + q['source'][8:] + '.service',
+            '--since=' + query_date(q['since']).strftime('%Y-%m-%d %H:%M:%S %z'),
+            '--until=' + query_date(q['until']).strftime('%Y-%m-%d %H:%M:%S %z')]
+    if after:
+        args.append('--after-cursor=' + after)
+    started = time.monotonic()
+    output_bytes = 0
+    with subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=ENV) as process:
+        try:
+            pending = b''
+            while result['scannedBytes'] < QUERY_SCAN_BYTES and time.monotonic() - started < QUERY_SECONDS:
+                if b'\n' not in pending:
+                    if not select.select([process.stdout], [], [], .2)[0]:
+                        continue
+                    chunk = os.read(process.stdout.fileno(), 65536)
+                    if not chunk:
+                        result['complete'] = process.wait(timeout=2) == 0 and not pending
+                        if not result['complete']:
+                            result['status'] = 'JOURNAL_UNAVAILABLE'
+                        break
+                    pending += chunk
+                    if len(pending) > QUERY_LINE_BYTES and b'\n' not in pending:
+                        result['status'] = 'LINE_TOO_LARGE'
+                        break
+                    continue
+                line, pending = pending.split(b'\n', 1)
+                if len(line) > QUERY_LINE_BYTES:
+                    result['status'] = 'LINE_TOO_LARGE'
+                    break
+                row = json.loads(line)
+                stamp = datetime.fromtimestamp(int(row['__REALTIME_TIMESTAMP']) / 1e6, timezone.utc)
+                message = row.get('MESSAGE', '')
+                text = query_mask(message if isinstance(message, str) else '[NON_TEXT_MESSAGE]', q['source'])
+                text = stamp.isoformat() + ' ' + str(row.get('PRIORITY', '-')) + ' ' + text
+                if query_matches(text, q, stamp):
+                    size = len(json.dumps(text).encode())
+                    if output_bytes + size > QUERY_PAGE_BYTES:
+                        break
+                    result['lines'].append(text)
+                    output_bytes += size
+                after = row['__CURSOR']
+                result['scannedBytes'] += len(line) + 1
+                if len(result['lines']) >= q.get('limit', 200):
+                    break
+            if not result['complete'] and after and result['status'] == 'OK':
+                result['nextCursor'] = query_encode({'query': binding, 'after': after})
+            elif not result['complete'] and result['status'] == 'OK':
+                result['status'] = 'QUERY_BUDGET_EXCEEDED'
+        finally:
+            if process.poll() is None:
+                process.kill()
+            process.wait(timeout=2)
+    return result
+
+
+def serialized_log_query(q):
+    import fcntl
+    fd = os.open('/run/mns-diagnostics-log-query.lock', os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+    with os.fdopen(fd, 'rb+') as lock:
+        info = os.fstat(lock.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_nlink != 1 or info.st_mode & 0o077:
+            raise ValueError('Unsafe query lock')
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return {'status': 'BUSY', 'complete': False, 'nextCursor': None, 'lines': []}
+        return log_query(q)
+
+
+def log_query(q):
+    if q.get('list'):
+        sources = []
+        for name, path in LOG_FILES.items():
+            rotations = []
+            try:
+                for index, item in enumerate(path.parent.iterdir()):
+                    if index >= 10000:
+                        raise ValueError('Log directory enumeration budget exceeded')
+                    suffix = item.name.removeprefix(path.name)
+                    if item.name.startswith(path.name) and (not suffix or ROTATION_SUFFIX.fullmatch(suffix)):
+                        with query_open(item):
+                            rotations.append(suffix)
+                    if len(rotations) > 1000:
+                        raise ValueError('Too many rotations')
+            except FileNotFoundError:
+                pass
+            sources.append({'source': name, 'rotations': sorted(rotations)})
+        return {'sources': sources, 'journalUnits': sorted(set(UNITS) | set(installed_units())),
+                'status': 'OK'}
+    try:
+        result = query_journal(q) if q['source'].startswith('journal:') else query_file(q)
+    except FileNotFoundError:
+        result = {'status': 'SOURCE_MISSING', 'complete': False, 'nextCursor': None, 'lines': []}
+    except (ValueError, OSError, EOFError):
+        result = {'status': 'SOURCE_UNAVAILABLE_OR_UNSAFE', 'complete': False, 'nextCursor': None, 'lines': []}
+    result['masking'] = 'SECRETS_TOKENS_AND_KEYS_REDACTED_BEST_EFFORT'
+    return result
+
+
 # Operations: (handler, reads stdin parameters, drop privileges before any work).
 OPERATIONS = {
     'config': ('config', False, False),
@@ -1373,6 +1685,7 @@ OPERATIONS = {
     'logs': ('logs', False, False),
     'logs-text': ('logs-text', False, False),
     'journal': ('journal', True, False),
+    'log-query': ('log-query', True, False),
     'container-logs': ('container-logs', True, False),
     'versions': ('versions', False, False),
     'connectivity': ('connectivity', False, False),
@@ -1401,15 +1714,17 @@ def main():
     request = None
     if takes_input:
         try:
-            request = sys.stdin.buffer.read(JOURNAL_REQUEST_BYTES + 2).decode('ascii')
-            if operation == 'journal':
+            request = sys.stdin.buffer.read((8192 if operation == 'log-query' else JOURNAL_REQUEST_BYTES) + 2).decode('ascii')
+            if operation == 'log-query':
+                request = parse_log_query(request)
+            elif operation == 'journal':
                 parse_journal_request(request)
             elif operation == 'container-logs':
                 parse_container_request(request)
             else:
                 request = parse_access_request(request)
-        except (PermissionError, UnicodeDecodeError):
-            usage = {'journal': 'journal UNIT [MINUTES] [PRIORITY]', 'container-logs': 'container-logs CONTAINER [MINUTES]'}.get(
+        except (PermissionError, UnicodeDecodeError, ValueError):
+            usage = {'log-query': 'log-query BASE64URL_JSON', 'journal': 'journal UNIT [MINUTES] [PRIORITY]', 'container-logs': 'container-logs CONTAINER [MINUTES]'}.get(
                 operation, 'access-summary [MINUTES]')
             print('DENIED: Unsupported ' + operation + ' request. Use: ' + usage + '.', file=sys.stderr)
             return 126
@@ -1419,7 +1734,9 @@ def main():
     os.umask(0o077)
     if drop_first:
         drop_privileges()
-    if operation == 'journal':
+    if operation == 'log-query':
+        result = serialized_log_query(request)
+    elif operation == 'journal':
         result = journal(request)
     elif operation == 'container-logs':
         result = container_logs(request)

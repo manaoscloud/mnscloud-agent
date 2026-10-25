@@ -30,6 +30,7 @@ privilege; failures never block the Agent and are retried on its next update.
 | `config` | Fixed service env files, explicit safe-value allowlist; other values `SET`/`EMPTY` |
 | `config-check` | Missing/empty required settings, invalid endpoints/ports/enums and production debug checks |
 | `logs` | Last 15 minutes, at most 40 events per fixed systemd unit; timestamps, severity and fixed error categories only |
+| `log-query BASE64URL_JSON` | Filtered historical file/journal pages; see the query contract below |
 | `logs-text` | Masked text: last 120 lines of fixed log files and of the last 60 minutes of each fixed systemd unit journal |
 | `journal UNIT [MINUTES] [PRIORITY]` | Masked journal of one fixed systemd unit: last `MINUTES` (1-1440, default 60) at `PRIORITY` or more severe (`err`, `warning`, `notice`, `info`; default `info`), newest 2000 lines, 4 MiB read cap |
 | `container-logs CONTAINER [MINUTES]` | Masked Docker output (stdout and stderr) of one `mnscloud-*` container: last `MINUTES` (1-1440, default 60), newest 2000 lines ordered by timestamp, 4 MiB read cap; `UNAVAILABLE` when Docker or the container is absent |
@@ -48,7 +49,7 @@ privilege; failures never block the Agent and are retried on its next update.
 | `voip-summary` | Registration, call and session counters of Kamailio, OpenSIPS, Asterisk, FreeSWITCH and rtpengine when installed; numbers only |
 | `schema-status` | Database hosts: active `SchemaAppliedRevision` rows and the last 10 `SchemaReconcileJob` stages/status/error codes, through the passwordless local diagnostics database account |
 
-The extended commands accept no arguments, except `journal`, `container-logs` and `access-summary`. The privileged
+The extended commands accept no arguments, except `journal`, `container-logs`, `log-query` and `access-summary`. The privileged
 collector has a 40-second overall deadline. Paths, commands and subprocess arguments are fixed.
 Inputs with extra arguments, shell syntax or unknown operations are rejected. Since 4.0 the
 dispatcher ignores a leading `mns-diagnostics ` and one trailing ` 2>/dev/null` or ` 2>&1`
@@ -264,3 +265,62 @@ This account is for investigation and does not bypass that workflow.
 - [OpenSSH key restrictions](https://man.openbsd.org/sshd.8): forced commands and
   `restrict` are complementary; server-wide ForceCommand can override key commands.
 - [OpenSSH server policy](https://man.openbsd.org/sshd_config).
+
+## Historical queries (diagnostics 4.3)
+
+`log-query BASE64URL_JSON` reads historical matches instead of the tail. The argument is an unpadded
+base64url JSON object, not a shell expression. `{"list":true}` returns registered file sources and
+available rotation suffixes, plus journal units. Only those fixed file roots, fixed third-party units
+and validated `mnscloud-*` units are readable. This is privileged operational diagnostics, not a
+tenant-facing log search API. It does not grant access to every file under `/var/log`.
+
+A query has `source` (a listed file name or `journal:<unit>`), mandatory `since` and `until`
+(RFC3339 timestamps with explicit offsets, inclusive), optional `contains` (case-insensitive literal,
+maximum 256 characters), `limit` (1–500, default 200), and `cursor`. File queries also accept
+`rotation` (a suffix from the catalog, empty for the current file) and `utcOffset` (default `+00:00`)
+for timestamps that have no offset in the file. Specify the host's log offset deliberately; it is
+not inferred from the client's timezone. No regex, path, command, environment or shell option is
+accepted. Redaction happens **before** literal matching to avoid a secret-value search oracle.
+
+Example request (synthetic data):
+
+```json
+{"source":"freeswitch","since":"2026-01-02T09:00:00-03:00","until":"2026-01-02T09:30:00-03:00","utcOffset":"-03:00","contains":"NO_ANSWER","limit":200}
+```
+
+Encode JSON locally with Python's `base64.urlsafe_b64encode`, remove trailing `=`, then invoke
+`scripts/ops/diag.sh <registered-alias> log-query <encoded-request>` from the workspace. Repeat the
+**same** query with the returned `nextCursor` until `complete=true`. The cursor is bound to the
+filters and source. A page with no matches and a cursor means continue, not “no events”. There is no
+maximum number of pages or historical time-window restriction. Query each catalog rotation when
+the interval spans files; file pages follow physical order, not a merged chronological sort.
+
+Per request: one query per host (nonblocking lock, `BUSY` on contention), 20-second scan budget,
+8 MiB scanned, 1 MiB JSON-escaped message output, 500 matches, and 64 KiB per physical line. The outer
+collector deadline remains 40 seconds. Memory is bounded; the collector does not persist log data,
+create a search cache or load an entire file. Gzip rotations stream decompression; resuming requires
+replaying decompression to the cursor with a deadline. `COMPRESSED_SEEK_BUDGET_EXCEEDED` explicitly
+reports when that is too costly; indexed centralized Logs storage is the appropriate solution for
+large recurring compressed-history searches. This query does not bypass retention or recover logs
+that were deleted.
+
+File timestamps support ISO dates with a space or `T`, optional microseconds and timezone; following
+untimestamped lines inherit the preceding timestamp across pages. `unparsedLines` counts lines with
+no known timestamp; these cannot be classified into the requested interval. Other date formats need
+an explicit parser addition. Lines are masked without the legacy 400-character truncation.
+`LINE_TOO_LARGE` reports an unsupported oversized line without returning a partial secret-bearing
+fragment. Standalone PEM/base64 continuation lines are suppressed. Masking remains best effort:
+customer identifiers can remain, so results must stay in private operational channels.
+
+File cursors bind device/inode/size/mtime and a validated line boundary. Append, rotation or rewrite
+returns `SOURCE_CHANGED` rather than pretending the old snapshot is complete; restart against the
+now-stable rotated file when needed. Missing, unsafe and unavailable sources have explicit statuses
+and `complete=false`. A `status` other than `OK` is never proof of zero matches. Directory-descriptor
+walking and `O_NOFOLLOW` reject parent/final symlink races, hard links and non-regular files. Journal
+queries use native cursors and kill/reap their fixed `journalctl` child on budget or error.
+
+The exact new sudo operation is `collector.py log-query`, with request data only on stdin. Agent
+install/update converges dispatcher, collector and sudo rule together, preserving the account and
+key; existing backup/rollback applies. No Agent resident scheduler, API, database or Windows behavior
+changes. Validate `python3 tests/ssh_diagnostics_contract.py` and the disposable-container lifecycle
+suite before release. Use normal Agent DEV rollout and verification before an authorized PROD rollout.
