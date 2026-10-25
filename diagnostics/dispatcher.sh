@@ -22,7 +22,7 @@ collector() {
 case "$COMMAND" in
   help|"")
     printf '%s\n' \
-      "Allowed diagnostic commands (diagnostics 4.3):" \
+      "Allowed diagnostic commands (diagnostics 4.4):" \
       "  identity" \
       "  memory" \
       "  disk" \
@@ -33,6 +33,7 @@ case "$COMMAND" in
       "  logs" \
       "  logs-text" \
       "  log-query BASE64URL_JSON" \
+      "  audio-stat BASE64URL_JSON" \
       "  journal UNIT [MINUTES] [PRIORITY]" \
       "  container-logs CONTAINER [MINUTES]" \
       "  versions" \
@@ -112,6 +113,9 @@ case "$COMMAND" in
     ;;
   access-summary)
     printf '\n' | collector access-summary
+    ;;
+  audio-stat\ *)
+    printf '%s\n' "${COMMAND#* }" | collector audio-stat
     ;;
   log-query\ *)
     printf '%s\n' "${COMMAND#* }" | collector log-query

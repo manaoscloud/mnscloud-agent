@@ -781,3 +781,9 @@ replace tail-only truncation. See [the diagnostic contract](docs/ssh-diagnostics
 for timezones, rotations, budgets and incomplete-result statuses. This short-lived collector does
 not change the resident Agent, its API capabilities, or the Windows service. Install/update and
 rollback use the existing diagnostic lifecycle.
+
+
+Diagnostics 4.4 adds `audio-stat` for the existence, size and modification time of one known
+recording or PABX media file under fixed roots. It never returns audio or paths, and unsafe files
+are distinct from missing files. See the audio metadata contract in `docs/ssh-diagnostics.md`.
+The resident Agent, recording settings and file transfer behavior are unchanged.

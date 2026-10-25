@@ -21,7 +21,7 @@ import subprocess
 import sys
 from urllib.parse import urlsplit
 
-DIAGNOSTICS_VERSION = '4.3'
+DIAGNOSTICS_VERSION = '4.4'
 DIAGNOSTICS_USER = 'mns-diagnostics'
 CONFIG_DIR = Path('/etc/mnscloud')
 FILES = ('api', 'app', 'nginx', 'workers', 'rabbitmq', 'db', 'authentication', 'openvault', 'logs', 'dns')
@@ -1679,6 +1679,54 @@ def log_query(q):
     return result
 
 
+# Audio metadata only: no directory listings, content, checksums or caller-selected roots.
+AUDIO_ROOTS = {
+    'files': Path('/var/lib/mnscloud/files'),
+    'freeswitch': Path('/var/lib/freeswitch/recordings'),
+    'asterisk': Path('/var/spool/asterisk/monitor'),
+}
+AUDIO_EXTENSION = re.compile(r'.+\.(?:wav|mp3|ogg|flac|gsm|ulaw|alaw|sln|sln16|opus)$', re.I)
+
+
+def parse_audio_stat(text):
+    if len(text) > 8193:
+        raise PermissionError('Query too large')
+    q = query_decode(text.removesuffix('\n'))
+    if (set(q) != {'source', 'relativePath'} or not isinstance(q.get('source'), str)
+            or q['source'] not in AUDIO_ROOTS):
+        raise PermissionError('Unsupported audio source')
+    relative = q.get('relativePath')
+    if (not isinstance(relative, str) or len(relative) > 1024
+            or not re.fullmatch(r'[A-Za-z0-9_./-]+', relative)
+            or len(relative.split('/')) > 16
+            or any(part in ('', '.', '..') for part in relative.split('/'))
+            or not AUDIO_EXTENSION.fullmatch(relative)):
+        raise PermissionError('Unsupported audio path')
+    if q['source'] == 'files' and not re.fullmatch(
+            r'tenants/(?:[a-fA-F0-9]{32}|[a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12})/'
+            r'voip-pabx/(?:recordings|media-files)/audio/'
+            r'[0-9]{4}/[0-9]{2}/(?:[0-9]{2}/)?[A-Za-z0-9_-]+(?:-v[0-9]+)?\.[A-Za-z0-9]+', relative):
+        raise PermissionError('Unsupported canonical audio path')
+    return q
+
+
+def audio_stat(q):
+    # Revalidate at the operation boundary too. query_open walks every directory with
+    # O_NOFOLLOW and rejects final symlinks, hard links and special files before fstat.
+    q = parse_audio_stat(query_encode(q))
+    result = {'source': q['source'], 'exists': None}
+    try:
+        with query_open(AUDIO_ROOTS[q['source']] / q['relativePath']) as audio:
+            info = os.fstat(audio.fileno())
+        result.update(status='OK', exists=True, sizeBytes=info.st_size,
+                      modifiedAt=datetime.fromtimestamp(info.st_mtime, timezone.utc).isoformat())
+    except FileNotFoundError:
+        result.update(status='AUDIO_MISSING', exists=False)
+    except (ValueError, OSError):
+        result.update(status='AUDIO_UNAVAILABLE_OR_UNSAFE')
+    return result
+
+
 # Operations: (handler, reads stdin parameters, drop privileges before any work).
 OPERATIONS = {
     'config': ('config', False, False),
@@ -1687,6 +1735,7 @@ OPERATIONS = {
     'logs-text': ('logs-text', False, False),
     'journal': ('journal', True, False),
     'log-query': ('log-query', True, False),
+    'audio-stat': ('audio-stat', True, False),
     'container-logs': ('container-logs', True, False),
     'versions': ('versions', False, False),
     'connectivity': ('connectivity', False, False),
@@ -1715,9 +1764,11 @@ def main():
     request = None
     if takes_input:
         try:
-            request = sys.stdin.buffer.read((8192 if operation == 'log-query' else JOURNAL_REQUEST_BYTES) + 2).decode('ascii')
+            request = sys.stdin.buffer.read((8192 if operation in ('log-query', 'audio-stat') else JOURNAL_REQUEST_BYTES) + 2).decode('ascii')
             if operation == 'log-query':
                 request = parse_log_query(request)
+            elif operation == 'audio-stat':
+                request = parse_audio_stat(request)
             elif operation == 'journal':
                 parse_journal_request(request)
             elif operation == 'container-logs':
@@ -1725,7 +1776,7 @@ def main():
             else:
                 request = parse_access_request(request)
         except (PermissionError, UnicodeDecodeError, ValueError):
-            usage = {'log-query': 'log-query BASE64URL_JSON', 'journal': 'journal UNIT [MINUTES] [PRIORITY]', 'container-logs': 'container-logs CONTAINER [MINUTES]'}.get(
+            usage = {'audio-stat': 'audio-stat BASE64URL_JSON', 'log-query': 'log-query BASE64URL_JSON', 'journal': 'journal UNIT [MINUTES] [PRIORITY]', 'container-logs': 'container-logs CONTAINER [MINUTES]'}.get(
                 operation, 'access-summary [MINUTES]')
             print('DENIED: Unsupported ' + operation + ' request. Use: ' + usage + '.', file=sys.stderr)
             return 126
@@ -1737,6 +1788,8 @@ def main():
         drop_privileges()
     if operation == 'log-query':
         result = serialized_log_query(request)
+    elif operation == 'audio-stat':
+        result = audio_stat(request)
     elif operation == 'journal':
         result = journal(request)
     elif operation == 'container-logs':

@@ -47,7 +47,7 @@ python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["served"][
 python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["total"] == 1 and v["top"][0]["path"] == "/api/v1/health"' /tmp/access-summary.json
 python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["status"] == "NOT_A_DATABASE_HOST"' /tmp/schema-status.json
 runuser -u mns-diagnostics -- env SSH_ORIGINAL_COMMAND='access-summary 60' /usr/local/sbin/mns-diagnostics | grep -q '"sinceMinutes": 60'
-runuser -u mns-diagnostics -- env SSH_ORIGINAL_COMMAND='mns-diagnostics versions 2>/dev/null' /usr/local/sbin/mns-diagnostics | grep -q '"diagnostics": "4.3"'
+runuser -u mns-diagnostics -- env SSH_ORIGINAL_COMMAND='mns-diagnostics versions 2>/dev/null' /usr/local/sbin/mns-diagnostics | grep -q '"diagnostics": "4.4"'
 for request in 'access-summary 0' 'access-summary x' 'artifacts /etc/shadow' 'health 8.8.8.8'; do
   if runuser -u mns-diagnostics -- env SSH_ORIGINAL_COMMAND="$request" /usr/local/sbin/mns-diagnostics; then exit 1; fi
 done
@@ -62,6 +62,19 @@ Path('/tmp/query').write_text(base64.urlsafe_b64encode(json.dumps(q).encode()).d
 FIXTURE
 runuser -u mns-diagnostics -- env SSH_ORIGINAL_COMMAND="log-query $(cat /tmp/query)" /usr/local/sbin/mns-diagnostics > /tmp/historical.json
 python3 -c 'import json; s=open("/tmp/historical.json").read(); r=json.loads(s); assert r["complete"] and len(r["lines"]) == 1; assert "CANARY" not in s and "HISTORICAL" in s'
+# Audio metadata uses its exact sudo operation and never returns file contents.
+mkdir -p /var/lib/freeswitch/recordings
+python3 - <<'AUDIO'
+import base64, json
+from pathlib import Path
+Path('/var/lib/freeswitch/recordings/synthetic.wav').write_bytes(b'PRIVATE_AUDIO_CANARY')
+q = {'source':'freeswitch','relativePath':'synthetic.wav'}
+Path('/tmp/query-audio').write_text(base64.urlsafe_b64encode(json.dumps(q).encode()).decode().rstrip('='))
+AUDIO
+runuser -u mns-diagnostics -- env SSH_ORIGINAL_COMMAND="audio-stat $(cat /tmp/query-audio)" /usr/local/sbin/mns-diagnostics > /tmp/audio.json
+python3 -c 'import json; s=open("/tmp/audio.json").read(); r=json.loads(s); assert r["status"] == "OK" and r["exists"] and r["sizeBytes"] == 20; assert "CANARY" not in s and "synthetic" not in s'
+if printf '!!\n' | runuser -u mns-diagnostics -- sudo -n /usr/bin/python3 -I /usr/local/lib/mns-diagnostics/collector.py audio-stat; then exit 1; fi
+if runuser -u mns-diagnostics -- sudo -n /usr/bin/python3 -I /usr/local/lib/mns-diagnostics/collector.py audio-stat extra; then exit 1; fi
 # Exercise the real oldest-supported journalctl date parser, not a mocked subprocess.
 python3 - <<'JOURNAL'
 import base64, json
@@ -127,5 +140,5 @@ sha256sum -c /tmp/key-check
 bash /agent/scripts/install-diagnostics.sh | grep -q 'Converged'
 runuser -u mns-diagnostics -- env SSH_ORIGINAL_COMMAND=help /usr/local/sbin/mns-diagnostics | grep -q 'journal UNIT'
 sha256sum -c /tmp/key-check
-printf 'PASS: Agent-managed install/idempotence/update, collectors (diagnostics 4.3), masked usernames, denied sudo, key/UID preservation and rollback.\n'
+printf 'PASS: Agent-managed install/idempotence/update, collectors (diagnostics 4.4), masked usernames, denied sudo, key/UID preservation and rollback.\n'
 TEST

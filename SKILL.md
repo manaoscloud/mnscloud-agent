@@ -311,3 +311,10 @@ line-boundary cursor checks, race-resistant file opens, and exact sudo rules. Do
 with an arbitrary path, regex, shell, unbounded subprocess, or raw log download. Run the diagnostic
 contract and disposable-container lifecycle tests; the collector is independent of the resident
 Agent resource soak contract.
+
+
+Audio metadata diagnostics use `audio-stat` for one validated relative audio path under fixed
+recording/media roots. Preserve metadata-only output, descriptor-based no-symlink opens and exact
+sudo dispatch. Never add file contents, hashes, directory listings or caller-selected roots.
+This short-lived collector is independent of the resident Agent soak contract; validate its
+security and disposable-container lifecycle suites before the normal DEV/PROD rollout.
