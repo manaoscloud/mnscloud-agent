@@ -22,7 +22,7 @@ collector() {
 case "$COMMAND" in
   help|"")
     printf '%s\n' \
-      "Allowed diagnostic commands (diagnostics 4.1):" \
+      "Allowed diagnostic commands (diagnostics 4.2):" \
       "  identity" \
       "  memory" \
       "  disk" \
@@ -33,6 +33,7 @@ case "$COMMAND" in
       "  logs" \
       "  logs-text" \
       "  journal UNIT [MINUTES] [PRIORITY]" \
+      "  container-logs CONTAINER [MINUTES]" \
       "  versions" \
       "  connectivity" \
       "  asterisk-odbc" \
@@ -111,10 +112,10 @@ case "$COMMAND" in
   access-summary)
     printf '\n' | collector access-summary
     ;;
-  journal\ *|access-summary\ *)
+  journal\ *|container-logs\ *|access-summary\ *)
     # Only the fixed operation name reaches sudo; its parameters travel on stdin and the collector
     # validates them (journal: fixed or mnscloud-* unit, 1-1440 minutes, err|warning|notice|info;
-    # access-summary: 1-1440 minutes).
+    # container-logs: mnscloud-* container, 1-1440 minutes; access-summary: 1-1440 minutes).
     operation="${COMMAND%% *}"
     printf '%s\n' "${COMMAND#* }" | collector "$operation"
     ;;

@@ -67,9 +67,48 @@ class DiagnosticsContract(unittest.TestCase):
         self.assertIn('--lines=2000', args)
         self.assertEqual(result['lines'], [])
         dispatcher = (SOURCE / 'dispatcher.sh').read_text()
-        self.assertIn('journal\\ *|access-summary\\ *)', dispatcher)
+        self.assertIn('journal\\ *|container-logs\\ *|access-summary\\ *)', dispatcher)
         manage = (SOURCE / 'manage.py').read_text()
         self.assertIn("'journal'", manage)
+
+    def test_container_logs_parameters_are_validated_before_privilege(self):
+        for request in ('', 'nginx', 'docker', 'mnscloud-workers 0', 'mnscloud-workers 1441', 'mnscloud-workers err',
+                        'mnscloud-workers 10 x', 'mnscloud-workers\nid', 'mnscloud-workers;id', '../mnscloud-workers',
+                        'mnscloud-workers  10', '--since=1h', 'mnscloud-workers --follow', 'MNSCLOUD-WORKERS'):
+            result = subprocess.run(['python3', '-I', str(SOURCE / 'collector.py'), 'container-logs'],
+                                    input=request.encode('latin-1') + b'\n', capture_output=True)
+            self.assertEqual(result.returncode, 126, repr(request))
+            self.assertEqual(result.stdout, b'')
+            self.assertIn(b'container-logs CONTAINER [MINUTES]', result.stderr)
+        self.assertEqual(collector.parse_container_request('mnscloud-workers\n'), ('mnscloud-workers', 60))
+        self.assertEqual(collector.parse_container_request('mnscloud-workers 1440'), ('mnscloud-workers', 1440))
+
+    def test_container_logs_are_bounded_ordered_and_masked(self):
+        raw = ('2026-10-25T01:00:02.000000000Z [worker] handler=hr-timesheet claimed=2\n'
+               '2026-10-25T01:00:01.000000000Z [worker] error token=abc Authorization: Bearer xyz\n')
+        calls = []
+
+        def runner(args, **kwargs):
+            calls.append((args, kwargs))
+            return raw
+
+        result = collector.container_logs('mnscloud-workers 30', runner=runner)
+        args, kwargs = calls[0]
+        self.assertEqual(args, ['/usr/bin/docker', 'logs', '--timestamps', '--since', '30m', '--tail', '2000',
+                                'mnscloud-workers'])
+        self.assertTrue(kwargs['stderr'])
+        self.assertEqual(result['lines'], [
+            '2026-10-25T01:00:01.000000000Z [worker] error token=[REDACTED] Authorization: [REDACTED] [REDACTED]',
+            '2026-10-25T01:00:02.000000000Z [worker] handler=hr-timesheet claimed=2'])
+        self.assertEqual(result['container'], 'mnscloud-workers')
+
+        def missing(args, **kwargs):
+            raise subprocess.CalledProcessError(1, args)
+
+        self.assertEqual(collector.container_logs('mnscloud-api', runner=missing)['lines'], 'UNAVAILABLE')
+        dispatcher = (SOURCE / 'dispatcher.sh').read_text()
+        self.assertIn('journal\\ *|container-logs\\ *|access-summary\\ *)', dispatcher)
+        self.assertIn("'container-logs'", (SOURCE / 'manage.py').read_text())
 
     def test_env_is_literal(self):
         value = collector.parse_env("DB_PASS='$(id); `id`'\nUNKNOWN=secret\n")
@@ -170,7 +209,7 @@ class DiagnosticsContract(unittest.TestCase):
         with patch.object(collector, 'run', side_effect=OSError), \
                 patch.object(collector, 'trusted_read', side_effect=OSError):
             result = collector.versions()
-        self.assertEqual(result['diagnostics'], '4.1')
+        self.assertEqual(result['diagnostics'], '4.2')
         for key in ('rtpengine-daemon', 'coturn', 'clickhouse-server', 'vector', 'pdns-server', 'pdns-recursor',
                     'dnsdist', 'dns_checkout_version', 'media_checkout_version',
                     'turn_checkout_version', 'logs_checkout_version',
