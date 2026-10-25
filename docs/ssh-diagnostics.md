@@ -317,7 +317,7 @@ returns `SOURCE_CHANGED` rather than pretending the old snapshot is complete; re
 now-stable rotated file when needed. Missing, unsafe and unavailable sources have explicit statuses
 and `complete=false`. A `status` other than `OK` is never proof of zero matches. Directory-descriptor
 walking and `O_NOFOLLOW` reject parent/final symlink races, hard links and non-regular files. Journal
-queries use native cursors and kill/reap their fixed `journalctl` child on budget or error.
+queries normalize timestamp offsets to UTC for Debian 12/systemd 252 compatibility, use native cursors and kill/reap their fixed `journalctl` child on budget or error.
 
 The exact new sudo operation is `collector.py log-query`, with request data only on stdin. Agent
 install/update converges dispatcher, collector and sudo rule together, preserving the account and

@@ -1580,8 +1580,8 @@ def query_journal(q):
         raise PermissionError('Invalid journal cursor')
     args = ['/usr/bin/journalctl', '--no-pager', '--output=json', '--all',
             '--unit=' + q['source'][8:] + '.service',
-            '--since=' + query_date(q['since']).strftime('%Y-%m-%d %H:%M:%S %z'),
-            '--until=' + query_date(q['until']).strftime('%Y-%m-%d %H:%M:%S %z')]
+            '--since=' + query_date(q['since']).astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC'),
+            '--until=' + query_date(q['until']).astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')]
     if after:
         args.append('--after-cursor=' + after)
     started = time.monotonic()
