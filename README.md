@@ -478,8 +478,8 @@ are not implemented by this collector. Link state is optional when `ip` is missi
 or the OS reports unknown. Filesystem observations are space usage, not block I/O.
 
 Canonical SQL owns twelve resource metric seeds and four new procedures. Existing
-production DBs apply the `agent-resource-metrics` scope via `scripts/update-schema.py`
-from mnscloud-db, using reviewed plan/apply and backup. DB must precede API and Agent;
+production DBs receive it only through a released `mnscloud-db` tag and the Agent reconcile,
+never by running `scripts/update-schema.py` by hand. DB must precede API and Agent;
 the App follows after endpoint validation. Catalog promotion never applies SQL.
 There is no separate persistent migration definition.
 
