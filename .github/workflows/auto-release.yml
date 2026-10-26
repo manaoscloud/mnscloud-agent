@@ -25,7 +25,9 @@ jobs:
     name: Promote validated Agent release
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      github.event.workflow_run.conclusion == 'success'
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
@@ -36,10 +38,12 @@ jobs:
           fetch-depth: 0
       - name: Verify validated source is still main
         if: github.event_name == 'workflow_run'
+        env:
+          VALIDATED_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
           git fetch origin main --quiet
-          [[ "$(git rev-parse origin/main)" == "${{ github.event.workflow_run.head_sha }}" ]]
+          [[ "$(git rev-parse origin/main)" == "$VALIDATED_SHA" ]]
       - name: Download CI release candidate
         if: github.event_name == 'workflow_run'
         uses: actions/download-artifact@v7
@@ -50,11 +54,13 @@ jobs:
           github-token: ${{ github.token }}
       - name: Prepare manual release candidate
         if: github.event_name == 'workflow_dispatch'
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
         run: >-
           bash scripts/prepare-release-candidate.sh
           --output release-candidate
           --source-sha "$(git rev-parse HEAD)"
-          --version "${{ inputs.version }}"
+          --version "$RELEASE_VERSION"
       - name: Verify release candidate
         run: bash scripts/release-agent.sh --verify-release-candidate release-candidate
       - name: Configure release author

@@ -839,7 +839,10 @@ def probe(target, connection_factory=None):
             connection = connection_factory(target)
         elif target['scheme'] == 'https':
             # Local self-signed listeners (OpenVault): the peer is this host, so the certificate is
-            # not verified; reported as such and never used for anything but status fields.
+            # not verified; reported as such and never used for anything but status fields. Any
+            # other peer would need a verified connection, so it is refused instead.
+            if not ipaddress.ip_address(target['host']).is_loopback:
+                raise ValueError('unverified TLS probe is limited to loopback listeners')
             context = ssl._create_unverified_context()
             context.minimum_version = ssl.TLSVersion.TLSv1_2
             connection = http.client.HTTPSConnection(target['host'], target['port'], timeout=2, context=context)
