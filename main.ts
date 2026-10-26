@@ -3464,7 +3464,7 @@ async function rerenderNginxEdgeDomains(config: AgentConfig) {
     if (error instanceof Deno.errors.NotFound) return [];
     throw error;
   }
-  const domains = [...previous.keys()].sort();
+  const domains = [...previous.keys()].sort((a, b) => Number(a > b) - Number(a < b));
   const siteDomains = await websiteSiteDomainSet(config);
   try {
     for (const domain of domains) {

@@ -101,9 +101,9 @@ export function parseAsteriskRegistration(
   const serverUri = detail("server_uri") ?? clean(row?.[1]);
   const clientUri = detail("client_uri");
   const transportName = detail("transport")?.toLowerCase() ?? "";
-  const namedTransport = /\btcp\b|-tcp$/.test(transportName)
+  const namedTransport = /(?:\btcp\b)|(?:-tcp$)/.test(transportName)
     ? "tcp"
-    : /\budp\b|-udp$/.test(transportName)
+    : /(?:\budp\b)|(?:-udp$)/.test(transportName)
     ? "udp"
     : null;
   return {

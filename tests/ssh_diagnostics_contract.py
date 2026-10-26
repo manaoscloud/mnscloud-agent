@@ -315,6 +315,27 @@ class DiagnosticsV4Contract(unittest.TestCase):
             self.assertIn('  ' + operation, help_text)
         self.assertIn('diagnostics ' + collector.DIAGNOSTICS_VERSION, help_text)
 
+    def test_rollback_rejects_paths_outside_backups(self):
+        spec_manage = importlib.util.spec_from_file_location('manage', SOURCE / 'manage.py')
+        manage = importlib.util.module_from_spec(spec_manage)
+        spec_manage.loader.exec_module(manage)
+        with tempfile.TemporaryDirectory() as root:
+            backups = Path(root) / 'backups'
+            (backups / 'good').mkdir(parents=True)
+            with patch.object(manage, 'BACKUPS', backups):
+                # '<backups>/..' has <backups> as its lexical parent; it must still be refused.
+                for requested in (backups / '..', backups / 'good' / '..' / '..', backups / 'missing'):
+                    with self.assertRaisesRegex(RuntimeError, 'local diagnostic backup directory'):
+                        manage.restore(requested)
+
+    def test_unverified_tls_probe_is_loopback_only(self):
+        target = {'name': 'openvault', 'scheme': 'https', 'host': '192.0.2.10', 'port': 8200, 'path': '/',
+                  'configError': None}
+        with patch.object(collector.http.client, 'HTTPSConnection') as connection:
+            result = collector.probe(target)
+        connection.assert_not_called()
+        self.assertEqual(result['status'], 'CONNECTION_FAILED')
+
     def test_runtime_products_are_covered(self):
         # Every runtime product the Agent reports must be readable by artifacts and versions.
         main = (ROOT / 'main.ts').read_text()

@@ -78,8 +78,10 @@ def backup():
     return folder
 
 
-def restore(folder):
-    if folder.parent != BACKUPS or folder.is_symlink():
+def restore(requested):
+    # Resolve '..' before checking the parent: '/var/backups/mns-diagnostics/..' must not pass.
+    folder = requested.resolve(strict=True) if requested.exists() else None
+    if folder is None or requested.is_symlink() or folder.parent != BACKUPS or not folder.is_dir():
         raise RuntimeError('Rollback must name a local diagnostic backup directory.')
     safe_parents(folder / 'manifest.json')
     manifest = json.loads((folder / 'manifest.json').read_text())

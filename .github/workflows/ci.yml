@@ -24,7 +24,7 @@ jobs:
         with:
           fetch-depth: 0
       - name: Setup Deno
-        uses: denoland/setup-deno@v2
+        uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2.0.5
         with:
           deno-version: v2.x
       - name: Type check
@@ -45,10 +45,10 @@ jobs:
         run: bash scripts/test-apt-lock-wait.sh
       - name: Gitleaks secret scan
         run: |
-          docker run --rm -v "$PWD:/repo:ro" ghcr.io/gitleaks/gitleaks:latest dir /repo --config=/repo/.gitleaks.toml --redact --verbose --exit-code=1
+          docker run --rm -v "$PWD:/repo:ro" ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f dir /repo --config=/repo/.gitleaks.toml --redact --verbose --exit-code=1
       - name: Trivy security scan
         run: |
-          docker run --rm -v "$PWD:/repo:ro" aquasec/trivy:latest fs --scanners vuln,misconfig --severity HIGH,CRITICAL --ignore-unfixed --exit-code=1 /repo
+          docker run --rm -v "$PWD:/repo:ro" aquasec/trivy:0.76.1@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c fs --scanners vuln,misconfig --severity HIGH,CRITICAL --ignore-unfixed --exit-code=1 /repo
       - name: Prepare release candidate
         if: github.event_name == 'push'
         run: >-
@@ -69,7 +69,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: denoland/setup-deno@v2
+      - uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2.0.5
         with:
           deno-version: v2.x
       - name: Installed runtime package
