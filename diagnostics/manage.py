@@ -23,7 +23,7 @@ BACKUPS = Path('/var/backups/mns-diagnostics')
 TARGETS = (SHELL, COLLECTOR, SUDOERS)
 OPERATIONS = ('config', 'config-check', 'logs', 'logs-text', 'journal', 'log-query', 'audio-stat', 'container-logs', 'versions', 'connectivity', 'asterisk-odbc',
               'artifacts', 'health', 'agent', 'host', 'network', 'timers', 'edge', 'access-summary', 'log-usage',
-              'voip-summary', 'schema-status')
+              'voip-summary', 'schema-status', 'schema-plan')
 
 
 def call(args, **kwargs):

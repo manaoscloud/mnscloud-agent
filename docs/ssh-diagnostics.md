@@ -357,3 +357,22 @@ The only new sudo entry is the exact `collector.py audio-stat` operation, with t
 on stdin. Install/update/rollback preserve the existing account and key. This adds no download
 capability and does not alter the resident Agent or recording/upload settings. Validate the
 security contract and disposable-container install/update/rollback suite before release.
+
+
+## Schema plan review (diagnostics 4.5)
+
+`schema-plan vX.Y.Z` returns the Agent `database.schema.reconcile` jobs of one released
+`mnscloud-db` tag (`stage`, `status`, `errorCode`) and the parsed result of its completed `plan`
+stage, so a reviewed non expand-only plan can be checked before the workspace
+`scripts/ops/schema-apply.sh` without the root credential. Only on database hosts; elsewhere it
+returns `NOT_A_DATABASE_HOST`.
+
+The tag travels on stdin and must match `vX.Y.Z` before any privilege is used; anything else is
+`DENIED`. The collector drops privileges and reads through the existing `mns-diagnostics`
+unix_socket MariaDB account, whose column grants on `SchemaReconcileJob` now include
+`SrjResultJson` (`diagnostics/db_account.py`; `SrjLastErrorMessage` stays excluded). The query is
+fixed: one `SELECT` of those columns for that tag, ordered by creation. Output is bounded to 4 MiB.
+
+The only new sudo entry is the exact `collector.py schema-plan` operation. Install/update/rollback
+preserve the account and key. Validate the security contract and the disposable-container suite
+before release; deliver with the normal Agent DEV rollout and an authorized PROD rollout.
