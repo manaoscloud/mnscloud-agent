@@ -62,7 +62,7 @@ Deno.test("collector reports unsealed, unreachable and absent hosts", async () =
     sealType: "awskms",
     tlsNotAfter: "2026-10-27T03:25:50Z",
   });
-  files["/private"] = "OPENVAULT_PRIVATE_HOST=172.17.0.176\nOPENVAULT_TLS_MODE=self-signed\n";
+  files["/private"] = "OPENVAULT_PRIVATE_HOST=172.31.201.10\nOPENVAULT_TLS_MODE=self-signed\n";
   await collectOpenVaultStatus("/private", {
     readTextFile,
     endDate,
@@ -71,7 +71,7 @@ Deno.test("collector reports unsealed, unreachable and absent hosts", async () =
       return Promise.resolve({ type: "shamir", initialized: true, sealed: true });
     },
   });
-  assertEquals(url, "https://172.17.0.176:8200/v1/sys/seal-status");
+  assertEquals(url, "https://172.31.201.10:8200/v1/sys/seal-status");
   assertEquals(
     await collectOpenVaultStatus("/absent", {
       readTextFile,

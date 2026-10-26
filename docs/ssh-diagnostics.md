@@ -9,7 +9,7 @@ All commands, usernames and output remain in English.
 
 ## Authorization and inventory
 
-Follow [SSH access policy](ssh-access.md). `/root/.ssh/config` is the exclusive
+Follow the workspace SSH access policy (`docs/ssh-access.md` of the MNSCloud workspace repository). `/root/.ssh/config` is the exclusive
 connection inventory. Real addresses, keys and operational reports remain outside Git.
 Since diagnostics 3.6 (2026-10-14, user decision) the Agent manages the account: every
 Agent install/update (DEV automatically, PROD through the approved promote/rollout) installs
@@ -117,7 +117,7 @@ interactive shell, SCP/SFTP or arbitrary commands are granted.
 Version 2 adds `/usr/local/lib/mns-diagnostics/collector.py` and a root-owned 0440
 `/etc/sudoers.d/mns-diagnostics` rule. This is a deliberate change from version 1's
 no-sudo model: it permits only `/usr/bin/python3 -I` with that fixed collector path
-and one of the six exact operations. It never grants generic Python, shell, cat,
+and one of the exact collector operations listed in `diagnostics/manage.py` (`OPERATIONS`). It never grants generic Python, shell, cat,
 editor, systemctl or Docker sudo access. The dispatcher clears the environment;
 Python isolated mode ignores user modules/PYTHONPATH; subprocesses use a clean env.
 The collector independently validates operation and argument count.
@@ -160,7 +160,7 @@ write their application output to the journal, so `journal` showed nothing about
 `journal`: one exact sudo entry (`collector.py container-logs`, no wildcard), parameters only on stdin,
 name validated against `mnscloud-[a-z0-9-]` before `docker logs --timestamps --since Nm --tail 2000`
 runs (no follow mode, other options or containers), every line masked like `logs-text`.
-Example: `ssh mns-workers-prod1 'container-logs mnscloud-workers 60'`.
+Example (from the workspace): `scripts/ops/diag.sh <registered-alias> container-logs mnscloud-workers 60`.
 
 Version 4.1 (2026-10-23) adds the DNS node: `pdns`, `pdns-recursor` and `dnsdist` units
 (`mnscloud-dns-config` is already covered by the `mnscloud-*` pattern), `dns.env` (non-secret keys
@@ -207,7 +207,10 @@ Target: Linux with systemd, Python 3, sudo/visudo, runuser, useradd, OpenSSH and
 diagnostic utilities. Missing prerequisites skip convergence with a warning in the Agent install
 log; the Agent update still succeeds. The tooling does not install packages or change sshd.
 
-Manual convergence on one host (root, from the installed Agent checkout) uses the same path:
+Manual convergence on one host (root, from the installed Agent checkout) uses the same path. It is
+a mutation of that host: on a shared MNSCloud host run it only with the user's explicit
+authorization for that host (workspace `docs/task-isolation.md` → section 2, trigger 6); the normal
+path is the Agent update.
 
 ```bash
 (
@@ -229,7 +232,8 @@ Failures during application restore the previous dispatcher, collector and sudoe
 files. A partially created new account is left for explicit administrator review;
 never blindly delete accounts or restart installation over conflicting files.
 
-To reverse an applied update, run the same approved `manage.py` as root with
+To reverse an applied update (same authorization rule as the manual convergence above), run the
+same approved `manage.py` as root with
 `--rollback /var/backups/mns-diagnostics/EXACT_BACKUP_DIRECTORY`, then repeat tests.
 The backup manifest and checksums are verified before restoration. Rollback never
 restores revoked keys, changes account identity, restarts services or rolls back
@@ -238,7 +242,8 @@ at the same pinned revision when needed.
 
 ## Validate and maintain
 
-1. Register an explicit diagnostic alias in SSH config with `IdentitiesOnly yes`,
+1. Register (within the user's scope for SSH config changes) an explicit diagnostic alias in SSH
+   config with `IdentitiesOnly yes`,
    `BatchMode yes` and `StrictHostKeyChecking no`. New host keys are saved automatically;
    changed known keys may also connect without confirmation, subject to OpenSSH's built-in
    restrictions. Keep the normal `known_hosts` files; conflicting entries are not automatically
