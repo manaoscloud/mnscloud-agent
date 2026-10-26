@@ -1,5 +1,6 @@
 #!/usr/bin/python3
-"""Converge the local MariaDB account of the SSH diagnostics schema-status command (diagnostics 4.0).
+"""Converge the local MariaDB account of the SSH diagnostics schema-status and schema-plan commands
+(diagnostics 4.0, 4.5).
 
 Runs as root from scripts/install-diagnostics.sh on every Agent install/update, only on database
 hosts. The account is 'mns-diagnostics'@'localhost' IDENTIFIED VIA unix_socket: only the OS account
@@ -24,7 +25,7 @@ MARIADB = Path('/usr/bin/mariadb')
 COLUMNS = {
     'SchemaAppliedRevision': ('SarClusterKey', 'SarDbReleaseTag', 'SarAppliedAt', 'SarStatus', 'SarDateDeleted'),
     'SchemaReconcileJob': ('SrjStage', 'SrjDbReleaseTag', 'SrjStatus', 'SrjStartedAt', 'SrjFinishedAt',
-                           'SrjLastErrorCode', 'SrjDateCreated', 'SrjDateDeleted'),
+                           'SrjLastErrorCode', 'SrjDateCreated', 'SrjDateDeleted', 'SrjResultJson'),
 }
 COLUMN_GRANT = re.compile(r'^GRANT SELECT \((.+)\) ON `([A-Za-z0-9_]+)`\.`([A-Za-z0-9_]+)` TO `mns-diagnostics`@`localhost`$')
 

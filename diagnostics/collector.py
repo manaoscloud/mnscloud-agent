@@ -21,7 +21,7 @@ import subprocess
 import sys
 from urllib.parse import urlsplit
 
-DIAGNOSTICS_VERSION = '4.4'
+DIAGNOSTICS_VERSION = '4.5'
 DIAGNOSTICS_USER = 'mns-diagnostics'
 CONFIG_DIR = Path('/etc/mnscloud')
 FILES = ('api', 'app', 'nginx', 'workers', 'rabbitmq', 'db', 'authentication', 'openvault', 'logs', 'dns')
@@ -1372,6 +1372,56 @@ def schema_status(drop=drop_privileges, runner=None):
             'scope': 'SCHEMA_REVISION_AND_RECONCILE_JOB_COLUMNS_ONLY'}
 
 
+# schema-plan (diagnostics 4.5): the reconcile jobs of one released mnscloud-db tag and the result of
+# its completed plan, read through the same unix_socket account with SELECT on the fixed columns of
+# db_account.py. It replaces the root credential for plan reviews before a reviewed schema apply.
+SCHEMA_PLAN_BYTES = 4 * 1024 * 1024
+
+
+def parse_schema_plan_request(text):
+    tag = text.strip()
+    if not re.fullmatch(r'v[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,6}', tag):
+        raise ValueError('Invalid release tag')
+    return tag
+
+
+def schema_plan_sql(tag):
+    parse_schema_plan_request(tag)
+    return ("SELECT SrjStage, SrjStatus, IFNULL(SrjLastErrorCode, '-'), IFNULL(SrjResultJson, '') "
+            "FROM SchemaReconcileJob WHERE SrjDbReleaseTag = '%s' AND SrjDateDeleted IS NULL "
+            "ORDER BY SrjDateCreated" % tag)
+
+
+def schema_plan(tag, drop=drop_privileges, runner=None):
+    try:
+        database = parse_env(trusted_read(DB_ENV)).get('DB_NAME', '')
+    except FileNotFoundError:
+        return {'status': 'NOT_A_DATABASE_HOST'}
+    except (OSError, ValueError, UnicodeError):
+        return {'status': 'UNREADABLE_OR_UNSAFE'}
+    if not re.fullmatch(r'[A-Za-z0-9_]{1,64}', database):
+        return {'status': 'INVALID_DB_NAME'}
+    drop()
+    runner = runner or (lambda sql: run(['/usr/bin/mariadb', '--protocol=socket', '-u', DIAGNOSTICS_USER, '-N',
+                                         '--batch', '--raw', database, '-e', sql], limit=SCHEMA_PLAN_BYTES, timeout=20))
+    try:
+        text = runner(schema_plan_sql(tag))
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return {'status': 'DIAGNOSTICS_DB_ACCOUNT_UNAVAILABLE', 'database': database, 'releaseTag': tag}
+    jobs, plan = [], None
+    for line in text.splitlines():
+        stage, status, error, result = (line.split('\t', 3) + [''] * 4)[:4]
+        jobs.append({'stage': safe_scalar(stage), 'status': safe_scalar(status), 'errorCode': safe_scalar(error)})
+        if stage == 'plan' and status == 'success' and result:
+            try:
+                data = json.loads(result)
+            except ValueError:
+                continue
+            plan = data.get('plan', data) if isinstance(data, dict) else None
+    return {'status': 'OK', 'database': database, 'releaseTag': tag, 'jobs': jobs, 'plan': plan,
+            'scope': 'SCHEMA_RECONCILE_JOB_COLUMNS_ONLY'}
+
+
 # Historical log queries use fixed sources and resumable, bounded pages. The request is data,
 # never a command. Cursors identify a source snapshot; they confer no additional authority.
 QUERY_SCAN_BYTES = 8 * 1024 * 1024
@@ -1754,6 +1804,7 @@ OPERATIONS = {
     'log-usage': ('log-usage', False, False),
     'voip-summary': ('voip-summary', False, False),
     'schema-status': ('schema-status', False, False),
+    'schema-plan': ('schema-plan', True, False),
 }
 
 
@@ -1776,10 +1827,12 @@ def main():
                 parse_journal_request(request)
             elif operation == 'container-logs':
                 parse_container_request(request)
+            elif operation == 'schema-plan':
+                request = parse_schema_plan_request(request)
             else:
                 request = parse_access_request(request)
         except (PermissionError, UnicodeDecodeError, ValueError):
-            usage = {'audio-stat': 'audio-stat BASE64URL_JSON', 'log-query': 'log-query BASE64URL_JSON', 'journal': 'journal UNIT [MINUTES] [PRIORITY]', 'container-logs': 'container-logs CONTAINER [MINUTES]'}.get(
+            usage = {'audio-stat': 'audio-stat BASE64URL_JSON', 'log-query': 'log-query BASE64URL_JSON', 'journal': 'journal UNIT [MINUTES] [PRIORITY]', 'container-logs': 'container-logs CONTAINER [MINUTES]', 'schema-plan': 'schema-plan vX.Y.Z'}.get(
                 operation, 'access-summary [MINUTES]')
             print('DENIED: Unsupported ' + operation + ' request. Use: ' + usage + '.', file=sys.stderr)
             return 126
@@ -1799,6 +1852,8 @@ def main():
         result = container_logs(request)
     elif operation == 'access-summary':
         result = access_summary(request)
+    elif operation == 'schema-plan':
+        result = schema_plan(request)
     elif operation in ('config', 'config-check', 'connectivity'):
         configs = load_configs()
         result = connectivity(configs) if operation == 'connectivity' else config_report(configs, operation == 'config-check')

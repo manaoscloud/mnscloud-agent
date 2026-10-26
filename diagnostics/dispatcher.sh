@@ -22,7 +22,7 @@ collector() {
 case "$COMMAND" in
   help|"")
     printf '%s\n' \
-      "Allowed diagnostic commands (diagnostics 4.4):" \
+      "Allowed diagnostic commands (diagnostics 4.5):" \
       "  identity" \
       "  memory" \
       "  disk" \
@@ -49,7 +49,8 @@ case "$COMMAND" in
       "  access-summary [MINUTES]" \
       "  log-usage" \
       "  voip-summary" \
-      "  schema-status"
+      "  schema-status" \
+      "  schema-plan TAG"
     ;;
   identity)
     /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C /usr/bin/id
@@ -119,6 +120,10 @@ case "$COMMAND" in
     ;;
   log-query\ *)
     printf '%s\n' "${COMMAND#* }" | collector log-query
+    ;;
+  schema-plan\ *)
+    # The released mnscloud-db tag travels on stdin; the collector accepts only vX.Y.Z.
+    printf '%s\n' "${COMMAND#* }" | collector schema-plan
     ;;
   journal\ *|container-logs\ *|access-summary\ *)
     # Only the fixed operation name reaches sudo; its parameters travel on stdin and the collector

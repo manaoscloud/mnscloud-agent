@@ -14,6 +14,14 @@ spec = importlib.util.spec_from_file_location('collector', SOURCE / 'collector.p
 collector = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(collector)
 
+def db_account_columns():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('db_account', SOURCE / 'db_account.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.COLUMNS
+
+
 class DiagnosticsContract(unittest.TestCase):
     def test_syntax(self):
         subprocess.run(['sh', '-n', str(SOURCE / 'dispatcher.sh')], check=True)
@@ -209,7 +217,7 @@ class DiagnosticsContract(unittest.TestCase):
         with patch.object(collector, 'run', side_effect=OSError), \
                 patch.object(collector, 'trusted_read', side_effect=OSError):
             result = collector.versions()
-        self.assertEqual(result['diagnostics'], '4.4')
+        self.assertEqual(result['diagnostics'], '4.5')
         for key in ('rtpengine-daemon', 'coturn', 'clickhouse-server', 'vector', 'pdns-server', 'pdns-recursor',
                     'dnsdist', 'dns_checkout_version', 'media_checkout_version',
                     'turn_checkout_version', 'logs_checkout_version',
@@ -561,6 +569,36 @@ class DiagnosticsV4Contract(unittest.TestCase):
             self.assertTrue(sql.startswith('SELECT '))
             self.assertNotIn('Message', sql)
             self.assertNotIn('Json', sql)
+
+    def test_schema_plan_reads_one_tag_through_the_restricted_account(self):
+        calls, dropped = [], []
+        plan = {'plan': {'expand_only': False, 'destructive_ops': 1,
+                         'operations': [{'op': 'retire_routine', 'routine': 'ProcOld'}]}}
+
+        def runner(sql):
+            calls.append(sql)
+            return ('inspect\tsuccess\t-\t\n'
+                    'plan\tsuccess\t-\t' + json.dumps(plan) + '\n'
+                    'apply\tfailed\tCONFIRM_DESTRUCTIVE_REQUIRED\t\n')
+
+        with patch.object(collector, 'trusted_read', return_value='DB_NAME=clouddb\nDB_ROOT_PASSWORD=CANARY\n'):
+            result = collector.schema_plan('v0.1.600', drop=lambda: dropped.append(True), runner=runner)
+        self.assertEqual(dropped, [True])
+        self.assertEqual(calls, [collector.schema_plan_sql('v0.1.600')])
+        self.assertTrue(calls[0].startswith('SELECT SrjStage'))
+        self.assertIn("SrjDbReleaseTag = 'v0.1.600'", calls[0])
+        self.assertEqual(result['plan']['operations'][0]['op'], 'retire_routine')
+        self.assertEqual([job['stage'] for job in result['jobs']], ['inspect', 'plan', 'apply'])
+        self.assertNotIn('CANARY', json.dumps(result))
+        self.assertIn('SrjResultJson', db_account_columns()['SchemaReconcileJob'])
+        for tag in ("v1.2.3' OR '1'='1", 'SELECT 1', 'v1.2', 'latest', ''):
+            with self.assertRaises(ValueError):
+                collector.parse_schema_plan_request(tag)
+            out = subprocess.run(['python3', '-I', str(SOURCE / 'collector.py'), 'schema-plan'],
+                                 input=tag.encode() + b'\n', capture_output=True)
+            self.assertEqual(out.returncode, 126, tag)
+        self.assertIn('schema-plan', (SOURCE / 'manage.py').read_text())
+        self.assertIn('schema-plan TAG', (SOURCE / 'dispatcher.sh').read_text())
 
     def test_db_account_grants_are_column_scoped(self):
         spec_db = importlib.util.spec_from_file_location('db_account', SOURCE / 'db_account.py')
