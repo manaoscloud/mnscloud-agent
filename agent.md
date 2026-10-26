@@ -224,7 +224,7 @@ Linux format:
 [agent]
 name = server-01-local-label
 hostname = server-01.local
-api_base = https://dev1.publichost.cloud
+api_base = https://api.example.com
 poll_interval_ms = 15000
 job_wait_seconds = 20
 heartbeat_interval_ms = 60000

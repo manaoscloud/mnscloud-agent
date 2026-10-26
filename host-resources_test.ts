@@ -42,17 +42,17 @@ Deno.test("private addresses come from ip -j addr, private ranges only", () => {
     {
       ifname: "eth0",
       addr_info: [
-        { family: "inet", local: "172.17.0.198" },
+        { family: "inet", local: "172.31.202.10" },
         { family: "inet", local: "203.0.113.7" },
         { family: "inet6", local: "fe80::1" },
         { family: "inet6", local: "fd00::198" },
-        { family: "inet", local: "172.17.0.198" },
+        { family: "inet", local: "172.31.202.10" },
       ],
     },
     { ifname: "docker0", addr_info: [{ family: "inet", local: "10.88.0.1" }] },
   ]);
   const found = parsePrivateAddresses(sample);
-  check(JSON.stringify(found) === JSON.stringify(["172.17.0.198", "fd00::198", "10.88.0.1"]));
+  check(JSON.stringify(found) === JSON.stringify(["172.31.202.10", "fd00::198", "10.88.0.1"]));
   check(parsePrivateAddresses("not json").length === 0);
   check(parsePrivateAddresses("{}").length === 0);
 });

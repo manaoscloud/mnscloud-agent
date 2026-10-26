@@ -518,10 +518,10 @@ class DiagnosticsV4Contract(unittest.TestCase):
 
     def test_network_listeners_have_no_processes(self):
         sample = ('tcp   LISTEN 0 511 0.0.0.0:443 0.0.0.0:* users:(("nginx",pid=1,fd=6))\n'
-                  'tcp   LISTEN 0 4096 [::]:22 [::]:*\nudp   UNCONN 0 0 172.17.0.100:5060 0.0.0.0:*\n')
+                  'tcp   LISTEN 0 4096 [::]:22 [::]:*\nudp   UNCONN 0 0 172.31.200.10:5060 0.0.0.0:*\n')
         self.assertEqual(collector.parse_listeners(sample), [
             {'proto': 'tcp', 'address': '[::]', 'port': 22}, {'proto': 'tcp', 'address': '0.0.0.0', 'port': 443},
-            {'proto': 'udp', 'address': '172.17.0.100', 'port': 5060}])
+            {'proto': 'udp', 'address': '172.31.200.10', 'port': 5060}])
 
     def test_voip_summary_returns_counters_only(self):
         outputs = {
