@@ -328,7 +328,7 @@ async function isExecutableFile(path: string) {
 async function applyRuntimeCapabilities(config: AgentConfig) {
   config.capabilities["mnscloud.filesystem.transfer.v1"] = !IS_WINDOWS &&
     await isExecutableFile("/usr/bin/python3") &&
-    await isExecutableFile("/opt/mnscloud/mnscloud-agent/filesystem-transfer.py");
+    await isExecutableFile("/opt/mnscloud/agent/filesystem-transfer.py");
   // Network diagnosis needs no installed runtime: every Agent (Linux and Windows) can probe.
   config.capabilities[DNS_PROBE_CAPABILITY] = true;
   config.capabilities[DNS_MONITOR_CAPABILITY] = true;
@@ -1911,7 +1911,7 @@ async function executeFilesystemTransfer(
   try {
     if (IS_WINDOWS) throw new Error("Unsupported filesystem transfer platform");
     const child = new Deno.Command("python3", {
-      args: ["/opt/mnscloud/mnscloud-agent/filesystem-transfer.py"],
+      args: ["/opt/mnscloud/agent/filesystem-transfer.py"],
       stdin: "piped",
       stdout: "piped",
       stderr: "piped",
