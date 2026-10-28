@@ -24,3 +24,10 @@ linux = (root / "scripts/install-agent.sh").read_text()
 assert "install -m 0755 '${AGENT_SOURCE_DIR}/filesystem-transfer.py' '${install_dir}/filesystem-transfer.py'" in linux
 compile((root / "filesystem-transfer.py").read_text(), "filesystem-transfer.py", "exec")
 print("Linux: bounded Filesystem helper is included")
+
+# Capability detection and execution must select the installed helper, not a checkout file.
+main = (root / "main.ts").read_text()
+assert main.count('"/opt/mnscloud/agent/filesystem-transfer.py"') == 2
+assert "/opt/mnscloud/mnscloud-agent/filesystem-transfer.py" not in main
+assert 'local install_dir="/opt/mnscloud/agent"' in linux
+print("Linux: capability detection and job execution use the installed helper")
