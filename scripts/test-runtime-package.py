@@ -19,3 +19,8 @@ for platform, installer, pattern in plans:
             shutil.copyfile(root / name, Path(temporary) / name)
         subprocess.run(["deno", "check", str(Path(temporary) / "main.ts")], check=True)
     print(f"{platform}: installed runtime dependency closure verified")
+
+linux = (root / "scripts/install-agent.sh").read_text()
+assert "install -m 0755 '${AGENT_SOURCE_DIR}/filesystem-transfer.py' '${install_dir}/filesystem-transfer.py'" in linux
+compile((root / "filesystem-transfer.py").read_text(), "filesystem-transfer.py", "exec")
+print("Linux: bounded Filesystem helper is included")
