@@ -22,7 +22,7 @@ export type NginxEdgeWebappsSettings = {
  * Bumped whenever the rendered ThemeDomain server block changes in a way existing vhosts must
  * pick up: the Agent re-renders every vhost once when its stored revision differs.
  */
-export const NGINX_EDGE_RENDER_REVISION = "2026-10-19.pos-camera";
+export const NGINX_EDGE_RENDER_REVISION = "2026-10-28.filesystem-transfer";
 
 export type EdgeSurface = "app" | "softphone" | "scanner" | "webapp";
 

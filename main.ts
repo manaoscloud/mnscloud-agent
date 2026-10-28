@@ -326,6 +326,9 @@ async function isExecutableFile(path: string) {
 }
 
 async function applyRuntimeCapabilities(config: AgentConfig) {
+  config.capabilities["mnscloud.filesystem.transfer.v1"] = !IS_WINDOWS &&
+    await isExecutableFile("/usr/bin/python3") &&
+    await isExecutableFile("/opt/mnscloud/mnscloud-agent/filesystem-transfer.py");
   // Network diagnosis needs no installed runtime: every Agent (Linux and Windows) can probe.
   config.capabilities[DNS_PROBE_CAPABILITY] = true;
   config.capabilities[DNS_MONITOR_CAPABILITY] = true;
@@ -1897,6 +1900,73 @@ async function uploadJob(
   }
 }
 
+/** A short-lived, bounded helper owns file descriptors; no audio enters resident memory. */
+async function executeFilesystemTransfer(
+  job: LeaseJob,
+  config: AgentConfig,
+  agentUUID: string,
+  agentToken: string,
+) {
+  const payload = job.payload ?? {};
+  try {
+    if (IS_WINDOWS) throw new Error("Unsupported filesystem transfer platform");
+    const child = new Deno.Command("python3", {
+      args: ["/opt/mnscloud/mnscloud-agent/filesystem-transfer.py"],
+      stdin: "piped",
+      stdout: "piped",
+      stderr: "piped",
+    }).spawn();
+    const result = captureCommand(child, 185_000, () => {
+      try {
+        child.kill("SIGKILL");
+      } catch { /* Already exited. */ }
+    }, 4096).catch(() => ({ code: 1, stdout: "", stderr: "" }));
+    const writer = child.stdin.getWriter();
+    let inputWritten = false;
+    try {
+      await writer.write(new TextEncoder().encode(JSON.stringify({
+        api: config.apiBase,
+        agentUUID,
+        agentToken,
+        transferUUID: job.jobUUID,
+        leaseUUID: job.leaseToken,
+        action: payload.action,
+        source: payload.source,
+        relativePath: payload.relativePath,
+        range: payload.range,
+        expiresAt: payload.expiresAt,
+        expectedSha256: payload.expectedSha256,
+      })));
+      inputWritten = true;
+    } catch {
+      try {
+        child.kill("SIGKILL");
+      } catch { /* Already exited. */ }
+    } finally {
+      await writer.close().catch(() => undefined);
+    }
+    const outcome = await result;
+    if (!inputWritten || outcome.code !== 0) throw new Error("Filesystem transfer failed");
+    const metadata = JSON.parse(outcome.stdout);
+    await jsonRequest(config, `/agent/jobs/${job.jobUUID}/complete`, agentToken, agentUUID, {
+      jobType: "filesystem.transfer",
+      leaseToken: job.leaseToken,
+      result: { exists: metadata.exists, sizeBytes: metadata.sizeBytes, sha256: metadata.sha256 },
+    });
+  } catch {
+    await failJob(
+      config,
+      job.jobUUID,
+      agentUUID,
+      agentToken,
+      "FILESYSTEM_TRANSFER_FAILED",
+      "The bounded filesystem transfer did not complete.",
+      "filesystem.transfer",
+      job.leaseToken,
+    );
+  }
+}
+
 async function syncMediaFileJob(
   job: LeaseJob,
   config: AgentConfig,
@@ -3227,6 +3297,11 @@ ${frontendSecurityHeaders("    ", rootSurface)}
 
   ${envJsBlock}
 
+  location ^~ /api/v1/filesystem/transfers/ {
+    include /etc/nginx/mnscloud/snippets/proxy-filesystem-transfer.conf;
+    proxy_pass $mnscloud_filesystem_upstream;
+  }
+
   location ^~ /api/v1/hosting/storage/transfers/ {
     include /etc/nginx/mnscloud/snippets/proxy-storage-transfer.conf;
     proxy_pass ${apiUpstream};
@@ -3315,6 +3390,11 @@ ${frontendSecurityHeaders("    ", rootSurface)}
   }
 
   ${envJsBlock}
+
+  location ^~ /api/v1/filesystem/transfers/ {
+    include /etc/nginx/mnscloud/snippets/proxy-filesystem-transfer.conf;
+    proxy_pass $mnscloud_filesystem_upstream;
+  }
 
   location ^~ /api/v1/hosting/storage/transfers/ {
     include /etc/nginx/mnscloud/snippets/proxy-storage-transfer.conf;
@@ -7623,7 +7703,9 @@ async function pollJobs(
     waitSeconds > 0 ? { limit: 3, waitSeconds } : { limit: 3 },
   );
   for (const job of result.data?.jobs ?? []) {
-    if (job.jobType === "media.file.sync") {
+    if (job.jobType === "filesystem.transfer") {
+      await executeFilesystemTransfer(job, config, agentUUID, agentToken);
+    } else if (job.jobType === "media.file.sync") {
       await syncMediaFileJob(job, config, agentUUID, agentToken);
     } else if (job.jobType === "pabx.command") {
       await executePabxCommandJob(job, config, agentUUID, agentToken);

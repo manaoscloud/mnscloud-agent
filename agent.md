@@ -787,3 +787,29 @@ Diagnostics 4.4 adds `audio-stat` for the existence, size and modification time 
 recording or PABX media file under fixed roots. It never returns audio or paths, and unsafe files
 are distinct from missing files. See the audio metadata contract in `docs/ssh-diagnostics.md`.
 The resident Agent, recording settings and file transfer behavior are unchanged.
+
+## Private Filesystem transfers
+
+Linux declares `mnscloud.filesystem.transfer.v1` only with the installed Python helper. The
+`filesystem.transfer` job is delivered by the control plane with a fenced lease, expiry, fixed
+source, relative audio path and optional single byte range. The helper accepts at most 16 KiB on
+stdin, opens every path component without following symlinks, rejects hard links and non-regular
+files, and streams at most 1 GiB in 64 KiB chunks. The process deadline is 180 seconds; the resident
+supervisor terminates it after 185. Permanent credentials are passed only on stdin, never command
+arguments or files.
+
+Reads POST to the configured HTTPS API origin at the transfer's fixed `/source` path, with Agent
+authentication and the exact lease. Redirects are not followed. The source file is never deleted
+after a read. Inspect/delete are restricted to canonical API media and require an exact SHA-256;
+they return metadata only. Deletion walks pinned parent descriptors and checks the opened file
+identity before unlinking.
+
+The API owns actor, tenant, commercial/resource authorization, immutable file owner, quotas and
+transfer lifecycle. The helper does not accept a caller-selected URL, root, command or shell.
+Windows does not advertise this Linux-only capability. Installers publish only the non-secret
+canonical Agent UUID at `/etc/mnscloud/runtime-agent.uuid` for co-located runtime ownership
+registration; Agent tokens remain private.
+
+Agent-rendered domains use the edge Filesystem transfer snippet and rendezvous upstream. Deploy the
+companion Nginx release before this Agent release. Follow the resident DEV soak requirements before
+PROD; unit tests alone are not the soak.

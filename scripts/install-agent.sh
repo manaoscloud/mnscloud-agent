@@ -788,6 +788,7 @@ main() {
   info "Preparing native mnscloud-agent..."
   run "mkdir -p '${install_dir}' '${config_dir}' '${data_dir}' '${logs_dir}' /var/lib/mnscloud/files /etc/nginx/mnscloud/theme-domains /var/www/certbot"
   run "cp '${AGENT_SOURCE_DIR}/main.ts' '${install_dir}/main.ts'"
+  run "install -m 0755 '${AGENT_SOURCE_DIR}/filesystem-transfer.py' '${install_dir}/filesystem-transfer.py'"
   run "cp '${AGENT_SOURCE_DIR}/host-resources.ts' '${install_dir}/host-resources.ts'"
   run "cp '${AGENT_SOURCE_DIR}/bounded-io.ts' '${install_dir}/bounded-io.ts'"
   run "cp '${AGENT_SOURCE_DIR}/scheduler.ts' '${install_dir}/scheduler.ts'"
@@ -827,6 +828,10 @@ main() {
 
   run "chmod 0755 '${install_dir}' '${config_dir}'"
   run "chmod 0700 '${data_dir}' '${logs_dir}'"
+  # Non-secret identity for co-located runtimes to persist immutable file ownership.
+  write_file "/etc/mnscloud/runtime-agent.uuid" "$agent_uuid"
+  run "chmod 0644 /etc/mnscloud/runtime-agent.uuid"
+
   run "chmod 0600 '${config_file}'"
   run "chmod 0644 '${service_file}'"
   run "systemctl daemon-reload"
