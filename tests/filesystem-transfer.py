@@ -3,6 +3,7 @@
 import importlib.util
 import hashlib
 import os
+import ssl
 from pathlib import Path
 import tempfile
 import time
@@ -72,6 +73,8 @@ class TransferTests(unittest.TestCase):
         self.assertEqual(b''.join(conn.parts), self.audio)
         self.assertEqual(conn.host, 'api.example.invalid')
         self.assertEqual(conn.path, '/api/v1/filesystem/transfers/' + self.request['transferUUID'] + '/source')
+        self.assertTrue(conn.kwargs['context'].check_hostname)
+        self.assertEqual(conn.kwargs['context'].verify_mode, ssl.CERT_REQUIRED)
         self.assertTrue(conn.closed)
         self.assertTrue((self.root / 'audio.wav').exists())
 
@@ -90,11 +93,13 @@ class TransferTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 module.target('freeswitch', path)
         for api in ['http://api.example.invalid', 'https://user@api.example.invalid',
-                    'https://api.example.invalid?target=elsewhere']:
+                    'https://api.example.invalid?target=elsewhere',
+                    'https://api.example.invalid/other/path']:
             with self.assertRaises(ValueError):
                 module.transfer({**self.request, 'api': api}, Connection)
+        expired = {**self.request, 'expiresAt': time.time() - 1}
         with self.assertRaises(ValueError):
-            module.transfer({**self.request, 'expiresAt': time.time() - 1}, Connection)
+            module.transfer(expired, Connection)
         with self.assertRaises(ValueError):
             module.transfer({**self.request, 'action': 'shell'}, Connection)
 

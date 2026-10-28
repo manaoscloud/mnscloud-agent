@@ -21,6 +21,7 @@ ROOTS = {
 }
 UUID = r'(?:[a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12}|[a-fA-F0-9]{32})'
 MAX_BYTES = 1024 ** 3
+INVALID_RANGE = "Unsatisfiable byte range"
 
 
 def target(source, relative):
@@ -66,17 +67,17 @@ def byte_range(header, size):
         return 0, size, 200
     match = re.fullmatch(r'bytes=(\d*)-(\d*)', header)
     if not match or not any(match.groups()) or size == 0:
-        raise ValueError('Unsatisfiable byte range')
+        raise ValueError(INVALID_RANGE)
     first, last = match.groups()
     if not first:
         count = int(last)
         if count <= 0:
-            raise ValueError('Unsatisfiable byte range')
+            raise ValueError(INVALID_RANGE)
         start, end = max(0, size - count), size - 1
     else:
         start, end = int(first), min(int(last), size - 1) if last else size - 1
     if start >= size or end < start:
-        raise ValueError('Unsatisfiable byte range')
+        raise ValueError(INVALID_RANGE)
     return start, end - start + 1, 206
 
 
@@ -119,24 +120,59 @@ def inspect_or_delete(request, path, deadline):
                 'sizeBytes': before.st_size, 'sha256': expected}
 
 
-def transfer(request, connection=http.client.HTTPSConnection):
+def validate_request(request):
     api = urlsplit(request['api'])
-    transfer_id = request['transferUUID']
     if (api.scheme != 'https' or not api.hostname or api.username or api.password
-            or api.query or api.fragment or not re.fullmatch(UUID, transfer_id)):
+            or api.query or api.fragment or api.path.rstrip('/') not in ('', '/api/v1')):
         raise ValueError('Invalid transfer endpoint')
-    if not re.fullmatch(UUID, request['agentUUID']) or not re.fullmatch(UUID, request['leaseUUID']):
-        raise ValueError('Invalid transfer identity')
-    transfer_id = str(uuid.UUID(transfer_id))
+    for key in ('transferUUID', 'agentUUID', 'leaseUUID'):
+        if not re.fullmatch(UUID, request[key]):
+            raise ValueError('Invalid transfer identity')
     if request.get('action') not in ('read', 'inspect', 'delete'):
         raise ValueError('Unsupported transfer action')
     deadline = float(request['expiresAt'])
-    remaining = deadline - time.time()
-    if not 0 < remaining <= 180:
+    if not 0 < deadline - time.time() <= 180:
         raise ValueError('Expired transfer')
-    for key in ('agentToken',):
-        if not isinstance(request[key], str) or not request[key] or re.search(r'[\r\n]', request[key]):
-            raise ValueError('Invalid transfer authorization')
+    token = request['agentToken']
+    if not isinstance(token, str) or not token or re.search(r'[\r\n]', token):
+        raise ValueError('Invalid transfer authorization')
+    return api, deadline
+
+
+def send_audio(conn, file, length, deadline):
+    sent = 0
+    while sent < length:
+        if time.time() >= deadline:
+            raise TimeoutError('Transfer deadline exceeded')
+        chunk = file.read(min(65536, length - sent))
+        if not chunk:
+            raise ValueError('Audio file changed')
+        conn.send(chunk)
+        sent += len(chunk)
+    return sent
+
+
+def send_headers(conn, request, before, start, length, status):
+    # Canonical UUID conversion and a fixed route exclude caller-supplied URL paths.
+    transfer_id = str(uuid.UUID(request['transferUUID']))
+    conn.putrequest('POST', '/api/v1/filesystem/transfers/' + transfer_id + '/source')
+    headers = {
+        'Authorization': 'Bearer ' + request['agentToken'],
+        'X-MNSCloud-Agent-UUID': request['agentUUID'],
+        'X-MNSCloud-Lease-UUID': request['leaseUUID'],
+        'Content-Type': 'application/octet-stream',
+        'Content-Length': str(length),
+        'X-MNSCloud-File-Size': str(before.st_size),
+        'X-MNSCloud-Range-Start': str(start),
+        'X-MNSCloud-File-Status': str(status),
+    }
+    for name, value in headers.items():
+        conn.putheader(name, value)
+    conn.endheaders()
+
+
+def transfer(request, connection=http.client.HTTPSConnection):
+    api, deadline = validate_request(request)
     path = target(request['source'], request['relativePath'])
     if request['action'] != 'read':
         return inspect_or_delete(request, path, deadline)
@@ -144,35 +180,14 @@ def transfer(request, connection=http.client.HTTPSConnection):
     with file:
         start, length, status = byte_range(request.get('range'), before.st_size)
         file.seek(start)
-        conn = connection(api.hostname, api.port or 443, timeout=min(30, remaining),
-                          context=ssl.create_default_context())
+        context = ssl.create_default_context()
+        context.check_hostname = True
+        context.verify_mode = ssl.CERT_REQUIRED
+        conn = connection(api.hostname, api.port or 443,
+                          timeout=min(30, deadline - time.time()), context=context)
         try:
-            base = api.path.rstrip('/')
-            if base.endswith('/api/v1'):
-                base = base[:-7]
-            conn.putrequest('POST', f'{base}/api/v1/filesystem/transfers/{transfer_id}/source')
-            headers = {
-                'Authorization': 'Bearer ' + request['agentToken'],
-                'X-MNSCloud-Agent-UUID': request['agentUUID'],
-                'X-MNSCloud-Lease-UUID': request['leaseUUID'],
-                'Content-Type': 'application/octet-stream',
-                'Content-Length': str(length),
-                'X-MNSCloud-File-Size': str(before.st_size),
-                'X-MNSCloud-Range-Start': str(start),
-                'X-MNSCloud-File-Status': str(status),
-            }
-            for name, value in headers.items():
-                conn.putheader(name, value)
-            conn.endheaders()
-            sent = 0
-            while sent < length:
-                if time.time() >= deadline:
-                    raise TimeoutError('Transfer deadline exceeded')
-                chunk = file.read(min(65536, length - sent))
-                if not chunk:
-                    raise ValueError('Audio file changed')
-                conn.send(chunk)
-                sent += len(chunk)
+            send_headers(conn, request, before, start, length, status)
+            sent = send_audio(conn, file, length, deadline)
             after = os.fstat(file.fileno())
             if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
                 raise ValueError('Audio file changed')
@@ -184,8 +199,12 @@ def transfer(request, connection=http.client.HTTPSConnection):
             conn.close()
 
 
+def alarm_expired(*_):
+    raise TimeoutError('Transfer deadline exceeded')
+
+
 def main():
-    signal.signal(signal.SIGALRM, lambda *_: (_ for _ in ()).throw(TimeoutError()))
+    signal.signal(signal.SIGALRM, alarm_expired)
     signal.alarm(180)
     try:
         raw = sys.stdin.buffer.read(16385)

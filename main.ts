@@ -7688,6 +7688,57 @@ async function executeRuntimeReconcileJob(
   }
 }
 
+async function executeLeasedJob(
+  job: LeaseJob,
+  config: AgentConfig,
+  agentUUID: string,
+  agentToken: string,
+): Promise<void> {
+  if (job.jobType === "filesystem.transfer") {
+    await executeFilesystemTransfer(job, config, agentUUID, agentToken);
+  } else if (job.jobType === "media.file.sync") {
+    await syncMediaFileJob(job, config, agentUUID, agentToken);
+  } else if (job.jobType === "pabx.command") {
+    await executePabxCommandJob(job, config, agentUUID, agentToken);
+  } else if (job.jobType === "cyber.security") {
+    await executeCyberSecurityJob(job, config, agentUUID, agentToken);
+  } else if (job.jobType === "nginx.edge") {
+    await executeNginxEdgeJob(job, config, agentUUID, agentToken);
+  } else if (job.jobType === "certbot") {
+    await executeCertbotJob(job, config, agentUUID, agentToken);
+  } else if (job.jobType === "website.site") {
+    await executeWebsiteSiteJob(job, config, agentUUID, agentToken);
+  } else if (job.jobType === "realtime.webrtc.edge") {
+    await executeWebRtcEdgeJob(job, config, agentUUID, agentToken);
+  } else if (job.jobType === "voip.sbc.runtime") {
+    await executeSbcRuntimeJob(job, config, agentUUID, agentToken);
+  } else if (job.jobType === "voip.softswitch.runtime") {
+    await executeSoftswitchRuntimeJob(job, config, agentUUID, agentToken);
+  } else if (job.jobType === "runtime.update") {
+    await executeRuntimeUpdateJob(job, config, agentUUID, agentToken);
+  } else if (job.jobType === "authentication.server.lifecycle") {
+    await executeAuthenticationLifecycleJob(job, config, agentUUID, agentToken);
+  } else if (job.jobType === "authentication.database.principal") {
+    await executeAuthenticationDatabaseJob(job, config, agentUUID, agentToken);
+  } else if (job.jobType === DATABASE_PRINCIPAL_JOB_TYPE) {
+    await executeDatabasePrincipalJob(job, config, agentUUID, agentToken);
+  } else if (job.jobType === "database.schema.reconcile") {
+    await executeDatabaseSchemaReconcileJob(job, config, agentUUID, agentToken);
+  } else if (job.jobType === "database.table.maintenance") {
+    await executeDatabaseTableMaintenanceJob(job, config, agentUUID, agentToken);
+  } else if (job.jobType === RUNTIME_RECONCILE_JOB_TYPE) {
+    await executeRuntimeReconcileJob(job, config, agentUUID, agentToken);
+  } else if (job.jobType === LOGS_REFRESH_JOB_TYPE) {
+    await executeLogsRefreshJob(job);
+  } else if (job.jobType === DNS_PROBE_JOB_TYPE) {
+    await executeDnsProbeJob(job, config, agentUUID, agentToken);
+  } else if (job.jobType === DNS_MONITOR_JOB_TYPE) {
+    startDnsMonitorJob(job, config, agentUUID, agentToken);
+  } else {
+    await uploadJob(job, config, agentUUID, agentToken);
+  }
+}
+
 /** Leases and runs jobs; true when the API honored the long-poll, so the next lease can follow at once. */
 async function pollJobs(
   config: AgentConfig,
@@ -7703,49 +7754,8 @@ async function pollJobs(
     waitSeconds > 0 ? { limit: 3, waitSeconds } : { limit: 3 },
   );
   for (const job of result.data?.jobs ?? []) {
-    if (job.jobType === "filesystem.transfer") {
-      await executeFilesystemTransfer(job, config, agentUUID, agentToken);
-    } else if (job.jobType === "media.file.sync") {
-      await syncMediaFileJob(job, config, agentUUID, agentToken);
-    } else if (job.jobType === "pabx.command") {
-      await executePabxCommandJob(job, config, agentUUID, agentToken);
-    } else if (job.jobType === "cyber.security") {
-      await executeCyberSecurityJob(job, config, agentUUID, agentToken);
-    } else if (job.jobType === "nginx.edge") {
-      await executeNginxEdgeJob(job, config, agentUUID, agentToken);
-    } else if (job.jobType === "certbot") {
-      await executeCertbotJob(job, config, agentUUID, agentToken);
-    } else if (job.jobType === "website.site") {
-      await executeWebsiteSiteJob(job, config, agentUUID, agentToken);
-    } else if (job.jobType === "realtime.webrtc.edge") {
-      await executeWebRtcEdgeJob(job, config, agentUUID, agentToken);
-    } else if (job.jobType === "voip.sbc.runtime") {
-      await executeSbcRuntimeJob(job, config, agentUUID, agentToken);
-    } else if (job.jobType === "voip.softswitch.runtime") {
-      await executeSoftswitchRuntimeJob(job, config, agentUUID, agentToken);
-    } else if (job.jobType === "runtime.update") {
-      await executeRuntimeUpdateJob(job, config, agentUUID, agentToken);
-    } else if (job.jobType === "authentication.server.lifecycle") {
-      await executeAuthenticationLifecycleJob(job, config, agentUUID, agentToken);
-    } else if (job.jobType === "authentication.database.principal") {
-      await executeAuthenticationDatabaseJob(job, config, agentUUID, agentToken);
-    } else if (job.jobType === DATABASE_PRINCIPAL_JOB_TYPE) {
-      await executeDatabasePrincipalJob(job, config, agentUUID, agentToken);
-    } else if (job.jobType === "database.schema.reconcile") {
-      await executeDatabaseSchemaReconcileJob(job, config, agentUUID, agentToken);
-    } else if (job.jobType === "database.table.maintenance") {
-      await executeDatabaseTableMaintenanceJob(job, config, agentUUID, agentToken);
-    } else if (job.jobType === RUNTIME_RECONCILE_JOB_TYPE) {
-      await executeRuntimeReconcileJob(job, config, agentUUID, agentToken);
-    } else if (job.jobType === LOGS_REFRESH_JOB_TYPE) {
-      await executeLogsRefreshJob(job);
-    } else if (job.jobType === DNS_PROBE_JOB_TYPE) {
-      await executeDnsProbeJob(job, config, agentUUID, agentToken);
-    } else if (job.jobType === DNS_MONITOR_JOB_TYPE) {
-      startDnsMonitorJob(job, config, agentUUID, agentToken);
-    } else {
-      await uploadJob(job, config, agentUUID, agentToken);
-    }
+    // Serial execution bounds subprocesses and streams to one active leased job.
+    await executeLeasedJob(job, config, agentUUID, agentToken); // NOSONAR: intentional single-flight job lane.
   }
   return waitSeconds > 0 && Number(result.data?.waitSeconds ?? 0) > 0;
 }
