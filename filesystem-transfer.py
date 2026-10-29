@@ -121,21 +121,46 @@ def inspect_or_delete(request, path, deadline):
 
 
 def validate_request(request):
-    api = urlsplit(request['api'])
+    api_endpoint = request.get('api') or request.get('apiBase')
+    if not api_endpoint or not isinstance(api_endpoint, str):
+        raise ValueError('Invalid transfer endpoint')
+    api = urlsplit(api_endpoint)
     if (api.scheme != 'https' or not api.hostname or api.username or api.password
             or api.query or api.fragment or api.path.rstrip('/') not in ('', '/api/v1')):
         raise ValueError('Invalid transfer endpoint')
-    for key in ('transferUUID', 'agentUUID', 'leaseUUID'):
-        if not re.fullmatch(UUID, request[key]):
+    transfer_uuid = request.get('transferUUID')
+    agent_uuid = request.get('agentUUID')
+    lease_uuid = request.get('leaseUUID') or request.get('leaseToken')
+    for val in (transfer_uuid, agent_uuid, lease_uuid):
+        if not val or not re.fullmatch(UUID, str(val)):
             raise ValueError('Invalid transfer identity')
+    request['transferUUID'] = str(transfer_uuid)
+    request['agentUUID'] = str(agent_uuid)
+    request['leaseUUID'] = str(lease_uuid)
     if request.get('action') not in ('read', 'inspect', 'delete'):
         raise ValueError('Unsupported transfer action')
-    deadline = float(request['expiresAt'])
+    raw_deadline = request.get('expiresAt')
+    if isinstance(raw_deadline, (int, float)):
+        deadline = float(raw_deadline)
+    elif isinstance(raw_deadline, str):
+        try:
+            deadline = float(raw_deadline)
+        except ValueError:
+            import datetime
+            iso_str = raw_deadline.replace('Z', '+00:00')
+            deadline = datetime.datetime.fromisoformat(iso_str).timestamp()
+    else:
+        raise ValueError('Invalid deadline')
     if not 0 < deadline - time.time() <= 180:
         raise ValueError('Expired transfer')
-    token = request['agentToken']
+    token = request.get('agentToken')
     if not isinstance(token, str) or not token or re.search(r'[\r\n]', token):
         raise ValueError('Invalid transfer authorization')
+    if 'relativePath' not in request and 'objectKey' in request:
+        rel = request['objectKey']
+        if rel.startswith('/var/lib/mnscloud/files/'):
+            rel = rel[len('/var/lib/mnscloud/files/'):]
+        request['relativePath'] = rel
     return api, deadline
 
 
@@ -194,7 +219,7 @@ def transfer(request, connection=http.client.HTTPSConnection):
             response = conn.getresponse()
             if response.status != 204:
                 raise ValueError('Transfer receiver rejected the file')
-            return {'status': 'complete', 'bytes': sent}
+            return {'status': 'complete', 'bytes': sent, 'exists': True, 'sizeBytes': before.st_size}
         finally:
             conn.close()
 
