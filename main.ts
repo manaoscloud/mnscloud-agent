@@ -1923,6 +1923,14 @@ async function executeFilesystemTransfer(
     }, 4096).catch(() => ({ code: 1, stdout: "", stderr: "" }));
     const writer = child.stdin.getWriter();
     let inputWritten = false;
+    const relPath = payload.relativePath ?? (
+      typeof payload.objectKey === "string" && payload.objectKey.startsWith("/var/lib/mnscloud/files/")
+        ? payload.objectKey.slice("/var/lib/mnscloud/files/".length)
+        : payload.objectKey
+    );
+    const deadlineSeconds = typeof payload.expiresAt === "string"
+      ? (Date.parse(payload.expiresAt) / 1000)
+      : payload.expiresAt;
     try {
       await writer.write(new TextEncoder().encode(JSON.stringify({
         api: config.apiBase,
@@ -1932,9 +1940,9 @@ async function executeFilesystemTransfer(
         leaseUUID: job.leaseToken,
         action: payload.action,
         source: payload.source,
-        relativePath: payload.relativePath,
+        relativePath: relPath,
         range: payload.range,
-        expiresAt: payload.expiresAt,
+        expiresAt: deadlineSeconds,
         expectedSha256: payload.expectedSha256,
       })));
       inputWritten = true;
@@ -1951,7 +1959,7 @@ async function executeFilesystemTransfer(
     await jsonRequest(config, `/agent/jobs/${job.jobUUID}/complete`, agentToken, agentUUID, {
       jobType: "filesystem.transfer",
       leaseToken: job.leaseToken,
-      result: { exists: metadata.exists, sizeBytes: metadata.sizeBytes, sha256: metadata.sha256 },
+      result: { exists: metadata.exists, sizeBytes: metadata.sizeBytes, sha256: metadata.sha256, bytes: metadata.bytes },
     });
   } catch {
     await failJob(
