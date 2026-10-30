@@ -158,6 +158,7 @@ type AgentConfig = {
   nginxEdgeSoftphonePaths: string[];
   nginxEdgeScannerPaths: string[];
   nginxEdgeTimeclockPaths: string[];
+  nginxEdgeFieldPaths: string[];
   /** Agent ini overrides; /etc/mnscloud/nginx.env is re-read before every nginx edge job. */
   nginxEdgeWebappsIni: NginxEdgeWebappsIni;
   nginxEdgeTestCommand: string;
@@ -3491,6 +3492,8 @@ ${
           ? "scanner"
           : config.nginxEdgeTimeclockPaths.includes(path)
           ? "timeclock"
+          : config.nginxEdgeFieldPaths.includes(path)
+          ? "field"
           : "webapp",
       )
     }
