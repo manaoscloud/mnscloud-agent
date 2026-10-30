@@ -97,7 +97,7 @@ Deno.test("the softphone path comes from MNSCLOUD_PHONEWEB_PATH, defaulting to /
   assertEquals(nginxEdgeWebapps(legacyIni, {}).nginxEdgeSoftphonePaths, ["/phoneweb/"]);
   assertEquals(nginxEdgeWebapps(legacyIni, {}).nginxEdgeScannerPaths, ["/pos/"]);
   assertEquals(nginxEdgeWebapps(legacyIni, {}).nginxEdgeTimeclockPaths, ["/pulse/"]);
-  assertEquals(nginxEdgeWebapps(legacyIni, {}).nginxEdgeFieldPaths, ["/infragis/"]);
+  assertEquals(nginxEdgeWebapps(legacyIni, {}).nginxEdgeFieldPaths, ["/infragis-mobile/"]);
   assertEquals(
     nginxEdgeWebapps(legacyIni, {
       MNSCLOUD_ENABLE_WEBAPPS_PROXY: "true",
