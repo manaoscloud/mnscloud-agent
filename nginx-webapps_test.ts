@@ -66,6 +66,15 @@ Deno.test("edge headers: App and softphone may use the microphone, only the soft
   assertEquals(scanner.includes("microphone=()"), true);
   assertEquals(scanner.includes("frame-ancestors 'none'"), true);
   for (const other of [app, softphone, webapp]) assertEquals(other.includes("camera=()"), true);
+  // Pulse records the punch position with the geolocation of its own origin; nobody else gets it.
+  const timeclock = edgeSecurityHeaders("timeclock", "");
+  assertEquals(timeclock.includes("geolocation=(self)"), true);
+  assertEquals(timeclock.includes("camera=()"), true);
+  assertEquals(timeclock.includes("microphone=()"), true);
+  assertEquals(timeclock.includes("frame-ancestors 'none'"), true);
+  for (const other of [app, softphone, webapp, scanner]) {
+    assertEquals(other.includes("geolocation=()"), true);
+  }
   assertEquals(app.split("\n").length, 4);
   // Tutorial videos: only the App frames youtube-nocookie.com.
   assertEquals(app.includes("frame-src 'self' https://www.youtube-nocookie.com;"), true);
@@ -81,6 +90,14 @@ Deno.test("the softphone path comes from MNSCLOUD_PHONEWEB_PATH, defaulting to /
   assertEquals(custom.nginxEdgeSoftphonePaths, ["/phone/"]);
   assertEquals(nginxEdgeWebapps(legacyIni, {}).nginxEdgeSoftphonePaths, ["/phoneweb/"]);
   assertEquals(nginxEdgeWebapps(legacyIni, {}).nginxEdgeScannerPaths, ["/pos/"]);
+  assertEquals(nginxEdgeWebapps(legacyIni, {}).nginxEdgeTimeclockPaths, ["/pulse/"]);
+  assertEquals(
+    nginxEdgeWebapps(legacyIni, {
+      MNSCLOUD_ENABLE_WEBAPPS_PROXY: "true",
+      MNSCLOUD_PULSE_PATH: "ponto",
+    }).nginxEdgeTimeclockPaths,
+    ["/ponto/"],
+  );
   assertEquals(
     nginxEdgeWebapps(legacyIni, {
       MNSCLOUD_ENABLE_WEBAPPS_PROXY: "true",
