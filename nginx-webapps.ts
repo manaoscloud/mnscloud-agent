@@ -84,7 +84,8 @@ function timeclockPaths(env: Record<string, string>) {
 
 function fieldPaths(env: Record<string, string>) {
   const configured = list(env.MNSCLOUD_INFRAGIS_PATH).map(normalizePath).filter(Boolean);
-  return configured.length ? configured : ["/infragis/"];
+  // Never /infragis/: that prefix belongs to the App InfraGIS pages.
+  return configured.length ? configured : ["/infragis-mobile/"];
 }
 
 function list(value: string | undefined) {
