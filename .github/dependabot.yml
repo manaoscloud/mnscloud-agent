@@ -1,6 +1,20 @@
+# Dependabot: one grouped pull request per ecosystem per week, never rebased automatically.
+# Each rebase of an open Dependabot PR re-ran the full CI (74 runs on one branch, 2026-11-02
+# work telemetry), so `rebase-strategy: disabled` keeps an open PR at one CI run.
+# Delivery (docs/delivery-pipeline.md -> Dependency updates): an agent applies the grouped bump in
+# its own task branch (chore/deps-<yyyy-ww>) and merges it with scripts/ops/merge.sh; Dependabot
+# then closes its PR by itself because the dependency is already up to date.
 version: 2
 updates:
   - package-ecosystem: 'github-actions'
     directory: '/'
     schedule:
       interval: 'weekly'
+      day: 'monday'
+      time: '06:00'
+      timezone: 'America/Sao_Paulo'
+    open-pull-requests-limit: 2
+    rebase-strategy: 'disabled'
+    groups:
+      github-actions:
+        patterns: ['*']
