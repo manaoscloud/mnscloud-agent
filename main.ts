@@ -1,3 +1,5 @@
+import { VoipRateWindow } from "./voip-rate.ts";
+import { parseAsteriskLoad, parseFreeSwitchLoad, type VoipLoad } from "./voip-load.ts";
 import { JOB_REPORT_PATH, JOB_REPORT_RETRY_DELAYS_MS, transientReportError } from "./job-report.ts";
 import { trunkRegistrationStatus } from "./pabx-state.ts";
 import {
@@ -1633,6 +1635,7 @@ async function freeswitchEventEndpoint(config: AgentConfig): Promise<EventEndpoi
   if (!secret) return null;
   return {
     engine: "freeswitch",
+    channelEvents: true,
     hostname: config.freeswitchEslHost,
     port: config.freeswitchEslPort,
     secret,
@@ -1643,6 +1646,7 @@ async function freeswitchEventEndpoint(config: AgentConfig): Promise<EventEndpoi
  * Engine registration events (AMI ContactStatus, ESL sofia::register/unregister/expire) send the
  * presence change within seconds; reads are coalesced to at most one every 5 s.
  */
+const voipRateWindows = { asterisk: new VoipRateWindow(), freeswitch: new VoipRateWindow() };
 function startPabxPresenceEvents(config: AgentConfig, agentUUID: string) {
   if (IS_WINDOWS) return;
   const wake = coalesce(async () => {
@@ -1652,8 +1656,49 @@ function startPabxPresenceEvents(config: AgentConfig, agentUUID: string) {
   const logEvent = (level: "info" | "warn", message: string, details?: unknown) =>
     log(level, message, details);
   for (const resolve of [asteriskEventEndpoint, freeswitchEventEndpoint]) {
-    listenPabxEvents({ resolve: () => resolve(config), onEvent: wake.trigger, log: logEvent });
+    listenPabxEvents({
+      resolve: () => resolve(config),
+      onEvent: wake.trigger,
+      log: logEvent,
+      onChannelStart: (engine) => voipRateWindows[engine].record(Date.now()),
+      onStreamState: (engine, connected) =>
+        connected
+          ? voipRateWindows[engine].connect(Date.now())
+          : voipRateWindows[engine].disconnect(),
+      onKeepalive: (engine) => voipRateWindows[engine].acknowledge(Date.now()),
+    });
   }
+}
+
+async function collectVoipLoad(config: AgentConfig): Promise<VoipLoad[]> {
+  const observations: VoipLoad[] = [];
+  const timeout = Math.min(config.commandTimeoutMs, 5000);
+  if (config.capabilities["voip.freeswitch.manage"]) {
+    try {
+      const [calls, status] = await Promise.all([
+        runLocalCommand(config.freeswitchCli, ["-x", "show calls count"], timeout),
+        runLocalCommand(config.freeswitchCli, ["-x", "status"], timeout),
+      ]);
+      if (calls.code === 0 && status.code === 0) {
+        observations.push(
+          parseFreeSwitchLoad(calls.stdout, status.stdout, new Date().toISOString()),
+        );
+      }
+    } catch { /* Unavailable metrics remain absent; never manufacture idle capacity. */ }
+  }
+  if (config.capabilities["voip.asterisk.manage"]) {
+    try {
+      const result = await runLocalCommand(
+        config.asteriskCli,
+        ["-rx", "core show channels count"],
+        timeout,
+      );
+      if (result.code === 0) {
+        observations.push(parseAsteriskLoad(result.stdout, new Date().toISOString()));
+      }
+    } catch { /* The aggregate must not interrupt heartbeat or disclose command output. */ }
+  }
+  return observations;
 }
 
 async function performHeartbeat(
@@ -1667,6 +1712,7 @@ async function performHeartbeat(
     hostMetrics = await collectHostMetrics();
     lastHostMetricsAt = Date.now();
   }
+  const voipLoad = hostMetrics ? await collectVoipLoad(config) : [];
   const pabxPresence = pabxPresenceTracker.build(await collectPabxPresenceObservations(config));
   const runtimeVersions = await collectRuntimeVersions(config);
   const sbcNodeUUID = config.capabilities["voip.sbc.manage"]
@@ -1726,6 +1772,12 @@ async function performHeartbeat(
       pabxPresence: pabxPresence.report,
       cyberSecurityStatus: cyberSecurityStatus ?? undefined,
       hostMetrics: hostMetrics ?? undefined,
+      voipLoad: voipLoad.length
+        ? voipLoad.map((load) => ({
+          ...load,
+          channelStartsPeakPerSecond: voipRateWindows[load.engine].sample(Date.now()),
+        }))
+        : undefined,
       openvaultStatus: openvaultStatus ?? undefined,
       privateAddresses: hostAddresses?.addresses,
       publicIpv6Addresses: hostAddresses?.publicIpv6,

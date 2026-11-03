@@ -801,6 +801,8 @@ main() {
   run "cp '${AGENT_SOURCE_DIR}/runtime-reconcile.ts' '${install_dir}/runtime-reconcile.ts'"
   run "cp '${AGENT_SOURCE_DIR}/database-principal.ts' '${install_dir}/database-principal.ts'"
   run "cp '${AGENT_SOURCE_DIR}/pabx-state.ts' '${install_dir}/pabx-state.ts'"
+  run "cp '${AGENT_SOURCE_DIR}/voip-load.ts' '${install_dir}/voip-load.ts'"
+  run "cp '${AGENT_SOURCE_DIR}/voip-rate.ts' '${install_dir}/voip-rate.ts'"
   run "cp '${AGENT_SOURCE_DIR}/pabx-registration-insight.ts' '${install_dir}/pabx-registration-insight.ts'"
   run "cp '${AGENT_SOURCE_DIR}/pabx-presence.ts' '${install_dir}/pabx-presence.ts'"
   run "cp '${AGENT_SOURCE_DIR}/pabx-events.ts' '${install_dir}/pabx-events.ts'"

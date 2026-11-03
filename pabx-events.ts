@@ -1,3 +1,4 @@
+import { VoipEventFrames } from "./voip-rate.ts";
 // PABX registration events: wake signals for the presence report.
 //
 // The Agent keeps one local connection per engine it manages: Asterisk AMI (`ContactStatus`,
@@ -16,6 +17,7 @@ export type EventEndpoint = {
   /** AMI login name; ESL has none. */
   username?: string;
   secret: string;
+  channelEvents?: boolean;
 };
 
 type Connection = {
@@ -27,6 +29,9 @@ type Connection = {
 export type EventListenerOptions = {
   resolve: () => Promise<EventEndpoint | null>;
   onEvent: (engine: PresenceEventEngine) => void;
+  onChannelStart?: (engine: PresenceEventEngine) => void;
+  onStreamState?: (engine: PresenceEventEngine, connected: boolean) => void;
+  onKeepalive?: (engine: PresenceEventEngine) => void;
   log: (level: "info" | "warn", message: string, details?: unknown) => void;
   connect?: (hostname: string, port: number) => Promise<Connection>;
   /** Wait before reconnecting; grows to `maxRetryMs`. */
@@ -64,7 +69,19 @@ export function amiEndpointFromManagerConf(
   const bind = iniValue(source, "general", "bindaddr");
   const hostname = !bind || bind === "0.0.0.0" || bind === "::" ? "127.0.0.1" : bind;
   const port = Number(iniValue(source, "general", "port")) || 5038;
-  return { engine: "asterisk", hostname, port, username, secret };
+  const permissions = iniValue(source, username, "read").toLowerCase().split(",").map((v) =>
+    v.trim()
+  );
+  const channelEvents = (permissions.includes("all") || permissions.includes("call")) &&
+    !/^\s*eventfilter\s*[=(]/mi.test(source);
+  return {
+    engine: "asterisk",
+    hostname,
+    port,
+    username,
+    secret,
+    ...(channelEvents ? { channelEvents: true } : {}),
+  };
 }
 
 /** ESL password from `event_socket.conf.xml`. */
@@ -85,6 +102,7 @@ async function readUntil(
 ) {
   const buffer = new Uint8Array(4096);
   let text = "";
+  let bytes = new Uint8Array();
   const deadline = Date.now() + timeoutMs;
   while (!done(text)) {
     const remaining = deadline - Date.now();
@@ -98,10 +116,14 @@ async function readUntil(
     ]).finally(() => clearTimeout(timer));
     if (read === "timeout") throw new Error("PABX event login timed out");
     if (read === null) throw new Error("PABX event connection closed");
-    text += decoder.decode(buffer.subarray(0, read));
-    if (text.length > 65536) text = text.slice(-16384);
+    if (bytes.length + read > 65536) throw new Error("PABX event login budget exceeded");
+    const next = new Uint8Array(bytes.length + read);
+    next.set(bytes);
+    next.set(buffer.subarray(0, read), bytes.length);
+    bytes = next;
+    text = decoder.decode(bytes);
   }
-  return text;
+  return { text, bytes };
 }
 
 /** Logs in and subscribes; returns what was read after the login reply (it may hold events). */
@@ -109,11 +131,13 @@ async function login(connection: Connection, endpoint: EventEndpoint, timeoutMs:
   if (endpoint.engine === "asterisk") {
     await readUntil(connection, (text) => text.includes("Asterisk Call Manager"), timeoutMs);
     await connection.write(encoder.encode(
-      `Action: Login\r\nUsername: ${endpoint.username}\r\nSecret: ${endpoint.secret}\r\nEvents: system\r\n\r\n`,
+      `Action: Login\r\nUsername: ${endpoint.username}\r\nSecret: ${endpoint.secret}\r\nEvents: ${
+        endpoint.channelEvents ? "system,call" : "system"
+      }\r\n\r\n`,
     ));
-    const reply = await readUntil(
+    const { text: reply, bytes } = await readUntil(
       connection,
-      (text) => /Response:\s*(Success|Error)/i.test(text),
+      (text) => /Response:\s*(Success|Error)/i.test(text) && /\r?\n\r?\n/.test(text),
       timeoutMs,
     );
     if (!/Response:\s*Success/i.test(reply)) {
@@ -121,16 +145,34 @@ async function login(connection: Connection, endpoint: EventEndpoint, timeoutMs:
       const detail = message ? ": " + message : "";
       throw new Error("AMI login refused" + detail);
     }
-    return reply;
+    return bytes;
   }
-  await readUntil(connection, (text) => text.includes("auth/request"), timeoutMs);
+  await readUntil(
+    connection,
+    (text) => text.includes("auth/request") && /\r?\n\r?\n/.test(text),
+    timeoutMs,
+  );
   await connection.write(encoder.encode(`auth ${endpoint.secret}\n\n`));
-  const reply = await readUntil(connection, (text) => /Reply-Text:\s*[+-]/i.test(text), timeoutMs);
+  const { text: reply } = await readUntil(
+    connection,
+    (text) => /Reply-Text:\s*[+-]/i.test(text) && /\r?\n\r?\n/.test(text),
+    timeoutMs,
+  );
   if (!/Reply-Text:\s*\+OK/i.test(reply)) throw new Error("ESL authentication refused");
   await connection.write(
-    encoder.encode("event plain CUSTOM sofia::register sofia::unregister sofia::expire\n\n"),
+    encoder.encode(
+      `event plain ${
+        endpoint.channelEvents ? "CHANNEL_CREATE " : ""
+      }CUSTOM sofia::register sofia::unregister sofia::expire\n\n`,
+    ),
   );
-  return "";
+  const subscribed = await readUntil(
+    connection,
+    (text) => /Reply-Text:\s*[+-]/i.test(text) && /\r?\n\r?\n/.test(text),
+    timeoutMs,
+  );
+  if (!/Reply-Text:\s*\+OK/i.test(subscribed.text)) throw new Error("ESL subscription refused");
+  return subscribed.bytes;
 }
 
 /**
@@ -164,6 +206,7 @@ export function listenPabxEvents(options: EventListenerOptions) {
         await sleep(maxRetryMs);
         continue;
       }
+      let keepalive: ReturnType<typeof setInterval> | undefined;
       try {
         current = await connect(endpoint.hostname, endpoint.port);
         const early = await login(current, endpoint, loginTimeoutMs);
@@ -173,13 +216,54 @@ export function listenPabxEvents(options: EventListenerOptions) {
         // A fresh subscription may have missed changes while disconnected.
         options.onEvent(endpoint.engine);
         // Events may arrive in the same read as the login reply.
-        const afterLogin = early.replace(/^[\s\S]*?Response:\s*Success[^\n]*\n/i, "");
+        const afterLogin = decoder.decode(early).replace(
+          /^[\s\S]*?Response:\s*Success[^\n]*\n/i,
+          "",
+        );
         if (wakes(endpoint.engine, afterLogin)) options.onEvent(endpoint.engine);
+        const frames = new VoipEventFrames(endpoint.engine);
+        const track = (bytes: Uint8Array) => {
+          if (!endpoint.channelEvents) return;
+          const counts = frames.push(bytes);
+          for (let i = 0; i < counts.channelStarts; i++) options.onChannelStart?.(endpoint.engine);
+          if (counts.acknowledgements) options.onKeepalive?.(endpoint.engine);
+        };
+        if (endpoint.channelEvents) {
+          options.onStreamState?.(endpoint.engine, true);
+          track(early);
+          let writing = false;
+          keepalive = setInterval(() => {
+            if (writing || !current || stopped) return;
+            writing = true;
+            const connection = current;
+            const ping = encoder.encode(
+              endpoint.engine === "asterisk"
+                ? "Action: Ping\r\nActionID: mnscloud-load-health\r\n\r\n"
+                : "api uptime s\n\n",
+            );
+            (async () => {
+              let offset = 0;
+              while (offset < ping.length) {
+                const written = await connection.write(ping.subarray(offset));
+                if (written <= 0) throw new Error("PABX keepalive write failed");
+                offset += written;
+              }
+            })().catch(() => {
+              try {
+                connection.close();
+              } catch { /* already closed */ }
+            })
+              .finally(() => {
+                writing = false;
+              });
+          }, 10000);
+        }
         const buffer = new Uint8Array(16384);
         let tail = "";
         while (!stopped) {
           const read = await current.read(buffer);
           if (read === null) throw new Error("PABX event connection closed");
+          track(buffer.subarray(0, read));
           const text = tail + decoder.decode(buffer.subarray(0, read));
           if (wakes(endpoint.engine, text)) options.onEvent(endpoint.engine);
           tail = text.slice(-256);
@@ -195,6 +279,8 @@ export function listenPabxEvents(options: EventListenerOptions) {
           lastProblem = problem;
         }
       } finally {
+        clearInterval(keepalive);
+        options.onStreamState?.(endpoint.engine, false);
         try {
           current?.close();
         } catch {
