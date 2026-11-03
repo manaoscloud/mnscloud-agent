@@ -1,3 +1,4 @@
+import { parseAsteriskLoad, parseFreeSwitchLoad, type VoipLoad } from "./voip-load.ts";
 import { JOB_REPORT_PATH, JOB_REPORT_RETRY_DELAYS_MS, transientReportError } from "./job-report.ts";
 import { trunkRegistrationStatus } from "./pabx-state.ts";
 import {
@@ -1656,6 +1657,37 @@ function startPabxPresenceEvents(config: AgentConfig, agentUUID: string) {
   }
 }
 
+async function collectVoipLoad(config: AgentConfig): Promise<VoipLoad[]> {
+  const observations: VoipLoad[] = [];
+  const timeout = Math.min(config.commandTimeoutMs, 5000);
+  if (config.capabilities["voip.freeswitch.manage"]) {
+    try {
+      const [calls, status] = await Promise.all([
+        runLocalCommand(config.freeswitchCli, ["-x", "show calls count"], timeout),
+        runLocalCommand(config.freeswitchCli, ["-x", "status"], timeout),
+      ]);
+      if (calls.code === 0 && status.code === 0) {
+        observations.push(
+          parseFreeSwitchLoad(calls.stdout, status.stdout, new Date().toISOString()),
+        );
+      }
+    } catch { /* Unavailable metrics remain absent; never manufacture idle capacity. */ }
+  }
+  if (config.capabilities["voip.asterisk.manage"]) {
+    try {
+      const result = await runLocalCommand(
+        config.asteriskCli,
+        ["-rx", "core show channels count"],
+        timeout,
+      );
+      if (result.code === 0) {
+        observations.push(parseAsteriskLoad(result.stdout, new Date().toISOString()));
+      }
+    } catch { /* The aggregate must not interrupt heartbeat or disclose command output. */ }
+  }
+  return observations;
+}
+
 async function performHeartbeat(
   config: AgentConfig,
   agentUUID: string,
@@ -1667,6 +1699,7 @@ async function performHeartbeat(
     hostMetrics = await collectHostMetrics();
     lastHostMetricsAt = Date.now();
   }
+  const voipLoad = hostMetrics ? await collectVoipLoad(config) : [];
   const pabxPresence = pabxPresenceTracker.build(await collectPabxPresenceObservations(config));
   const runtimeVersions = await collectRuntimeVersions(config);
   const sbcNodeUUID = config.capabilities["voip.sbc.manage"]
@@ -1726,6 +1759,7 @@ async function performHeartbeat(
       pabxPresence: pabxPresence.report,
       cyberSecurityStatus: cyberSecurityStatus ?? undefined,
       hostMetrics: hostMetrics ?? undefined,
+      voipLoad: voipLoad.length ? voipLoad : undefined,
       openvaultStatus: openvaultStatus ?? undefined,
       privateAddresses: hostAddresses?.addresses,
       publicIpv6Addresses: hostAddresses?.publicIpv6,
@@ -1926,7 +1960,8 @@ async function executeFilesystemTransfer(
     const writer = child.stdin.getWriter();
     let inputWritten = false;
     const relPath = payload.relativePath ?? (
-      typeof payload.objectKey === "string" && payload.objectKey.startsWith("/var/lib/mnscloud/files/")
+      typeof payload.objectKey === "string" &&
+        payload.objectKey.startsWith("/var/lib/mnscloud/files/")
         ? payload.objectKey.slice("/var/lib/mnscloud/files/".length)
         : payload.objectKey
     );
@@ -1961,7 +1996,12 @@ async function executeFilesystemTransfer(
     await jsonRequest(config, `/agent/jobs/${job.jobUUID}/complete`, agentToken, agentUUID, {
       jobType: "filesystem.transfer",
       leaseToken: job.leaseToken,
-      result: { exists: metadata.exists, sizeBytes: metadata.sizeBytes, sha256: metadata.sha256, bytes: metadata.bytes },
+      result: {
+        exists: metadata.exists,
+        sizeBytes: metadata.sizeBytes,
+        sha256: metadata.sha256,
+        bytes: metadata.bytes,
+      },
     });
   } catch {
     await failJob(
@@ -3902,17 +3942,26 @@ async function issueWebsiteWildcard(
 ) {
   await Deno.mkdir(WEBSITE_ACME_DIR, { recursive: true, mode: 0o700 });
   for await (const entry of Deno.readDir(WEBSITE_ACME_DIR)) {
-    if (entry.name !== "hook.sh") await Deno.remove(`${WEBSITE_ACME_DIR}/${entry.name}`).catch(() => undefined);
+    if (entry.name !== "hook.sh") {
+      await Deno.remove(`${WEBSITE_ACME_DIR}/${entry.name}`).catch(() => undefined);
+    }
   }
   const hook = `${WEBSITE_ACME_DIR}/hook.sh`;
   await writeAtomic(hook, websiteAcmeHookScript());
   await Deno.chmod(hook, 0o700);
   const api = {
     create: async (name: string, value: string) => {
-      const data = await agentApiRequest(config, "POST", "/agent/website/acme-challenges", agentToken, agentUUID, {
-        name,
-        value,
-      });
+      const data = await agentApiRequest(
+        config,
+        "POST",
+        "/agent/website/acme-challenges",
+        agentToken,
+        agentUUID,
+        {
+          name,
+          value,
+        },
+      );
       return { challengeUUID: String(data.challengeUUID), state: String(data.state) };
     },
     get: async (challengeUUID: string) => {
@@ -3926,7 +3975,13 @@ async function issueWebsiteWildcard(
       return { state: String(data.state), errorCode: data.errorCode };
     },
     release: async (challengeUUID: string) => {
-      await agentApiRequest(config, "DELETE", `/agent/website/acme-challenges/${challengeUUID}`, agentToken, agentUUID);
+      await agentApiRequest(
+        config,
+        "DELETE",
+        `/agent/website/acme-challenges/${challengeUUID}`,
+        agentToken,
+        agentUUID,
+      );
     },
   };
   const deps = {
@@ -3939,7 +3994,9 @@ async function issueWebsiteWildcard(
   const handling = new Set<string>();
   const releaseAll = async () => {
     for (const [id, challengeUUID] of open) {
-      await api.release(challengeUUID).catch((error) => log("warn", "Website ACME release failed.", String(error)));
+      await api.release(challengeUUID).catch((error) =>
+        log("warn", "Website ACME release failed.", String(error))
+      );
       open.delete(id);
     }
   };
@@ -3962,13 +4019,17 @@ async function issueWebsiteWildcard(
           const text = await Deno.readTextFile(path);
           await Deno.remove(path).catch(() => undefined);
           // Answered in the background: certbot waits on the hook while other files keep flowing.
-          void answerWebsiteHookRequest(deps, base, id, text, open).finally(() => handling.delete(entry.name));
+          void answerWebsiteHookRequest(deps, base, id, text, open).finally(() =>
+            handling.delete(entry.name)
+          );
         } else if (kind === "cleanup") {
           await Deno.remove(path).catch(() => undefined);
           const challengeUUID = open.get(id);
           if (challengeUUID) {
             open.delete(id);
-            await api.release(challengeUUID).catch((error) => log("warn", "Website ACME release failed.", String(error)));
+            await api.release(challengeUUID).catch((error) =>
+              log("warn", "Website ACME release failed.", String(error))
+            );
           }
         }
       }
@@ -4027,7 +4088,9 @@ async function ensureWebsiteEdge(
       status,
       expiresAt: expiresAt?.toISOString() ?? null,
       error: error ?? null,
-    }).catch((reportError) => log("warn", "Website edge certificate report failed.", String(reportError)));
+    }).catch((reportError) =>
+      log("warn", "Website edge certificate report failed.", String(reportError))
+    );
   try {
     let expiresAt = await websiteCertificateExpiry(config, base);
     // Port 80 first: ACME and, until the certificate exists, the sites over HTTP.
@@ -4045,7 +4108,11 @@ async function ensureWebsiteEdge(
     await report("issued", expiresAt);
     return { base, issued, expiresAt: expiresAt?.toISOString() ?? null, path: edge.path };
   } catch (error) {
-    await report("failed", null, String(error instanceof Error ? error.message : error).slice(0, 500));
+    await report(
+      "failed",
+      null,
+      String(error instanceof Error ? error.message : error).slice(0, 500),
+    );
     throw error;
   }
 }
@@ -4064,13 +4131,22 @@ async function downloadWebsiteSnapshot(
     { headers: sameApi ? bearerHeaders(agentToken, agentUUID) : {} },
     300_000,
     async (response) => {
-      if (!response.ok || !response.body) throw new Error(`Website snapshot download returned HTTP ${response.status}`);
-      const file = await Deno.open(target, { write: true, create: true, truncate: true, mode: 0o600 });
+      if (!response.ok || !response.body) {
+        throw new Error(`Website snapshot download returned HTTP ${response.status}`);
+      }
+      const file = await Deno.open(target, {
+        write: true,
+        create: true,
+        truncate: true,
+        mode: 0o600,
+      });
       let total = 0;
       try {
         for await (const chunk of response.body) {
           total += chunk.byteLength;
-          if (total > WEBSITE_SITE_MAX_ARCHIVE_BYTES) throw new Error("Website snapshot exceeds 100 MB");
+          if (total > WEBSITE_SITE_MAX_ARCHIVE_BYTES) {
+            throw new Error("Website snapshot exceeds 100 MB");
+          }
           let written = 0;
           while (written < chunk.byteLength) written += await file.write(chunk.subarray(written));
         }
@@ -4093,19 +4169,25 @@ async function executeWebsiteSiteJob(
     assertCapability(config, WEBSITE_SITE_CAPABILITY);
     const site = websiteSiteCommand(command, job.payload ?? {}, (path) => apiUrl(config, path));
     const script = `${WEBAPPS_REPO_DIR}/scripts/${site.script}`;
-    if (!await isExecutableFile(script)) throw new Error(`${site.script} is missing; update mnscloud-webapps first`);
+    if (!await isExecutableFile(script)) {
+      throw new Error(`${site.script} is missing; update mnscloud-webapps first`);
+    }
     const args = [script, "--env", WEBAPPS_ENV_FILE, ...site.args];
     if (site.artifactUrl && site.sha256) {
       workDir = await Deno.makeTempDir({ prefix: "mnscloud-website-" });
       const archive = `${workDir}/site.tar.gz`;
       await downloadWebsiteSnapshot(config, agentUUID, agentToken, site.artifactUrl, archive);
       const actual = await sha256Hex(await Deno.readFile(archive));
-      if (actual !== site.sha256) throw new Error(`Website snapshot checksum mismatch: got ${actual}`);
+      if (actual !== site.sha256) {
+        throw new Error(`Website snapshot checksum mismatch: got ${actual}`);
+      }
       args.push("--archive", archive);
     }
     const result = await runLocalCommand("bash", args, 600_000);
     if (result.code !== 0) {
-      throw new Error(diagnosticExcerpt(result.stderr || result.stdout || `${site.script} failed`, 2000));
+      throw new Error(
+        diagnosticExcerpt(result.stderr || result.stdout || `${site.script} failed`, 2000),
+      );
     }
     await jsonRequest(config, `/agent/jobs/${job.jobUUID}/complete`, agentToken, agentUUID, {
       jobType: "website.site",

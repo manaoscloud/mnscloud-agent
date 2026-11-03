@@ -813,3 +813,14 @@ registration; Agent tokens remain private.
 Agent-rendered domains use the edge Filesystem transfer snippet and rendezvous upstream. Deploy the
 companion Nginx release before this Agent release. Follow the resident DEV soak requirements before
 PROD; unit tests alone are not the soak.
+
+## VoIP aggregate load observations
+
+When host metrics are collected, PABX-capable Agents also report bounded aggregate
+`voipLoad` observations. FreeSWITCH uses fixed `show calls count` and `status` queries;
+Asterisk uses `core show channels count`. Calls, channels and FreeSWITCH sessions per
+second remain distinct fields. Asterisk call arrival rate is unavailable. Missing,
+malformed and failed observations remain unknown, never zero. These observations
+carry no subscriber identifiers, establish no configuration readiness and do not
+authorize placement or prove failover. API resolves membership from authenticated
+Agent assignments.

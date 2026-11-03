@@ -274,6 +274,7 @@ Invoke-Step {
   Copy-Item -Path "$PSScriptRoot\..\runtime-reconcile.ts" -Destination "$InstallDir\runtime-reconcile.ts" -Force
   Copy-Item -Path "$PSScriptRoot\..\database-principal.ts" -Destination "$InstallDir\database-principal.ts" -Force
   Copy-Item -Path "$PSScriptRoot\..\pabx-state.ts" -Destination "$InstallDir\pabx-state.ts" -Force
+  Copy-Item -Path "$PSScriptRoot\..\voip-load.ts" -Destination "$InstallDir\voip-load.ts" -Force
   Copy-Item -Path "$PSScriptRoot\..\pabx-registration-insight.ts" -Destination "$InstallDir\pabx-registration-insight.ts" -Force
   Copy-Item -Path "$PSScriptRoot\..\pabx-presence.ts" -Destination "$InstallDir\pabx-presence.ts" -Force
   Copy-Item -Path "$PSScriptRoot\..\pabx-events.ts" -Destination "$InstallDir\pabx-events.ts" -Force
