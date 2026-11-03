@@ -137,7 +137,7 @@ async function login(connection: Connection, endpoint: EventEndpoint, timeoutMs:
     ));
     const { text: reply, bytes } = await readUntil(
       connection,
-      (text) => /Response:\s*(Success|Error)/i.test(text),
+      (text) => /Response:\s*(Success|Error)/i.test(text) && /\r?\n\r?\n/.test(text),
       timeoutMs,
     );
     if (!/Response:\s*Success/i.test(reply)) {
@@ -147,11 +147,15 @@ async function login(connection: Connection, endpoint: EventEndpoint, timeoutMs:
     }
     return bytes;
   }
-  await readUntil(connection, (text) => text.includes("auth/request"), timeoutMs);
+  await readUntil(
+    connection,
+    (text) => text.includes("auth/request") && /\r?\n\r?\n/.test(text),
+    timeoutMs,
+  );
   await connection.write(encoder.encode(`auth ${endpoint.secret}\n\n`));
   const { text: reply } = await readUntil(
     connection,
-    (text) => /Reply-Text:\s*[+-]/i.test(text),
+    (text) => /Reply-Text:\s*[+-]/i.test(text) && /\r?\n\r?\n/.test(text),
     timeoutMs,
   );
   if (!/Reply-Text:\s*\+OK/i.test(reply)) throw new Error("ESL authentication refused");
@@ -164,7 +168,7 @@ async function login(connection: Connection, endpoint: EventEndpoint, timeoutMs:
   );
   const subscribed = await readUntil(
     connection,
-    (text) => /Reply-Text:\s*[+-]/i.test(text),
+    (text) => /Reply-Text:\s*[+-]/i.test(text) && /\r?\n\r?\n/.test(text),
     timeoutMs,
   );
   if (!/Reply-Text:\s*\+OK/i.test(subscribed.text)) throw new Error("ESL subscription refused");
