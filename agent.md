@@ -824,3 +824,14 @@ malformed and failed observations remain unknown, never zero. These observations
 carry no subscriber identifiers, establish no configuration readiness and do not
 authorize placement or prove failover. API resolves membership from authenticated
 Agent assignments.
+
+The optional `channelStartsPeakPerSecond` is the maximum number of channel-creation
+events in any completed one-second bucket over the last 60 seconds. It uses AMI
+`Newchannel` (CALL permission without event filters) or ESL `CHANNEL_CREATE` on the
+existing authenticated event connection. It counts channel legs, not offered SIP
+calls. Capacity and reservation rate budgets must use the same channel-start unit.
+The bounded window requires 61 seconds of uninterrupted subscription and a fixed
+ping acknowledgement no older than 15 seconds. Missing permissions, warmup,
+disconnect, stale acknowledgement or parser limits yield null, never a synthetic
+zero. Fixed keepalives run every ten seconds; frames and buckets have hard bounds.
+No event identifiers or raw event bodies are sent to the API or logged.

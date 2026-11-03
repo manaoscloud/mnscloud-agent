@@ -41,6 +41,7 @@ Deno.test("manager.conf gives the MNSCloud AMI account on the bound address", ()
     port: 5038,
     username: "mnscloud",
     secret: "abc123",
+    channelEvents: true,
   });
   assertEquals(
     amiEndpointFromManagerConf("[general]\nbindaddr=0.0.0.0\n[mnscloud]\nsecret=x")?.hostname,
@@ -113,6 +114,9 @@ Deno.test("ESL authenticates and subscribes to sofia registration events", async
         : "Content-Type: command/reply\nReply-Text: -ERR invalid\n\n",
     ));
     subscription = await readSome(conn);
+    await conn.write(
+      encoder.encode("Content-Type: command/reply\nReply-Text: +OK event listener enabled\n\n"),
+    );
     const body = "Event-Name: CUSTOM\nEvent-Subclass: sofia%3A%3Aexpire\n\n";
     await conn.write(
       encoder.encode(`Content-Length: ${body.length}\nContent-Type: text/event-plain\n\n${body}`),
@@ -154,4 +158,50 @@ Deno.test("wake signals are coalesced and spaced", async () => {
   await waitFor(() => runs.length === 2);
   assertEquals(runs[1] - runs[0] >= 140, true);
   wake.cancel();
+});
+
+Deno.test("AMI channel subscription counts early events once and invalidates on disconnect", async () => {
+  const listener = Deno.listen({ hostname: "127.0.0.1", port: 0 });
+  const port = (listener.addr as Deno.NetAddr).port;
+  const states: boolean[] = [];
+  let channels = 0;
+  let subscription = "";
+  const serve = (async () => {
+    const conn = await listener.accept();
+    await conn.write(encoder.encode("Asterisk Call Manager/9.0.0\r\n"));
+    subscription = await readSome(conn);
+    await conn.write(
+      encoder.encode("Response: Success\r\n\r\nEvent: Newchannel\r\nUniqueid: test\r\n\r\n"),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    conn.close();
+  })();
+  const handle = listenPabxEvents({
+    resolve: () =>
+      Promise.resolve({
+        engine: "asterisk",
+        hostname: "127.0.0.1",
+        port,
+        username: "test",
+        secret: "test",
+        channelEvents: true,
+      }),
+    onEvent: () => {},
+    onChannelStart: () => {
+      channels++;
+    },
+    onStreamState: (_engine, connected) => states.push(connected),
+    log: () => {},
+    retryMs: 5000,
+  });
+  try {
+    await waitFor(() => states.includes(false));
+    assertEquals(subscription.includes("Events: system,call"), true);
+    assertEquals(channels, 1);
+    assertEquals(states[0], true);
+  } finally {
+    await handle.stop();
+    await serve;
+    listener.close();
+  }
 });
