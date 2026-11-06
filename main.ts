@@ -23,6 +23,7 @@ import {
   parseOpensslEndDate,
   parseWebsiteSiteDomainsState,
   publishWebsiteChallenge,
+  publicApiLocation,
   renderWebsiteEdgeConfig,
   sha256Hex,
   WEBSITE_SITE_CAPABILITY,
@@ -3298,6 +3299,14 @@ function frontendSecurityHeaders(indent = "    ", surface: EdgeSurface = "app") 
   return edgeSecurityHeaders(surface, indent);
 }
 
+/**
+ * The platform nginx edge (mnscloud-nginx runtime) declares the `mnscloud_api` limit zone in its
+ * http block; other hosts with nginx-edge.manage (WebRTC) do not, so they render no `limit_req`.
+ */
+function nginxEdgeDefinesApiZone(config: AgentConfig) {
+  return config.capabilities["mnscloud.nginx.update"] === true;
+}
+
 function renderNginxEdgeDomainConfig(
   config: AgentConfig,
   domain: string,
@@ -3309,9 +3318,13 @@ function renderNginxEdgeDomainConfig(
   // it by Host to the site snapshot; /api/ and the webapps paths stay as in App mode.
   const serveSite = siteMode && config.nginxEdgeWebappsEnabled && !!config.nginxEdgeWebappsUpstream;
   const appUpstream = serveSite ? config.nginxEdgeWebappsUpstream : config.nginxEdgeAppUpstream;
-  const rootSurface: EdgeSurface = serveSite ? "webapp" : "app";
+  const rootSurface: EdgeSurface = serveSite ? "site" : "app";
   const apiUpstream = config.nginxEdgeApiUpstream;
   const webappsLocations = renderNginxEdgeWebappsLocations(config);
+  // Public storefront/sign-up API: throttled at the platform edge (same zone as its static vhosts).
+  const rateLimit = nginxEdgeDefinesApiZone(config);
+  const publicApi = (proto: string) =>
+    rateLimit ? `${publicApiLocation(apiUpstream, proto).trimStart()}\n\n  ` : "";
   const envJsBlock = `location = /env.js {
     default_type application/javascript;
     add_header Cache-Control "no-store";
@@ -3397,7 +3410,7 @@ ${frontendSecurityHeaders("    ", rootSurface)}
     proxy_pass ${apiUpstream};
   }
 
-  location /api/ {
+  ${publicApi("$scheme")}location /api/ {
     proxy_http_version 1.1;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
@@ -3491,7 +3504,7 @@ ${frontendSecurityHeaders("    ", rootSurface)}
     proxy_pass ${apiUpstream};
   }
 
-  location /api/ {
+  ${publicApi("https")}location /api/ {
     proxy_http_version 1.1;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
@@ -4047,7 +4060,10 @@ async function activateWebsiteEdge(config: AgentConfig, base: string, sslEnabled
     apiUpstream: config.nginxEdgeApiUpstream,
     webappsUpstream: config.nginxEdgeWebappsUpstream,
     certificateDir: `${config.nginxEdgeSslLiveDir.replace(/\/+$/, "")}/${wildcardCertName(base)}`,
-    securityHeaders: frontendSecurityHeaders("    ", "webapp"),
+    securityHeaders: frontendSecurityHeaders("    ", "site"),
+    // The site server of webapps also serves the sub-path clients: keep their own headers.
+    appLocations: renderNginxEdgeWebappsLocations({ ...config, nginxEdgeWebappsEnabled: true }),
+    publicApiRateLimit: nginxEdgeDefinesApiZone(config),
   });
   if (previous === rendered) return { path, changed: false };
   await writeAtomic(path, rendered);
