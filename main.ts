@@ -3668,7 +3668,8 @@ async function rerenderWebsiteEdges(config: AgentConfig) {
     if (error instanceof Deno.errors.NotFound) return [];
     throw error;
   }
-  for (const base of bases.sort()) {
+  // One base at a time: each runs its own nginx test and reload.
+  for (const base of bases.sort((a, b) => a.localeCompare(b))) {
     const sslEnabled = await nginxEdgeHasCertificate(config, wildcardCertName(base));
     await activateWebsiteEdge(config, base, sslEnabled);
   }
