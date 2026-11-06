@@ -125,6 +125,7 @@ Deno.test("edge headers carry HSTS per location (nginx drops the server-level ad
       "field",
       "webapp",
       "site",
+      "website",
     ] as const
   ) {
     assertEquals(
@@ -146,4 +147,14 @@ Deno.test("site surface: published snapshots run no script and post forms only t
   assertEquals(site.includes("frame-ancestors 'none'"), true);
   assertEquals(site.includes("geolocation=(), microphone=(), camera=()"), true);
   assertEquals(site.split("\n").every((line) => line.startsWith("  add_header ")), true);
+});
+
+Deno.test("website surface: the institutional site runs its own scripts, is never framed", () => {
+  const website = edgeSecurityHeaders("website", "  ");
+  assertEquals(website.includes("script-src 'self' 'unsafe-inline'"), true);
+  assertEquals(website.includes("frame-ancestors 'none'"), true);
+  assertEquals(website.includes("connect-src 'self';"), true);
+  assertEquals(website.includes("script-src 'none'"), false);
+  assertEquals(website.includes("geolocation=(), microphone=(), camera=()"), true);
+  assertEquals(website.split("\n").every((line) => line.startsWith("  add_header ")), true);
 });

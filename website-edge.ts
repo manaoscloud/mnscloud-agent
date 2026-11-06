@@ -69,6 +69,35 @@ export function parseWebsiteSiteDomainsState(text: string | null): string[] {
   }
 }
 
+/** WF1: the institutional website domains of a `website.edge.domains` job (optional list). */
+export function websiteRootDomains(value: unknown): string[] {
+  return value === undefined || value === null ? [] : websiteSiteDomains(value);
+}
+
+/** Root-mode (institutional website) domains of the stored state; missing or damaged = none. */
+export function parseWebsiteRootDomainsState(text: string | null): string[] {
+  if (!text) return [];
+  try {
+    const parsed = JSON.parse(text);
+    return Array.isArray(parsed) ? [] : websiteRootDomains(parsed?.rootDomains);
+  } catch {
+    return [];
+  }
+}
+
+/** How a ThemeDomain vhost serves `/`: the App, a tenant site snapshot or the institutional website. */
+export type NginxEdgeRootMode = "app" | "site" | "website";
+
+/** A tenant site wins over the institutional list (the database never lets both hold one domain). */
+export function nginxEdgeRootMode(
+  domain: string,
+  site: Set<string>,
+  root: Set<string>,
+): NginxEdgeRootMode {
+  if (site.has(domain)) return "site";
+  return root.has(domain) ? "website" : "app";
+}
+
 export interface WebsiteEdgeRenderInput {
   base: string;
   sslEnabled: boolean;

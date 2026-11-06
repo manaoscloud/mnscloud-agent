@@ -606,6 +606,9 @@ Hosted tenant websites (Website module) use three platform-only contracts:
   a listed domain sends `/` to webapps (original Host, webapp security headers) instead of the App;
   `/api/` and the webapps paths are unchanged. `nginx.edge.domain.activate` of a listed domain whose
   certificate arrives later renders it in site mode directly. An unchanged list is a no-op.
+  Optional `rootDomains` (WF1, the platform's institutional website domain) are stored in the same
+  file and render in website mode: `/` goes to the webapps root app with the `website` security
+  headers (own scripts, never framed, HSTS). A domain in both lists stays in site mode.
 
 ## WebRTC Edge Jobs
 

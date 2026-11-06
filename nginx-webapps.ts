@@ -27,7 +27,7 @@ export type NginxEdgeWebappsSettings = {
  * existing vhosts must pick up: the Agent re-renders every vhost once when its stored revision
  * differs.
  */
-export const NGINX_EDGE_RENDER_REVISION = "2026-11-06.website-hardening-wildcard";
+export const NGINX_EDGE_RENDER_REVISION = "2026-11-06.website-institutional-root";
 
 export type EdgeSurface =
   | "app"
@@ -36,7 +36,8 @@ export type EdgeSurface =
   | "timeclock"
   | "field"
   | "webapp"
-  | "site";
+  | "site"
+  | "website";
 
 const CSP_BASE =
   "default-src 'self'; base-uri 'self'; object-src 'none'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://www.gstatic.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; connect-src 'self' https: wss:; form-action 'self'; upgrade-insecure-requests";
@@ -47,6 +48,13 @@ const CSP_BASE =
  */
 const CSP_SITE =
   "default-src 'none'; base-uri 'none'; object-src 'none'; script-src 'none'; style-src 'self'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self'; manifest-src 'self'; form-action 'self'; frame-ancestors 'none'; upgrade-insecure-requests";
+
+/**
+ * The platform's institutional website (WF1: the webapps root app on its ThemeDomain): a static
+ * Astro build with its own bundled and inline scripts, local fonts and https images, never framed.
+ */
+const CSP_WEBSITE =
+  "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; connect-src 'self'; form-action 'self'; upgrade-insecure-requests";
 
 /**
  * nginx drops the server-level `add_header` (HSTS) in every location that sets its own headers, so
@@ -67,9 +75,10 @@ const APP_FRAME_SRC = "frame-src 'self' https://www.youtube-nocookie.com";
  * geolocation, microphone, camera and framing closed.
  */
 export function edgeSecurityHeaders(surface: EdgeSurface, indent = "    ") {
-  if (surface === "site") {
+  if (surface === "site" || surface === "website") {
+    const csp = surface === "site" ? CSP_SITE : CSP_WEBSITE;
     return [
-      `${indent}add_header Content-Security-Policy "${CSP_SITE}" always;`,
+      `${indent}add_header Content-Security-Policy "${csp}" always;`,
       `${indent}add_header X-Content-Type-Options "nosniff" always;`,
       `${indent}add_header Referrer-Policy "strict-origin-when-cross-origin" always;`,
       `${indent}add_header Permissions-Policy "geolocation=(), microphone=(), camera=()" always;`,
