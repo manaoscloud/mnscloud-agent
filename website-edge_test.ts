@@ -8,8 +8,10 @@ import {
 import {
   certbotWildcardArgs,
   needsWildcardRenewal,
+  nginxEdgeRootMode,
   parseHookRequest,
   parseOpensslEndDate,
+  parseWebsiteRootDomainsState,
   parseWebsiteSiteDomainsState,
   publicApiLocation,
   publishWebsiteChallenge,
@@ -19,6 +21,7 @@ import {
   websiteAcmeHookScript,
   websiteBase,
   websiteEdgeConfigFile,
+  websiteRootDomains,
   websiteSiteCommand,
   websiteSiteDomains,
   websiteSiteDomainsFile,
@@ -351,4 +354,23 @@ Deno.test("edge config: public API throttled only when asked, sub-path clients b
   const location = publicApiLocation("$api_upstream", "https");
   assertStringIncludes(location, "proxy_set_header X-Forwarded-Proto https;");
   assertStringIncludes(location, "proxy_pass $api_upstream;");
+});
+
+Deno.test("institutional root domains: optional list, stored beside the site domains", () => {
+  assertEquals(websiteRootDomains(undefined), []);
+  assertEquals(websiteRootDomains(null), []);
+  assertEquals(websiteRootDomains(["WWW.Example.COM.", "www.example.com"]), ["www.example.com"]);
+  assertThrows(() => websiteRootDomains("www.example.com"));
+  const state = JSON.stringify({ domains: ["shop.example.net"], rootDomains: ["www.example.com"] });
+  assertEquals(parseWebsiteRootDomainsState(state), ["www.example.com"]);
+  assertEquals(parseWebsiteSiteDomainsState(state), ["shop.example.net"]);
+  assertEquals(parseWebsiteRootDomainsState(JSON.stringify({ domains: [] })), []);
+  assertEquals(parseWebsiteRootDomainsState(JSON.stringify(["a.example.com"])), []);
+  assertEquals(parseWebsiteRootDomainsState("{not json"), []);
+  const site = new Set(["shop.example.net", "both.example.org"]);
+  const root = new Set(["www.example.com", "both.example.org"]);
+  assertEquals(nginxEdgeRootMode("www.example.com", site, root), "website");
+  assertEquals(nginxEdgeRootMode("shop.example.net", site, root), "site");
+  assertEquals(nginxEdgeRootMode("both.example.org", site, root), "site");
+  assertEquals(nginxEdgeRootMode("app.example.org", site, root), "app");
 });

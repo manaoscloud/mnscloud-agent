@@ -31,6 +31,9 @@ import {
   needsWildcardRenewal,
   parseHookRequest,
   parseOpensslEndDate,
+  nginxEdgeRootMode,
+  type NginxEdgeRootMode,
+  parseWebsiteRootDomainsState,
   parseWebsiteSiteDomainsState,
   publishWebsiteChallenge,
   publicApiLocation,
@@ -42,6 +45,7 @@ import {
   websiteBase,
   websiteEdgeConfigFile,
   websiteSiteCommand,
+  websiteRootDomains,
   websiteSiteDomains,
   websiteSiteDomainsFile,
   wildcardCertName,
@@ -3321,14 +3325,16 @@ function renderNginxEdgeDomainConfig(
   config: AgentConfig,
   domain: string,
   sslEnabled: boolean,
-  siteMode = false,
+  mode: NginxEdgeRootMode = "app",
 ) {
   const acmeRoot = config.nginxEdgeAcmeRoot;
   // Site mode (a ThemeDomain that serves a published website): `/` goes to webapps, which routes
-  // it by Host to the site snapshot; /api/ and the webapps paths stay as in App mode.
-  const serveSite = siteMode && config.nginxEdgeWebappsEnabled && !!config.nginxEdgeWebappsUpstream;
-  const appUpstream = serveSite ? config.nginxEdgeWebappsUpstream : config.nginxEdgeAppUpstream;
-  const rootSurface: EdgeSurface = serveSite ? "site" : "app";
+  // it by Host to the site snapshot; website mode (WF1, the institutional domain) sends `/` to the
+  // webapps root app. /api/ and the webapps paths stay as in App mode.
+  const webapps = config.nginxEdgeWebappsEnabled && !!config.nginxEdgeWebappsUpstream;
+  const servedMode: NginxEdgeRootMode = mode !== "app" && webapps ? mode : "app";
+  const appUpstream = servedMode === "app" ? config.nginxEdgeAppUpstream : config.nginxEdgeWebappsUpstream;
+  const rootSurface: EdgeSurface = servedMode;
   const apiUpstream = config.nginxEdgeApiUpstream;
   const webappsLocations = renderNginxEdgeWebappsLocations(config);
   // Public storefront/sign-up API: throttled at the platform edge (same zone as its static vhosts).
@@ -3594,10 +3600,10 @@ async function activateNginxEdgeDomain(config: AgentConfig, domain: string) {
   const path = nginxEdgeConfigPath(config, domain);
   const previous = await fileExists(path) ? await Deno.readTextFile(path) : null;
   const sslEnabled = await nginxEdgeHasCertificate(config, domain);
-  const siteMode = (await websiteSiteDomainSet(config)).has(domain);
+  const { site, root } = await websiteEdgeDomainSets(config);
   await writeAtomic(
     path,
-    renderNginxEdgeDomainConfig(config, domain, sslEnabled, siteMode),
+    renderNginxEdgeDomainConfig(config, domain, sslEnabled, nginxEdgeRootMode(domain, site, root)),
   );
   try {
     await testNginxEdge(config);
@@ -3634,7 +3640,7 @@ async function rerenderNginxEdgeDomains(config: AgentConfig) {
     throw error;
   }
   const domains = [...previous.keys()].sort((a, b) => Number(a > b) - Number(a < b));
-  const siteDomains = await websiteSiteDomainSet(config);
+  const { site, root } = await websiteEdgeDomainSets(config);
   try {
     for (const domain of domains) {
       await writeAtomic(
@@ -3643,7 +3649,7 @@ async function rerenderNginxEdgeDomains(config: AgentConfig) {
           config,
           domain,
           await nginxEdgeHasCertificate(config, domain),
-          siteDomains.has(domain),
+          nginxEdgeRootMode(domain, site, root),
         ),
       );
     }
@@ -3743,9 +3749,13 @@ async function inspectNginxEdgeDomain(config: AgentConfig, domain: string) {
   };
 }
 
-async function websiteSiteDomainSet(config: AgentConfig) {
-  const file = websiteSiteDomainsFile(config.nginxEdgeWebsiteDir);
-  return new Set(parseWebsiteSiteDomainsState(await optionalRead(file)));
+/** Site-mode (tenant snapshot) and website-mode (institutional root app) ThemeDomains. */
+async function websiteEdgeDomainSets(config: AgentConfig) {
+  const text = await optionalRead(websiteSiteDomainsFile(config.nginxEdgeWebsiteDir));
+  return {
+    site: new Set(parseWebsiteSiteDomainsState(text)),
+    root: new Set(parseWebsiteRootDomainsState(text)),
+  };
 }
 
 /**
@@ -3758,13 +3768,22 @@ async function syncWebsiteSiteDomains(
 ) {
   assertCapability(config, "nginx-edge.manage");
   const domains = websiteSiteDomains(payload?.domains);
+  const rootDomains = websiteRootDomains(payload?.rootDomains);
   const file = websiteSiteDomainsFile(config.nginxEdgeWebsiteDir);
   const previous = await optionalRead(file);
-  if (parseWebsiteSiteDomainsState(previous).join("\n") === domains.join("\n")) {
-    return { command: "website.edge.domains", domains: domains.length, changed: false };
+  if (
+    parseWebsiteSiteDomainsState(previous).join("\n") === domains.join("\n") &&
+    parseWebsiteRootDomainsState(previous).join("\n") === rootDomains.join("\n")
+  ) {
+    return {
+      command: "website.edge.domains",
+      domains: domains.length,
+      rootDomains: rootDomains.length,
+      changed: false,
+    };
   }
   await Deno.mkdir(config.nginxEdgeWebsiteDir, { recursive: true });
-  await writeAtomic(file, `${JSON.stringify({ domains }, null, 2)}\n`);
+  await writeAtomic(file, `${JSON.stringify({ domains, rootDomains }, null, 2)}\n`);
   let rendered: string[];
   try {
     rendered = await rerenderNginxEdgeDomains(config);
@@ -3777,10 +3796,12 @@ async function syncWebsiteSiteDomains(
   return {
     command: "website.edge.domains",
     domains: domains.length,
+    rootDomains: rootDomains.length,
     changed: true,
     siteMode: domains.filter((domain) => served.has(domain)),
+    websiteMode: rootDomains.filter((domain) => served.has(domain) && !domains.includes(domain)),
     // Domains without an edge vhost yet (certificate pending): they switch on activation.
-    pending: domains.filter((domain) => !served.has(domain)),
+    pending: [...domains, ...rootDomains].filter((domain) => !served.has(domain)),
   };
 }
 
