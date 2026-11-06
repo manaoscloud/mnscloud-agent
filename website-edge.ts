@@ -76,7 +76,28 @@ export interface WebsiteEdgeRenderInput {
   apiUpstream: string;
   webappsUpstream: string;
   certificateDir: string;
+  /** Headers of the site pages (`site` surface: strict CSP, HSTS). */
   securityHeaders: string;
+  /**
+   * Edge locations of the webapps sub-path clients (`/customer-portal/`, `/pos/`, ...), rendered
+   * with their own surface headers: the strict site CSP would break them.
+   */
+  appLocations?: string;
+  /** `limit_req` on the public storefront API (only where the edge defines `mnscloud_api`). */
+  publicApiRateLimit?: boolean;
+}
+
+/**
+ * Public API routes reached from the sites (storefront, sign-up): throttled per client IP at the
+ * edge with the shared `mnscloud_api` zone of the platform nginx edge, on top of the API limits.
+ */
+export function publicApiLocation(upstream: string, proto: string) {
+  return `  location ^~ /api/v1/public/ {
+    limit_req zone=mnscloud_api burst=60 nodelay;
+    limit_req_status 429;
+${proxyHeaders(proto)}
+    proxy_pass ${upstream};
+  }`;
 }
 
 function proxyHeaders(proto: string) {
@@ -140,11 +161,15 @@ server {
 
 ${common}
 
-  location /api/ {
+${
+    input.publicApiRateLimit
+      ? `${publicApiLocation(input.apiUpstream, "https")}\n\n`
+      : ""
+  }  location /api/ {
 ${proxyHeaders("https")}
     proxy_pass ${input.apiUpstream};
   }
-
+${input.appLocations ? `\n  ${input.appLocations.trim()}\n` : ""}
   location / {
 ${input.securityHeaders}
 ${proxyHeaders("https")}
@@ -301,7 +326,9 @@ export function websiteSiteCommand(
   const version = String(payload.version ?? "").trim();
   const sha256 = String(payload.sha256 ?? "").trim().toLowerCase();
   const snapshot = String(payload.snapshot ?? "").trim().toLowerCase();
-  if (snapshot && !SITE_ID.test(snapshot)) throw new Error("Website snapshot id must be 32 hex characters");
+  if (snapshot && !SITE_ID.test(snapshot)) {
+    throw new Error("Website snapshot id must be 32 hex characters");
+  }
   if (snapshot && !apiUrl) throw new Error("Website snapshot download needs the Agent API");
   const artifactUrl = snapshot && apiUrl
     ? apiUrl(`/agent/website/snapshots/${snapshot}`)

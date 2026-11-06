@@ -11,6 +11,7 @@ import {
   parseHookRequest,
   parseOpensslEndDate,
   parseWebsiteSiteDomainsState,
+  publicApiLocation,
   publishWebsiteChallenge,
   renderWebsiteEdgeConfig,
   sha256Hex,
@@ -24,7 +25,7 @@ import {
   wildcardCertName,
 } from "./website-edge.ts";
 
-const render = (sslEnabled: boolean) =>
+const render = (sslEnabled: boolean, extra: Record<string, unknown> = {}) =>
   renderWebsiteEdgeConfig({
     base: "Prod.MNSCloud.Website.",
     sslEnabled,
@@ -33,6 +34,7 @@ const render = (sslEnabled: boolean) =>
     webappsUpstream: "$webapps_upstream",
     certificateDir: "/etc/letsencrypt/live/wildcard.prod.mnscloud.website/",
     securityHeaders: '    add_header X-Content-Type-Options "nosniff" always;',
+    ...extra,
   });
 
 Deno.test("website bases are normalized FQDNs; names derive from them", () => {
@@ -327,4 +329,26 @@ Deno.test("websiteSiteCommand downloads an API-rendered snapshot from the Agent 
     Error,
     "https",
   );
+});
+
+Deno.test("edge config: public API throttled only when asked, sub-path clients before the site", () => {
+  const plain = render(true);
+  assert(!plain.includes("limit_req"), "no limit_req without the edge zone");
+  assert(!plain.includes("/api/v1/public/"));
+  const hardened = render(true, {
+    publicApiRateLimit: true,
+    appLocations: "  location ^~ /customer-portal/ {\n    proxy_pass $webapps_upstream;\n  }",
+  });
+  assertStringIncludes(hardened, "location ^~ /api/v1/public/ {");
+  assertStringIncludes(hardened, "limit_req zone=mnscloud_api burst=60 nodelay;");
+  assertStringIncludes(hardened, "limit_req_status 429;");
+  assert(
+    hardened.indexOf("location ^~ /customer-portal/") <
+      hardened.indexOf("  location / {\n    add_header"),
+    "the sub-path clients come before the site location",
+  );
+  assertEquals(hardened.match(/limit_req zone=/g)?.length, 1, "only the 443 server throttles");
+  const location = publicApiLocation("$api_upstream", "https");
+  assertStringIncludes(location, "proxy_set_header X-Forwarded-Proto https;");
+  assertStringIncludes(location, "proxy_pass $api_upstream;");
 });

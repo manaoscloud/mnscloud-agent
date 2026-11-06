@@ -81,7 +81,7 @@ Deno.test("edge headers: App and softphone may use the microphone, only the soft
   assertEquals(field.includes("camera=(self)"), true);
   assertEquals(field.includes("microphone=()"), true);
   assertEquals(field.includes("frame-ancestors 'none'"), true);
-  assertEquals(app.split("\n").length, 4);
+  assertEquals(app.split("\n").length, 5);
   // Tutorial videos: only the App frames youtube-nocookie.com.
   assertEquals(app.includes("frame-src 'self' https://www.youtube-nocookie.com;"), true);
   assertEquals(softphone.includes("frame-src"), false);
@@ -113,4 +113,37 @@ Deno.test("the softphone path comes from MNSCLOUD_PHONEWEB_PATH, defaulting to /
       .nginxEdgeScannerPaths,
     ["/caixa/"],
   );
+});
+
+Deno.test("edge headers carry HSTS per location (nginx drops the server-level add_header)", () => {
+  for (
+    const surface of [
+      "app",
+      "softphone",
+      "scanner",
+      "timeclock",
+      "field",
+      "webapp",
+      "site",
+    ] as const
+  ) {
+    assertEquals(
+      edgeSecurityHeaders(surface, "").includes(
+        'add_header Strict-Transport-Security "max-age=31536000" always;',
+      ),
+      true,
+      surface,
+    );
+  }
+});
+
+Deno.test("site surface: published snapshots run no script and post forms only to their origin", () => {
+  const site = edgeSecurityHeaders("site", "  ");
+  assertEquals(site.includes("script-src 'none'"), true);
+  assertEquals(site.includes("style-src 'self';"), true);
+  assertEquals(site.includes("'unsafe-inline'"), false);
+  assertEquals(site.includes("form-action 'self'"), true);
+  assertEquals(site.includes("frame-ancestors 'none'"), true);
+  assertEquals(site.includes("geolocation=(), microphone=(), camera=()"), true);
+  assertEquals(site.split("\n").every((line) => line.startsWith("  add_header ")), true);
 });
