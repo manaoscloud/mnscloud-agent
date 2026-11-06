@@ -124,7 +124,7 @@ Deno.test("repository setup pins key fingerprints and never pipes a remote scrip
   for (const family of ["debian", "rhel"] as const) {
     const script = crowdSecRepositorySetupScript(family);
     assert(!/\|\s*(sh|bash)\b/.test(script), `${family}: remote script piped to a shell`);
-    assert(!script.includes("install.crowdsec.net"), family);
+    assert(!/install\.crowdsec\.net/.test(script), family);
     for (const fingerprint of CROWDSEC_REPOSITORY_KEY_FINGERPRINTS) {
       assertStringIncludes(script, fingerprint);
     }
