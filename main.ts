@@ -14,6 +14,16 @@ import {
   sipTarget,
 } from "./pabx-registration-insight.ts";
 import { collectOpenVaultStatus } from "./openvault-status.ts";
+import {
+  blocklistCommands,
+  type BlocklistEntry,
+  CROWDSEC_WHITELIST_PATH,
+  crowdSecLevelPolicy,
+  crowdSecLevelSelection,
+  crowdSecRepositorySetupScript,
+  crowdSecWhitelistContent,
+  managedListDecisions,
+} from "./cyber-security-policy.ts";
 import { collectWebappsStatus } from "./webapps-status.ts";
 import { webappsUpdateScript } from "./webapps-update.ts";
 import {
@@ -5051,15 +5061,19 @@ function crowdSecPolicyArtifacts(
   mode: string,
   level: string,
   duration: string,
+  whitelist: string | null = null,
 ): CrowdSecPolicyArtifact[] {
   return [
+    { path: CROWDSEC_WHITELIST_PATH, content: whitelist },
     {
       path: "/etc/crowdsec/profiles.yaml.local",
       content: crowdSecLocalProfileContent(services, mode, duration),
     },
     {
       path: "/etc/crowdsec/scenarios/mnscloud-profile.yaml",
-      content: level === "strict" ? crowdSecStrictScenarioContent(services) : null,
+      content: crowdSecLevelPolicy(level).strictScenarios
+        ? crowdSecStrictScenarioContent(services)
+        : null,
     },
     {
       path: "/etc/crowdsec/parsers/s01-parse/mnscloud-sip-edge.yaml",
@@ -5473,9 +5487,13 @@ async function ensureCrowdSecRepository(
       stderr: "",
     };
   }
+  if (family === "unsupported") {
+    throw new Error("CrowdSec repository setup requires a Debian or RHEL family host.");
+  }
+  // Signing keys pinned by fingerprint; no remote installation script is executed.
   return await runInstallStep(
     "Add CrowdSec package repository",
-    "curl -fsSL https://install.crowdsec.net | sh",
+    crowdSecRepositorySetupScript(family),
     timeoutMs,
   );
 }
@@ -5695,7 +5713,7 @@ async function installCyberSecurityStack(
     throw new Error(
       `Unsupported Linux distribution for automatic install: ${
         packageInfo.osID || "unknown"
-      }. Supported automatic Linux cyber security install requires Debian 12/13, RHEL 9/10, Rocky Linux 9/10, or AlmaLinux 9/10.`,
+      }. Supported automatic Linux cyber security install requires Debian 12/13, Ubuntu 22.04/24.04 LTS, RHEL 9/10, Rocky Linux 9/10, or AlmaLinux 9/10.`,
     );
   }
   const packageFamily = packageInfo.family;
@@ -5709,7 +5727,7 @@ async function installCyberSecurityStack(
     "crowdsecurity/sshd",
   ]);
   const basePackages = packageFamily === "rhel"
-    ? ["ca-certificates", "curl", "jq", "nftables", "dnf-plugins-core"]
+    ? ["ca-certificates", "curl", "gnupg2", "jq", "nftables", "dnf-plugins-core"]
     : ["ca-certificates", "curl", "gnupg", "jq", "nftables"];
   const steps = [];
   const runStep = async (
@@ -6114,9 +6132,30 @@ async function applyCyberSecurityProfile(
   const decisionDuration = crowdSecDecisionDuration(
     payload?.["defaultDecisionDuration"],
   );
-  const services = Array.isArray(payload?.["services"]) ? payload["services"] : [];
+  const profileServices = Array.isArray(payload?.["services"])
+    ? payload["services"] as Array<Record<string, unknown>>
+    : [];
+  // basic = OS and SSH only; balanced = + profile services; strict = + MNSCloud scenarios.
+  const selection = crowdSecLevelSelection(
+    level,
+    profileServices,
+    payloadStringArray(payload, "collections", []),
+  );
+  const services: unknown[] = selection.services;
   const policyServices = crowdSecPolicyServices(services);
-  const collections = payloadStringArray(payload, "collections", []);
+  const collections = selection.collections;
+  const allowlist = Array.isArray(payload?.["allowlist"]) ? payload["allowlist"] : [];
+  const trustedNetworks = Array.isArray(payload?.["trustedNetworks"])
+    ? payload["trustedNetworks"]
+    : [];
+  const blocklist = (Array.isArray(payload?.["blocklist"]) ? payload["blocklist"] : [])
+    .filter((entry): entry is BlocklistEntry =>
+      Boolean(entry) && typeof entry === "object" &&
+      typeof (entry as Record<string, unknown>)["value"] === "string"
+    );
+  const unsupportedListEntries = Array.isArray(payload?.["unsupported"])
+    ? payload["unsupported"]
+    : [];
   const serviceLabels = services.map((service) => {
     if (!service || typeof service !== "object") return "";
     const record = service as Record<string, unknown>;
@@ -6194,7 +6233,13 @@ async function applyCyberSecurityProfile(
     { mode, level, decisionDuration, bouncerEnabled, services: policyServices },
   );
   const policyArtifacts = await writeCrowdSecPolicyArtifacts(
-    crowdSecPolicyArtifacts(policyServices, mode, level, decisionDuration),
+    crowdSecPolicyArtifacts(
+      policyServices,
+      mode,
+      level,
+      decisionDuration,
+      crowdSecWhitelistContent(allowlist, trustedNetworks),
+    ),
   );
   await progress(
     "Configure CrowdSec policy",
@@ -6238,6 +6283,14 @@ async function applyCyberSecurityProfile(
     ),
   );
 
+  const lists = await applyCyberSecurityBlocklist(blocklist, bouncerEnabled, progress);
+  const listsResult = {
+    ...lists,
+    allowlistCount: allowlist.length,
+    trustedNetworksCount: trustedNetworks.length,
+    unsupported: unsupportedListEntries,
+  };
+
   await progress(
     "Collect protection status",
     98,
@@ -6259,8 +6312,50 @@ async function applyCyberSecurityProfile(
     services,
     installedCollections,
     policyArtifacts,
+    lists: listsResult,
     steps,
   };
+}
+
+/**
+ * Converges the Agent-owned blocklist decisions (reason `mnscloud-list`): new decisions are added
+ * before stale or refreshed ones are deleted, so a listed address is never left unblocked.
+ * Decisions made by CrowdSec scenarios or by an operator are never touched.
+ */
+async function applyCyberSecurityBlocklist(
+  blocklist: BlocklistEntry[],
+  bouncerEnabled: boolean,
+  progress: (
+    step: string,
+    percent: number,
+    message: string,
+    extra?: Record<string, unknown>,
+  ) => Promise<void>,
+) {
+  if (!bouncerEnabled) {
+    await progress("Apply blocklist", 94, "Firewall bouncer disabled; blocklist not enforced.", {
+      status: "warning",
+    });
+    return { blocklistStatus: "skipped", blocked: [] as string[], unblocked: [] as string[] };
+  }
+  const listed = await runLocalCommand("cscli", ["decisions", "list", "-o", "json"], 45_000);
+  if (listed.code !== 0) {
+    throw new Error(`Could not list CrowdSec decisions: ${listed.stderr || listed.stdout}`);
+  }
+  const plan = blocklistCommands(blocklist, managedListDecisions(parseJsonList(listed.stdout)));
+  for (const args of [...plan.adds, ...plan.deletes]) {
+    const result = await runLocalCommand("cscli", args, 30_000);
+    if (result.code !== 0) {
+      throw new Error(`cscli ${args.slice(0, 2).join(" ")} failed: ${result.stderr || result.stdout}`);
+    }
+  }
+  await progress(
+    "Apply blocklist",
+    94,
+    `Blocklist applied: ${plan.applied.length} blocked, ${plan.removed.length} removed.`,
+    { blocked: plan.applied, unblocked: plan.removed },
+  );
+  return { blocklistStatus: "applied", blocked: plan.applied, unblocked: plan.removed };
 }
 
 async function applyWindowsCyberSecurityProfile(

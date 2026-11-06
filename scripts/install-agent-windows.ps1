@@ -284,6 +284,7 @@ Invoke-Step {
   Copy-Item -Path "$PSScriptRoot\..\dns-monitor.ts" -Destination "$InstallDir\dns-monitor.ts" -Force
   Copy-Item -Path "$PSScriptRoot\..\job-report.ts" -Destination "$InstallDir\job-report.ts" -Force
   Copy-Item -Path "$PSScriptRoot\..\website-edge.ts" -Destination "$InstallDir\website-edge.ts" -Force
+  Copy-Item -Path "$PSScriptRoot\..\cyber-security-policy.ts" -Destination "$InstallDir\cyber-security-policy.ts" -Force
   Copy-Item -Path "$PSScriptRoot\..\deno.jsonc" -Destination "$InstallDir\deno.jsonc" -Force
 }
 Write-AgentBuildMetadata
