@@ -3649,6 +3649,34 @@ async function rerenderNginxEdgeDomains(config: AgentConfig) {
 }
 
 /**
+ * Re-renders the existing website wildcard vhosts (`<base>.conf` of `website.edge.ensure`) with the
+ * current template, keeping each one's TLS state; `website.edge.ensure` itself only runs when the
+ * certificate is due or unreported. Each base is tested and restored on failure by itself.
+ */
+async function rerenderWebsiteEdges(config: AgentConfig) {
+  const bases: string[] = [];
+  try {
+    for await (const entry of Deno.readDir(config.nginxEdgeWebsiteDir)) {
+      if (!entry.isFile || !entry.name.endsWith(".conf")) continue;
+      try {
+        bases.push(websiteBase(entry.name.slice(0, -".conf".length)));
+      } catch {
+        // Not a file of website.edge.ensure.
+      }
+    }
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) return [];
+    throw error;
+  }
+  // One base at a time: each runs its own nginx test and reload.
+  for (const base of bases.sort((a, b) => a.localeCompare(b))) {
+    const sslEnabled = await nginxEdgeHasCertificate(config, wildcardCertName(base));
+    await activateWebsiteEdge(config, base, sslEnabled);
+  }
+  return bases;
+}
+
+/**
  * Re-renders the existing ThemeDomain vhosts once per `NGINX_EDGE_RENDER_REVISION`, so a header
  * or block change shipped in an Agent update reaches every domain without a manual reconcile.
  */
@@ -3657,10 +3685,12 @@ async function ensureNginxEdgeRenderRevision(config: AgentConfig) {
   const marker = `${config.nginxEdgeConfigDir.replace(/\/+$/, "")}/.render-revision`;
   if ((await optionalRead(marker))?.trim() === NGINX_EDGE_RENDER_REVISION) return;
   const domains = await rerenderNginxEdgeDomains(config);
+  const websiteBases = await rerenderWebsiteEdges(config);
   await writeAtomic(marker, `${NGINX_EDGE_RENDER_REVISION}\n`);
   log("info", "ThemeDomain vhosts re-rendered for the render revision.", {
     revision: NGINX_EDGE_RENDER_REVISION,
     domains: domains.length,
+    websiteBases: websiteBases.length,
   });
 }
 
