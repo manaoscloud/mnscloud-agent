@@ -32,7 +32,7 @@ Agent install, update or rollback. An explicit version override remains an opera
 decision and must respect the other services on that host.
 Run `bash scripts/test-deno-selection.sh` when changing this lifecycle behavior.
 
-- Linux: Debian 12/13, RHEL 9/10, Rocky Linux 9/10, AlmaLinux 9/10.
+- Linux: Debian 12/13, Ubuntu 22.04/24.04 LTS, RHEL 9/10, Rocky Linux 9/10, AlmaLinux 9/10.
 - Windows: Windows Server 2019/2022/2025 and Windows 10/11 Pro/Enterprise.
 - Other systems are experimental and must be documented as best-effort only.
 

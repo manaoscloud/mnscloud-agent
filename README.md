@@ -48,6 +48,7 @@ create or change a provider binding.
 Supported Linux systems:
 
 - Debian 12/13
+- Ubuntu 22.04/24.04 LTS
 - RHEL 9/10
 - Rocky Linux 9/10
 - AlmaLinux 9/10

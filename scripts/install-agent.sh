@@ -146,10 +146,10 @@ detect_os() {
   . /etc/os-release
   local major="${VERSION_ID%%.*}"
   case "${ID:-}:${major}" in
-    debian:12|debian:13) echo "debian" ;;
+    debian:12|debian:13|ubuntu:22|ubuntu:24) echo "debian" ;;
     rhel:9|rhel:10|rocky:9|rocky:10|almalinux:9|almalinux:10) echo "rhel" ;;
     *)
-      warn "Unsupported or experimental Linux distribution: ${PRETTY_NAME:-${ID:-unknown} ${VERSION_ID:-}}. Supported: Debian 12/13, RHEL 9/10, Rocky Linux 9/10, AlmaLinux 9/10."
+      warn "Unsupported or experimental Linux distribution: ${PRETTY_NAME:-${ID:-unknown} ${VERSION_ID:-}}. Supported: Debian 12/13, Ubuntu 22.04/24.04 LTS, RHEL 9/10, Rocky Linux 9/10, AlmaLinux 9/10."
       echo "experimental"
       ;;
   esac
@@ -811,6 +811,7 @@ main() {
   run "cp '${AGENT_SOURCE_DIR}/dns-monitor.ts' '${install_dir}/dns-monitor.ts'"
   run "cp '${AGENT_SOURCE_DIR}/job-report.ts' '${install_dir}/job-report.ts'"
   run "cp '${AGENT_SOURCE_DIR}/website-edge.ts' '${install_dir}/website-edge.ts'"
+  run "cp '${AGENT_SOURCE_DIR}/cyber-security-policy.ts' '${install_dir}/cyber-security-policy.ts'"
   run "cp '${AGENT_SOURCE_DIR}/deno.jsonc' '${install_dir}/deno.jsonc'"
   write_agent_build_metadata "$install_dir" "$(agent_version)" "$(agent_build_ref)"
 
