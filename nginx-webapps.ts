@@ -23,10 +23,11 @@ export type NginxEdgeWebappsSettings = {
 };
 
 /**
- * Bumped whenever the rendered ThemeDomain server block changes in a way existing vhosts must
- * pick up: the Agent re-renders every vhost once when its stored revision differs.
+ * Bumped whenever the rendered ThemeDomain or website wildcard server block changes in a way
+ * existing vhosts must pick up: the Agent re-renders every vhost once when its stored revision
+ * differs.
  */
-export const NGINX_EDGE_RENDER_REVISION = "2026-11-06.website-hardening";
+export const NGINX_EDGE_RENDER_REVISION = "2026-11-06.website-hardening-wildcard";
 
 export type EdgeSurface =
   | "app"
