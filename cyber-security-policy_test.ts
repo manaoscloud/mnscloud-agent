@@ -1,4 +1,8 @@
-import { assert, assertEquals, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import {
+  assert,
+  assertEquals,
+  assertStringIncludes,
+} from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   blocklistCommands,
   blocklistDuration,
@@ -10,6 +14,7 @@ import {
   crowdSecWhitelistContent,
   hostNetwork,
   managedListDecisions,
+  retryCrowdSecCommand,
 } from "./cyber-security-policy.ts";
 
 Deno.test("levels have distinct effects", () => {
@@ -138,4 +143,30 @@ Deno.test("repository setup pins key fingerprints and never pipes a remote scrip
   assertStringIncludes(rhel, "repo_gpgcheck=1");
   assertStringIncludes(rhel, "gpgcheck=1");
   assertStringIncludes(rhel, "gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-crowdsec-repository");
+});
+
+Deno.test("cscli calls are retried while the local API restarts after a reload", async () => {
+  const waits: number[] = [];
+  const codes = [1, 1, 0];
+  let calls = 0;
+  const ok = await retryCrowdSecCommand(
+    () => Promise.resolve({ code: codes[calls++] }),
+    [10, 20, 30, 40],
+    (ms) => {
+      waits.push(ms);
+      return Promise.resolve();
+    },
+  );
+  assertEquals(ok.code, 0);
+  assertEquals(calls, 3);
+  assertEquals(waits, [10, 20]);
+
+  calls = 0;
+  const failed = await retryCrowdSecCommand(
+    () => Promise.resolve({ code: (calls++, 1) }),
+    [1, 1],
+    () => Promise.resolve(),
+  );
+  assertEquals(failed.code, 1);
+  assertEquals(calls, 3);
 });

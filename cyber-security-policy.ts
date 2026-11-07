@@ -241,3 +241,24 @@ export function crowdSecRepositorySetupScript(family: "debian" | "rhel") {
   );
   return lines.join("\n");
 }
+
+/** Waits between `cscli` attempts while the local API restarts after `systemctl reload crowdsec` (~30 s). */
+export const CROWDSEC_LAPI_RETRY_DELAYS_MS = [1000, 2000, 3000, 4000, 5000, 5000, 5000, 5000];
+
+/**
+ * Runs a `cscli` call until it succeeds or the delays run out. A reload returns before the local API
+ * accepts logins again, so the first calls after it can fail with a transient 401.
+ */
+export async function retryCrowdSecCommand<T extends { code: number }>(
+  run: () => Promise<T>,
+  delaysMs: number[] = CROWDSEC_LAPI_RETRY_DELAYS_MS,
+  sleep: (ms: number) => Promise<void> = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+): Promise<T> {
+  let result = await run();
+  for (const delay of delaysMs) {
+    if (result.code === 0) return result;
+    await sleep(delay);
+    result = await run();
+  }
+  return result;
+}
