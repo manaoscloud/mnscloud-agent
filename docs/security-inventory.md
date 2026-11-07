@@ -94,11 +94,24 @@ from zero. The files are read with `cat` through the collector runner: Deno read
 
 ### Measured footprint
 
-To be filled after the DEV rollout.
+Measured in DEV on 2026-11-07 (first collection of each host, Agent 1.0.170). CPU and memory were
+`null` on 1.0.170 (the `/sys` read needed `--allow-all`); they come from a disposable Debian 13 host
+on 1.0.171, where they are measured by the Agent itself.
 
-| Host | OS | Packages | Duration | CPU | Memory peak | Payload |
-| ---- | -- | -------- | -------- | --- | ----------- | ------- |
-|      |    |          |          |     |             |         |
+| Host                           | OS        | Packages | Duration | CPU    | Memory peak | Payload |
+| ------------------------------ | --------- | -------- | -------- | ------ | ----------- | ------- |
+| Disposable test host (1.0.171) | Debian 13 | 193      | 2.2 s    | 102 ms | 3.4 MiB     | 16 KB   |
+| API server                     | Debian 13 | 376      | 0.6 s    | -      | -           | 32 KB   |
+| Database server                | Debian 13 | 400      | 1.4 s    | -      | -           | 35 KB   |
+| Freeradius server              | Debian 13 | 388      | 1.6 s    | -      | -           | 34 KB   |
+| PABX FreeSWITCH server         | Debian 12 | 577      | 1.6 s    | -      | -           | 52 KB   |
+| Media server                   | Debian 12 | 486      | 1.0 s    | -      | -           | 58 KB   |
+| Incus host                     | Debian 13 | 684      | 3.1 s    | -      | -           | 59 KB   |
+
+All 20 DEV hosts: 365 to 684 packages, 0.6 to 3.1 s, 31 to 59 KB per full inventory (sent only when
+the platform asks for it; the heartbeat carries the 64-character hash). The collector stays inside
+`CPUQuota=5%` and `MemoryMax=128M`; the Agent process itself does not grow (the collection runs in
+child processes).
 
 ## Verify on a host
 
