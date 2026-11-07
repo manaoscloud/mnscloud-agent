@@ -547,6 +547,12 @@ Long-running cyber security jobs report progress before and after each major ste
 can display the current stage, percentage, and failure details without requiring direct database
 access.
 
+Security inventory (Essential profile): the heartbeat always sends
+`securityInventory: {supported, hash, collectedAt}`; when the answer says `enabled`, the Agent
+collects a read-only inventory in its own lane (24 h + jitter, package database changes, resource
+capped by `mnscloud-security.slice`) and sends it to `POST /api/v1/agent/inventory` only when the
+answer says `needsFull`. Contract, limits and verification: [docs/security-inventory.md](docs/security-inventory.md).
+
 ## Nginx Edge And Certbot
 
 The Agent can manage public edge Nginx configuration and certificates when it is installed on the

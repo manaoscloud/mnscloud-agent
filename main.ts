@@ -109,6 +109,14 @@ import {
 } from "./pabx-presence.ts";
 import { JOB_LONG_POLL_MAX_SECONDS, jobLongPollSeconds, runLane } from "./scheduler.ts";
 import {
+  collectSecurityInventory,
+  INVENTORY_PATH,
+  inventoryCachePath,
+  packageDbStamp,
+  SecurityInventory,
+  type SecurityInventoryAnswer,
+} from "./security-inventory.ts";
+import {
   byteBudget,
   captureCommand,
   diagnosticExcerpt,
@@ -1447,6 +1455,18 @@ export type HostMetrics = {
 let previousCpu: { total: number; idle: number } | null = null;
 let lastHostMetricsAt = 0;
 const pabxPresenceTracker = new PabxPresenceTracker();
+// Software inventory: collected in its own lane; the heartbeat only carries the hash.
+const securityInventory = new SecurityInventory({
+  collect: () =>
+    collectSecurityInventory({
+      run: runLocalCommand,
+      windows: IS_WINDOWS,
+      powershell: powerShellExecutable,
+    }),
+  stamp: () => packageDbStamp(),
+  log: (level, message, extra) => log(level, message, extra),
+  windows: IS_WINDOWS,
+});
 // The heartbeat and the event-driven reports share the presence baseline: one at a time.
 let pabxPresenceQueue: Promise<unknown> = Promise.resolve();
 function withPabxPresenceLock<T>(task: () => Promise<T>): Promise<T> {
@@ -1751,8 +1771,12 @@ async function performHeartbeat(
     ? await collectWebappsStatus()
     : null;
   const hostAddresses = await collectHostAddresses(config);
-  let heartbeat: { data?: { pabxPresence?: { applied?: unknown; needsFull?: unknown } } } | null =
-    null;
+  let heartbeat: {
+    data?: {
+      pabxPresence?: { applied?: unknown; needsFull?: unknown };
+      securityInventory?: SecurityInventoryAnswer;
+    };
+  } | null = null;
   try {
     heartbeat = await jsonRequest(config, "/agent/heartbeat", agentToken, agentUUID, {
       name: config.name,
@@ -1786,6 +1810,7 @@ async function performHeartbeat(
         }
         : undefined,
       pabxPresence: pabxPresence.report,
+      securityInventory: securityInventory.heartbeatField(),
       cyberSecurityStatus: cyberSecurityStatus ?? undefined,
       hostMetrics: hostMetrics ?? undefined,
       voipLoad: voipLoad.length
@@ -1801,6 +1826,11 @@ async function performHeartbeat(
   } finally {
     pabxPresenceTracker.acknowledge(pabxPresence, heartbeat?.data?.pabxPresence);
   }
+  // Only an accepted heartbeat changes the switch; the upload runs detached from this call.
+  void securityInventory.acknowledge(
+    heartbeat?.data?.securityInventory,
+    (payload) => jsonRequest(config, INVENTORY_PATH, agentToken, agentUUID, { ...payload }),
+  );
 }
 
 function normalizePath(path: string) {
@@ -8005,6 +8035,7 @@ async function main() {
   });
 
   startPabxPresenceEvents(config, agentUUID);
+  await securityInventory.load(inventoryCachePath(config.agentTokenFile));
   let lastHeartbeat = 0;
   let lastCyberSecuritySync = 0;
   let lastCapabilitiesRefresh = Date.now();
@@ -8064,6 +8095,14 @@ async function main() {
       // The API long-poll already waited for work; an older API answers at once (normal interval).
       () => jobLongPoll ? 1000 : Math.max(1000, config.pollIntervalMs),
       reportError("jobs"),
+    ),
+    // Collects only when enabled and due (24 h + jitter or a package change); never in the heartbeat.
+    runLane(
+      async () => {
+        await securityInventory.tick();
+      },
+      60_000,
+      reportError("security inventory"),
     ),
   ]);
 }
