@@ -10,6 +10,7 @@
 export const SECURITY_SLICE = "mnscloud-security.slice";
 export const SECURITY_SLICE_FILE = `/etc/systemd/system/${SECURITY_SLICE}`;
 // systemd nests a dashed slice under its prefix: mnscloud.slice/mnscloud-security.slice (cgroup v2).
+// Fallback only: the real path comes from `systemctl show -P ControlGroup` (nested managers differ).
 export const SECURITY_SLICE_CGROUP = `/sys/fs/cgroup/mnscloud.slice/${SECURITY_SLICE}`;
 export const INVENTORY_PATH = "/agent/inventory";
 export const INVENTORY_CACHE_FILE = "security-inventory.json";
@@ -536,6 +537,39 @@ async function readOptional(path: string) {
   }
 }
 
+/**
+ * cgroup v2 directory of the slice, from systemd (`ControlGroup`). An inactive slice has no cgroup
+ * yet (empty answer): `null`. Without systemctl the conventional path is used.
+ */
+export async function sliceCgroupPath(run: CommandRunner): Promise<string | null> {
+  const systemctl = await findExecutable("systemctl");
+  if (systemctl) {
+    const result = await run(systemctl, ["show", "-P", "ControlGroup", SECURITY_SLICE], 10_000)
+      .catch(() => null);
+    if (result && result.code === 0) {
+      const group = result.stdout.trim();
+      return parseControlGroup(group);
+    }
+  }
+  return SECURITY_SLICE_CGROUP;
+}
+
+/** Reads a cgroup accounting file through `cat` (Deno needs --allow-all for /sys); null on failure. */
+export async function readCgroupFile(run: CommandRunner, path: string): Promise<string | null> {
+  const cat = await findExecutable("cat");
+  if (!cat || !path.startsWith("/sys/fs/cgroup/")) return null;
+  const result = await run(cat, [path], 10_000).catch(() => null);
+  return result && result.code === 0 ? result.stdout : null;
+}
+
+/** Maps a systemd `ControlGroup` value to its directory; anything unexpected is `null`. */
+export function parseControlGroup(group: string): string | null {
+  if (!group.startsWith("/") || group.includes("..") || !/^[A-Za-z0-9@:._\/-]+$/.test(group)) {
+    return null;
+  }
+  return `/sys/fs/cgroup${group}`;
+}
+
 export function parseCpuStatUsec(text: string | null): number | null {
   const match = text?.match(/^usage_usec\s+(\d+)$/m);
   return match ? Number(match[1]) : null;
@@ -682,6 +716,9 @@ export type CollectOptions = {
   windows: boolean;
   powershell: () => string;
   now?: () => number;
+  /** Test seams: slice cgroup directory (default `sliceCgroupPath`) and file reader (`cat`). */
+  sliceCgroup?: () => Promise<string | null>;
+  readCgroupFile?: (path: string) => Promise<string | null>;
 };
 
 /** Collects one full inventory under the resource cap; throws on timeout or size overflow. */
@@ -705,16 +742,20 @@ export async function collectSecurityInventory(options: CollectOptions): Promise
     core = parseWindowsInventory(result.stdout);
   } else {
     const runner = new CappedRunner(options.run, await detectWrapperTools(), deadline);
-    const cpuBefore = runner.usesSlice
-      ? parseCpuStatUsec(await readOptional(`${SECURITY_SLICE_CGROUP}/cpu.stat`))
-      : null;
+    const resolve = options.sliceCgroup ?? (() => sliceCgroupPath(options.run));
+    // A slice that is not active yet has no cgroup: it starts with this collection at zero usage.
+    // Deno reads /sys only with --allow-all, which the Agent does not have: `cat` reads the files.
+    const read = options.readCgroupFile ?? ((path: string) => readCgroupFile(options.run, path));
+    const before = runner.usesSlice ? await resolve() : null;
+    const cpuBefore = before ? parseCpuStatUsec(await read(`${before}/cpu.stat`)) : 0;
     core = await collectLinux(runner);
-    if (runner.usesSlice) {
-      const cpuAfter = parseCpuStatUsec(await readOptional(`${SECURITY_SLICE_CGROUP}/cpu.stat`));
+    const after = runner.usesSlice ? await resolve() : null;
+    if (after) {
+      const cpuAfter = parseCpuStatUsec(await read(`${after}/cpu.stat`));
       if (cpuBefore !== null && cpuAfter !== null && cpuAfter >= cpuBefore) {
         cpuMs = Math.round((cpuAfter - cpuBefore) / 1000);
       }
-      const peak = Number((await readOptional(`${SECURITY_SLICE_CGROUP}/memory.peak`))?.trim());
+      const peak = Number((await read(`${after}/memory.peak`))?.trim());
       memoryPeakBytes = Number.isFinite(peak) && peak > 0 ? peak : null;
     }
   }

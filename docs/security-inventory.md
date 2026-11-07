@@ -84,9 +84,13 @@ Windows: the collector PowerShell process sets its own priority class to `Idle`.
 ## Footprint
 
 Each inventory reports `footprint`: `durationMs`, `payloadBytes`, and on Linux with the slice
-`cpuMs` (delta of `usage_usec` in `/sys/fs/cgroup/mnscloud.slice/mnscloud-security.slice/cpu.stat`)
-and `memoryPeakBytes` (`memory.peak` of the slice, the peak since the slice started); otherwise
-`null`.
+`cpuMs` (delta of `usage_usec` in the slice `cpu.stat`) and `memoryPeakBytes` (`memory.peak` of the
+slice, the peak since the slice started); otherwise `null`. The slice directory comes from
+`systemctl show -P ControlGroup mnscloud-security.slice` (normally
+`/sys/fs/cgroup/mnscloud.slice/mnscloud-security.slice`; a nested systemd, such as a container, has
+a longer prefix). A slice that is not active yet has no cgroup: the collection that starts it counts
+from zero. The files are read with `cat` through the collector runner: Deno reads `/sys` only with
+`--allow-all`, which the Agent service does not have.
 
 ### Measured footprint
 
