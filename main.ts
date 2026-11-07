@@ -23,6 +23,7 @@ import {
   crowdSecRepositorySetupScript,
   crowdSecWhitelistContent,
   managedListDecisions,
+  retryCrowdSecCommand,
 } from "./cyber-security-policy.ts";
 import { collectWebappsStatus } from "./webapps-status.ts";
 import { webappsUpdateScript } from "./webapps-update.ts";
@@ -6389,13 +6390,15 @@ async function applyCyberSecurityBlocklist(
     });
     return { blocklistStatus: "skipped", blocked: [] as string[], unblocked: [] as string[] };
   }
-  const listed = await runLocalCommand("cscli", ["decisions", "list", "-o", "json"], 45_000);
+  const listed = await retryCrowdSecCommand(() =>
+    runLocalCommand("cscli", ["decisions", "list", "-o", "json"], 45_000)
+  );
   if (listed.code !== 0) {
     throw new Error(`Could not list CrowdSec decisions: ${listed.stderr || listed.stdout}`);
   }
   const plan = blocklistCommands(blocklist, managedListDecisions(parseJsonList(listed.stdout)));
   for (const args of [...plan.adds, ...plan.deletes]) {
-    const result = await runLocalCommand("cscli", args, 30_000);
+    const result = await retryCrowdSecCommand(() => runLocalCommand("cscli", args, 30_000));
     if (result.code !== 0) {
       throw new Error(`cscli ${args.slice(0, 2).join(" ")} failed: ${result.stderr || result.stdout}`);
     }
