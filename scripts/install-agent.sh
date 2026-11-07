@@ -585,6 +585,22 @@ WantedBy=multi-user.target
 "
 }
 
+# Resource cap of the software inventory collector (docs/security-inventory.md).
+write_security_slice_file() {
+  local slice_file="/etc/systemd/system/mnscloud-security.slice"
+  write_file "$slice_file" "[Unit]
+Description=MNSCloud Agent security inventory collectors (resource capped)
+
+[Slice]
+CPUAccounting=yes
+MemoryAccounting=yes
+CPUQuota=5%
+MemoryMax=128M
+IOWeight=10
+"
+  run "chmod 0644 '${slice_file}'"
+}
+
 activate_enrollment() {
   local api_base="$1" agent_uuid="$2" install_label="$3" hostname="$4" token_file="$5" uuid_file="$6"
   [[ -n "${ENROLLMENT_TOKEN}" ]] || return 0
@@ -812,6 +828,7 @@ main() {
   run "cp '${AGENT_SOURCE_DIR}/job-report.ts' '${install_dir}/job-report.ts'"
   run "cp '${AGENT_SOURCE_DIR}/website-edge.ts' '${install_dir}/website-edge.ts'"
   run "cp '${AGENT_SOURCE_DIR}/cyber-security-policy.ts' '${install_dir}/cyber-security-policy.ts'"
+  run "cp '${AGENT_SOURCE_DIR}/security-inventory.ts' '${install_dir}/security-inventory.ts'"
   run "cp '${AGENT_SOURCE_DIR}/deno.jsonc' '${install_dir}/deno.jsonc'"
   write_agent_build_metadata "$install_dir" "$(agent_version)" "$(agent_build_ref)"
 
@@ -824,6 +841,7 @@ main() {
 
   write_agent_config "$config_file" "$install_label" "$hostname" "$api_base"
   write_service_file "$service_file" "$install_dir" "$config_file"
+  write_security_slice_file
   activate_enrollment "$api_base" "$agent_uuid" "$install_label" "$hostname" "${data_dir}/agent.token" "${data_dir}/agent.uuid"
   if [[ -f "${data_dir}/agent.uuid" ]]; then
     agent_uuid="$(tr -d '[:space:]' < "${data_dir}/agent.uuid")"

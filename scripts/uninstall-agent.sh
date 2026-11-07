@@ -92,6 +92,7 @@ main() {
   fi
 
   remove_path "$service_file"
+  remove_path "/etc/systemd/system/mnscloud-security.slice"
 
   if command -v systemctl >/dev/null 2>&1; then
     run "systemctl daemon-reload"

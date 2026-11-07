@@ -213,6 +213,13 @@ Every Linux install/update also converges the restricted `mns-diagnostics` SSH a
 public key when missing, in-place update otherwise, no change when current). Failures never
 block the Agent. Contract and allowlist: [docs/ssh-diagnostics.md](docs/ssh-diagnostics.md).
 
+## Security inventory
+
+When the platform enables it for the Agent, the Agent keeps a read-only software inventory (OS,
+packages or Windows programs and KBs, listening ports, reboot pending) under a resource cap
+(`mnscloud-security.slice` on Linux, Idle priority on Windows), at most once per 24 h plus package
+changes. The heartbeat carries only its hash. See [docs/security-inventory.md](docs/security-inventory.md).
+
 ## Cyber Security edge profiles
 
 Cyber Security remains the control plane for SIP scanner detection and temporary blocking. The API
