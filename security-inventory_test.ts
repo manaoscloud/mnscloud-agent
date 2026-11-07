@@ -22,12 +22,14 @@ import {
   PACKAGE_MIN_SPACING_MS,
   PACKAGE_SETTLE_MS,
   parseApk,
+  parseControlGroup,
   parseCpuStatUsec,
   parseDpkg,
   parseOsRelease,
   parseRpm,
   parseSs,
   parseWindowsInventory,
+  readCgroupFile,
   SecurityInventory,
   UPLOAD_MIN_SPACING_MS,
   WINDOWS_INVENTORY_SCRIPT,
@@ -396,6 +398,42 @@ Deno.test("slice CPU accounting parser", () => {
   assertEquals(parseCpuStatUsec("usage_usec 410123\nuser_usec 1\nsystem_usec 2\n"), 410123);
   assertEquals(parseCpuStatUsec(null), null);
   assertEquals(parseCpuStatUsec("nothing"), null);
+});
+
+Deno.test("slice cgroup path comes from systemd ControlGroup", () => {
+  assertEquals(
+    parseControlGroup("/mnscloud.slice/mnscloud-security.slice"),
+    "/sys/fs/cgroup/mnscloud.slice/mnscloud-security.slice",
+  );
+  // A manager nested in a container reports its own prefix.
+  assertEquals(
+    parseControlGroup("/system.slice/docker-3f1e.scope/mnscloud.slice/mnscloud-security.slice"),
+    "/sys/fs/cgroup/system.slice/docker-3f1e.scope/mnscloud.slice/mnscloud-security.slice",
+  );
+  // Inactive slice (empty) or unexpected text: no path.
+  assertEquals(parseControlGroup(""), null);
+  assertEquals(parseControlGroup("/a/../etc"), null);
+  assertEquals(parseControlGroup("relative/path"), null);
+});
+
+Deno.test({
+  name: "cgroup accounting files are read through cat (Deno needs --allow-all for /sys)",
+  ignore: Deno.build.os === "windows",
+  fn: async () => {
+    const calls: string[][] = [];
+    const run = (command: string, args: string[]) => {
+      calls.push([command, ...args]);
+      return Promise.resolve({ code: 0, stdout: "usage_usec 85000", stderr: "" });
+    };
+    const path = "/sys/fs/cgroup/mnscloud.slice/mnscloud-security.slice/cpu.stat";
+    assertEquals(await readCgroupFile(run, path), "usage_usec 85000");
+    assertEquals(calls.length, 1);
+    assertEquals(calls[0].slice(1), [path]);
+    assertEquals(await readCgroupFile(run, "/etc/shadow"), null);
+    assertEquals(calls.length, 1);
+    const failing = () => Promise.resolve({ code: 1, stdout: "", stderr: "No such file" });
+    assertEquals(await readCgroupFile(failing, path), null);
+  },
 });
 
 Deno.test("HTTP status and cache path helpers", () => {
