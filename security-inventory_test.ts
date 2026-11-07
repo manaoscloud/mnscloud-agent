@@ -416,20 +416,24 @@ Deno.test("slice cgroup path comes from systemd ControlGroup", () => {
   assertEquals(parseControlGroup("relative/path"), null);
 });
 
-Deno.test("cgroup accounting files are read through cat (Deno needs --allow-all for /sys)", async () => {
-  const calls: string[][] = [];
-  const run = (command: string, args: string[]) => {
-    calls.push([command, ...args]);
-    return Promise.resolve({ code: 0, stdout: "usage_usec 85000", stderr: "" });
-  };
-  const path = "/sys/fs/cgroup/mnscloud.slice/mnscloud-security.slice/cpu.stat";
-  assertEquals(await readCgroupFile(run, path), "usage_usec 85000");
-  assertEquals(calls.length, 1);
-  assertEquals(calls[0].slice(1), [path]);
-  assertEquals(await readCgroupFile(run, "/etc/shadow"), null);
-  assertEquals(calls.length, 1);
-  const failing = () => Promise.resolve({ code: 1, stdout: "", stderr: "No such file" });
-  assertEquals(await readCgroupFile(failing, path), null);
+Deno.test({
+  name: "cgroup accounting files are read through cat (Deno needs --allow-all for /sys)",
+  ignore: Deno.build.os === "windows",
+  fn: async () => {
+    const calls: string[][] = [];
+    const run = (command: string, args: string[]) => {
+      calls.push([command, ...args]);
+      return Promise.resolve({ code: 0, stdout: "usage_usec 85000", stderr: "" });
+    };
+    const path = "/sys/fs/cgroup/mnscloud.slice/mnscloud-security.slice/cpu.stat";
+    assertEquals(await readCgroupFile(run, path), "usage_usec 85000");
+    assertEquals(calls.length, 1);
+    assertEquals(calls[0].slice(1), [path]);
+    assertEquals(await readCgroupFile(run, "/etc/shadow"), null);
+    assertEquals(calls.length, 1);
+    const failing = () => Promise.resolve({ code: 1, stdout: "", stderr: "No such file" });
+    assertEquals(await readCgroupFile(failing, path), null);
+  },
 });
 
 Deno.test("HTTP status and cache path helpers", () => {
