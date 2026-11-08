@@ -42,8 +42,7 @@ Packages 20000, hotfixes 2000, ports 2000 (above that the first N of the sorted 
 `truncated=true`); name 255, version 128 (entries that do not fit are dropped, never cut), arch 32,
 source 255, source version 128 (dpkg only, sent as `sourceVersion` when it differs from the binary
 version: Debian fixes are versions of the source package), process 128 characters; control
-characters are removed. A payload over 4 MiB is
-abandoned.
+characters are removed. A payload over 4 MiB is abandoned.
 
 The hash is the sha256 hex of
 `JSON.stringify({os, packageManager, packages, hotfixes, ports,
@@ -60,6 +59,9 @@ The collector runs in its own Agent lane (checked every minute), never inside th
 - Linux: also when a package database changed (`/var/lib/dpkg/status`, `/var/lib/rpm/rpmdb.sqlite`,
   `/var/lib/rpm/Packages`, `/usr/lib/sysimage/rpm/rpmdb.sqlite`, `/lib/apk/db/installed`), after it
   stayed unchanged for 2 minutes and at least 10 minutes after the previous attempt.
+- After an Agent update that changes the collected fields (`INVENTORY_FORMAT`, 2 = dpkg
+  `sourceVersion`), a cache of the older format keeps its hash but is replaced by a new collection
+  after the random 0-10 minute delay instead of waiting for the 24 h schedule.
 - A failed collection (command error, 120 s per command, 10 minutes overall, output or payload over
   the limit) is logged once and retried only at the next scheduled time or package change.
 

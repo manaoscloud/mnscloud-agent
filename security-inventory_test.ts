@@ -14,6 +14,7 @@ import {
   FIRST_DELAY_MS,
   FULL_INTERVAL_MS,
   httpStatusOf,
+  INVENTORY_FORMAT,
   inventoryCachePath,
   type InventoryCore,
   inventoryHash,
@@ -688,6 +689,41 @@ Deno.test("inventory upload: 413 blocks the hash until the next collection; 429/
     h.clock.now += UPLOAD_MIN_SPACING_MS;
     await h.inventory.acknowledge({ enabled: true, needsFull: true }, reject(413));
     assertEquals(attempts, 4, "a new collection may be sent again");
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("inventory cache of an older collector format is recollected after the first delay", async () => {
+  const dir = await Deno.makeTempDir();
+  try {
+    const path = `${dir}/security-inventory.json`;
+    const h = harness();
+    const old = fakePayload("b".repeat(64), new Date(h.clock.now - 60_000).toISOString());
+    await Deno.writeTextFile(
+      path,
+      JSON.stringify({ hash: old.hash, collectedAt: old.collectedAt, dbStamp: "s1", payload: old }),
+    );
+    await h.inventory.load(path);
+    assertEquals(h.inventory.heartbeatField().hash, old.hash, "the platform copy stays valid");
+    await h.inventory.acknowledge({ enabled: true, needsFull: false }, () => Promise.resolve());
+    assertEquals(await h.inventory.tick(), null, "waits the random first delay");
+    h.clock.now += FIRST_DELAY_MS;
+    assertEquals(await h.inventory.tick(), "first");
+    assertEquals(h.collected, 1);
+    const cache = JSON.parse(await Deno.readTextFile(path));
+    assertEquals(cache.format, INVENTORY_FORMAT);
+
+    // The rewritten cache is current: a restart does not collect again.
+    const restarted = harness(h.clock.now);
+    await restarted.inventory.load(path);
+    await restarted.inventory.acknowledge(
+      { enabled: true, needsFull: false },
+      () => Promise.resolve(),
+    );
+    restarted.clock.now += FIRST_DELAY_MS;
+    assertEquals(await restarted.inventory.tick(), null);
+    assertEquals(restarted.collected, 0);
   } finally {
     await Deno.remove(dir, { recursive: true });
   }
