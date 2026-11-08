@@ -109,6 +109,25 @@ Deno.test("dpkg-query output keeps only installed packages", () => {
   ]);
 });
 
+Deno.test("dpkg source version is kept only when it differs from the binary version", () => {
+  const packages = parseDpkg([
+    "ii \tlibtalloc2\t2:2.4.3+samba4.22.11-1\tamd64\tsamba\t2:4.22.11+dfsg-0+deb13u1",
+    "ii \topenssl\t3.0.15-1~deb12u1\tamd64\topenssl\t3.0.15-1~deb12u1",
+    "ii \tlibfoo1\t1.0-1+b1\tamd64\tfoo\t" + "9".repeat(LIMITS.sourceVersion + 1),
+  ].join("\n"));
+  assertEquals(packages, [
+    {
+      name: "libtalloc2",
+      version: "2:2.4.3+samba4.22.11-1",
+      arch: "amd64",
+      source: "samba",
+      sourceVersion: "2:4.22.11+dfsg-0+deb13u1",
+    },
+    { name: "openssl", version: "3.0.15-1~deb12u1", arch: "amd64", source: "openssl" },
+    { name: "libfoo1", version: "1.0-1+b1", arch: "amd64", source: "foo" },
+  ]);
+});
+
 Deno.test("rpm output keeps the epoch form and drops gpg-pubkey", () => {
   const packages = parseRpm([
     "openssl-libs\t1:3.0.7-27.el9\tx86_64\topenssl-3.0.7-27.el9.src.rpm",
