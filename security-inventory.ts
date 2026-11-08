@@ -14,6 +14,12 @@ export const SECURITY_SLICE_FILE = `/etc/systemd/system/${SECURITY_SLICE}`;
 export const SECURITY_SLICE_CGROUP = `/sys/fs/cgroup/mnscloud.slice/${SECURITY_SLICE}`;
 export const INVENTORY_PATH = "/agent/inventory";
 export const INVENTORY_CACHE_FILE = "security-inventory.json";
+/**
+ * Payload format of the collector. Raise it whenever a collected field changes (2: dpkg
+ * `sourceVersion`): a cache written by an older format is replaced by a new collection after the
+ * random first delay, instead of waiting for the 24 h schedule.
+ */
+export const INVENTORY_FORMAT = 2;
 
 export const LIMITS = {
   packages: 20000,
@@ -852,6 +858,8 @@ export function httpStatusOf(error: unknown): number | null {
 }
 
 type CacheFile = {
+  /** Collector format; absent in caches written before format 2. */
+  format?: number;
   hash: string;
   collectedAt: string;
   dbStamp: string | null;
@@ -896,7 +904,11 @@ export class SecurityInventory {
     this.nextDueAt = from + FULL_INTERVAL_MS + Math.floor(this.random() * JITTER_MS);
   }
 
-  /** Restores the cached hash so a restart does not force a new collection. */
+  /**
+   * Restores the cached hash so a restart does not force a new collection. A cache of an older
+   * collector format keeps its hash (the platform still has that inventory) but leaves the schedule
+   * empty, so the next collection runs after the random first delay.
+   */
   async load(cachePath: string) {
     this.cachePath = cachePath;
     try {
@@ -906,7 +918,7 @@ export class SecurityInventory {
       this.meta = { hash: cache.hash, collectedAt: cache.collectedAt };
       this.attemptStamp = typeof cache.dbStamp === "string" ? cache.dbStamp : null;
       this.lastAttemptAt = Math.min(collectedAt, this.now());
-      this.scheduleNext(this.lastAttemptAt);
+      if (cache.format === INVENTORY_FORMAT) this.scheduleNext(this.lastAttemptAt);
     } catch {
       this.meta = null;
     }
@@ -1026,6 +1038,7 @@ export class SecurityInventory {
       const payload = await this.options.collect();
       if (!this.enabled) return reason;
       await this.writeCache({
+        format: INVENTORY_FORMAT,
         hash: payload.hash,
         collectedAt: payload.collectedAt,
         dbStamp: this.attemptStamp,
