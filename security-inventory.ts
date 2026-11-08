@@ -23,6 +23,7 @@ export const LIMITS = {
   version: 128,
   arch: 32,
   source: 255,
+  sourceVersion: 128,
   process: 128,
   payloadBytes: 4 * 1024 * 1024,
 } as const;
@@ -67,6 +68,8 @@ export type InventoryPackage = {
   version: string;
   arch: string | null;
   source: string | null;
+  /** dpkg `${source:Version}` when it differs from the binary version (Debian fixes are source versions). */
+  sourceVersion?: string;
 };
 
 export type InventoryPort = {
@@ -207,6 +210,7 @@ export function canonicalInventory(
         version: item.version,
         arch: item.arch,
         source: item.source,
+        ...(item.sourceVersion ? { sourceVersion: item.sourceVersion } : {}),
       })),
       hotfixes: hotfixes.slice(0, LIMITS.hotfixes),
       ports: ports.slice(0, LIMITS.ports).map((item) => ({
@@ -260,14 +264,20 @@ export function parseOsRelease(text: string) {
   };
 }
 
-/** `dpkg-query -W -f='${db:Status-Abbrev}\t${Package}\t${Version}\t${Architecture}\t${source:Package}\n'` */
+/**
+ * `dpkg-query -W -f='${db:Status-Abbrev}\t${Package}\t${Version}\t${Architecture}\t${source:Package}\t${source:Version}\n'`
+ * The source version is kept only when it differs from the binary version (binNMU, samba libraries).
+ */
 export function parseDpkg(text: string): InventoryPackage[] {
   const packages: InventoryPackage[] = [];
   for (const line of text.split("\n")) {
     const fields = line.split("\t");
     if (fields.length < 4 || !fields[0].startsWith("ii")) continue;
     const item = makePackage(fields[1], fields[2], fields[3], fields[4]);
-    if (item) packages.push(item);
+    if (!item) continue;
+    const sourceVersion = exactText(fields[5], LIMITS.sourceVersion);
+    if (sourceVersion && sourceVersion !== item.version) item.sourceVersion = sourceVersion;
+    packages.push(item);
   }
   return packages;
 }
@@ -655,7 +665,7 @@ async function collectLinux(runner: CappedRunner): Promise<InventoryCore> {
   if (dpkgQuery) {
     const result = await runner.exec(dpkgQuery, [
       "-W",
-      "--showformat=${db:Status-Abbrev}\\t${Package}\\t${Version}\\t${Architecture}\\t${source:Package}\\n",
+      "--showformat=${db:Status-Abbrev}\\t${Package}\\t${Version}\\t${Architecture}\\t${source:Package}\\t${source:Version}\\n",
     ]);
     if (result.code !== 0) throw new Error(`dpkg-query exited with ${result.code}.`);
     packageManager = "dpkg";

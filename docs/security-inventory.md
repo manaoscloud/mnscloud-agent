@@ -40,7 +40,9 @@ argument vectors; their output is parsed, never executed.
 
 Packages 20000, hotfixes 2000, ports 2000 (above that the first N of the sorted list are kept and
 `truncated=true`); name 255, version 128 (entries that do not fit are dropped, never cut), arch 32,
-source 255, process 128 characters; control characters are removed. A payload over 4 MiB is
+source 255, source version 128 (dpkg only, sent as `sourceVersion` when it differs from the binary
+version: Debian fixes are versions of the source package), process 128 characters; control
+characters are removed. A payload over 4 MiB is
 abandoned.
 
 The hash is the sha256 hex of
