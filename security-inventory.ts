@@ -1068,6 +1068,42 @@ export class SecurityInventory {
     return reason;
   }
 
+  /**
+   * Collects and uploads right away, outside the schedule and the upload spacing, after this Agent
+   * changed the installed packages (patch job): the platform marks the fixed findings from it.
+   * Returns false while the inventory is disabled or another collection runs.
+   */
+  async refreshNow(send: InventorySender): Promise<boolean> {
+    if (!this.enabled || this.collecting || !this.cachePath) return false;
+    this.collecting = true;
+    const now = this.now();
+    try {
+      const current = this.options.windows ? null : await this.options.stamp();
+      const payload = await this.options.collect();
+      if (!this.enabled) return false;
+      this.lastAttemptAt = now;
+      this.attemptStamp = current?.stamp ?? "";
+      this.scheduleNext(now);
+      await this.writeCache({
+        format: INVENTORY_FORMAT,
+        hash: payload.hash,
+        collectedAt: payload.collectedAt,
+        dbStamp: this.attemptStamp,
+        payload,
+      });
+      this.meta = { hash: payload.hash, collectedAt: payload.collectedAt };
+      this.blockedHash = null;
+    } catch (error) {
+      this.options.log("warn", "Security inventory refresh after a change failed.", String(error));
+      return false;
+    } finally {
+      this.collecting = false;
+    }
+    this.lastUploadAt = 0;
+    await this.upload(send);
+    return true;
+  }
+
   private async writeCache(cache: CacheFile) {
     const path = this.cachePath!;
     const temporary = `${path}.tmp`;
