@@ -30,14 +30,14 @@ import { webappsUpdateScript } from "./webapps-update.ts";
 import {
   certbotWildcardArgs,
   needsWildcardRenewal,
+  type NginxEdgeRootMode,
+  nginxEdgeRootMode,
   parseHookRequest,
   parseOpensslEndDate,
-  nginxEdgeRootMode,
-  type NginxEdgeRootMode,
   parseWebsiteRootDomainsState,
   parseWebsiteSiteDomainsState,
-  publishWebsiteChallenge,
   publicApiLocation,
+  publishWebsiteChallenge,
   renderWebsiteEdgeConfig,
   sha256Hex,
   WEBSITE_SITE_CAPABILITY,
@@ -45,8 +45,8 @@ import {
   websiteAcmeHookScript,
   websiteBase,
   websiteEdgeConfigFile,
-  websiteSiteCommand,
   websiteRootDomains,
+  websiteSiteCommand,
   websiteSiteDomains,
   websiteSiteDomainsFile,
   wildcardCertName,
@@ -110,12 +110,23 @@ import {
 import { JOB_LONG_POLL_MAX_SECONDS, jobLongPollSeconds, runLane } from "./scheduler.ts";
 import {
   collectSecurityInventory,
+  encodePowerShell,
+  findExecutable,
   INVENTORY_PATH,
   inventoryCachePath,
   packageDbStamp,
   SecurityInventory,
   type SecurityInventoryAnswer,
 } from "./security-inventory.ts";
+import {
+  applyPatch,
+  type PackageManager,
+  parsePatchRequest,
+  PATCH_CAPABILITY,
+  PATCH_COMMAND,
+  rebootStep,
+  shouldReboot,
+} from "./security-patch.ts";
 import {
   byteBudget,
   captureCommand,
@@ -360,6 +371,8 @@ async function applyRuntimeCapabilities(config: AgentConfig) {
   // Network diagnosis needs no installed runtime: every Agent (Linux and Windows) can probe.
   config.capabilities[DNS_PROBE_CAPABILITY] = true;
   config.capabilities[DNS_MONITOR_CAPABILITY] = true;
+  // Cyber Security patch management (V6): typed updates through the host package manager.
+  config.capabilities[PATCH_CAPABILITY] = IS_WINDOWS || await hostPackageManager() !== null;
   config.capabilities["mnscloud.api.update"] = await isExecutableFile(
     "/opt/mnscloud/mnscloud-api/scripts/update-api.sh",
   );
@@ -2024,7 +2037,8 @@ async function executeFilesystemTransfer(
     const writer = child.stdin.getWriter();
     let inputWritten = false;
     const relPath = payload.relativePath ?? (
-      typeof payload.objectKey === "string" && payload.objectKey.startsWith("/var/lib/mnscloud/files/")
+      typeof payload.objectKey === "string" &&
+        payload.objectKey.startsWith("/var/lib/mnscloud/files/")
         ? payload.objectKey.slice("/var/lib/mnscloud/files/".length)
         : payload.objectKey
     );
@@ -2059,7 +2073,12 @@ async function executeFilesystemTransfer(
     await jsonRequest(config, `/agent/jobs/${job.jobUUID}/complete`, agentToken, agentUUID, {
       jobType: "filesystem.transfer",
       leaseToken: job.leaseToken,
-      result: { exists: metadata.exists, sizeBytes: metadata.sizeBytes, sha256: metadata.sha256, bytes: metadata.bytes },
+      result: {
+        exists: metadata.exists,
+        sizeBytes: metadata.sizeBytes,
+        sha256: metadata.sha256,
+        bytes: metadata.bytes,
+      },
     });
   } catch {
     await failJob(
@@ -3364,7 +3383,9 @@ function renderNginxEdgeDomainConfig(
   // webapps root app. /api/ and the webapps paths stay as in App mode.
   const webapps = config.nginxEdgeWebappsEnabled && !!config.nginxEdgeWebappsUpstream;
   const servedMode: NginxEdgeRootMode = mode !== "app" && webapps ? mode : "app";
-  const appUpstream = servedMode === "app" ? config.nginxEdgeAppUpstream : config.nginxEdgeWebappsUpstream;
+  const appUpstream = servedMode === "app"
+    ? config.nginxEdgeAppUpstream
+    : config.nginxEdgeWebappsUpstream;
   const rootSurface: EdgeSurface = servedMode;
   const apiUpstream = config.nginxEdgeApiUpstream;
   const webappsLocations = renderNginxEdgeWebappsLocations(config);
@@ -4059,17 +4080,26 @@ async function issueWebsiteWildcard(
 ) {
   await Deno.mkdir(WEBSITE_ACME_DIR, { recursive: true, mode: 0o700 });
   for await (const entry of Deno.readDir(WEBSITE_ACME_DIR)) {
-    if (entry.name !== "hook.sh") await Deno.remove(`${WEBSITE_ACME_DIR}/${entry.name}`).catch(() => undefined);
+    if (entry.name !== "hook.sh") {
+      await Deno.remove(`${WEBSITE_ACME_DIR}/${entry.name}`).catch(() => undefined);
+    }
   }
   const hook = `${WEBSITE_ACME_DIR}/hook.sh`;
   await writeAtomic(hook, websiteAcmeHookScript());
   await Deno.chmod(hook, 0o700);
   const api = {
     create: async (name: string, value: string) => {
-      const data = await agentApiRequest(config, "POST", "/agent/website/acme-challenges", agentToken, agentUUID, {
-        name,
-        value,
-      });
+      const data = await agentApiRequest(
+        config,
+        "POST",
+        "/agent/website/acme-challenges",
+        agentToken,
+        agentUUID,
+        {
+          name,
+          value,
+        },
+      );
       return { challengeUUID: String(data.challengeUUID), state: String(data.state) };
     },
     get: async (challengeUUID: string) => {
@@ -4083,7 +4113,13 @@ async function issueWebsiteWildcard(
       return { state: String(data.state), errorCode: data.errorCode };
     },
     release: async (challengeUUID: string) => {
-      await agentApiRequest(config, "DELETE", `/agent/website/acme-challenges/${challengeUUID}`, agentToken, agentUUID);
+      await agentApiRequest(
+        config,
+        "DELETE",
+        `/agent/website/acme-challenges/${challengeUUID}`,
+        agentToken,
+        agentUUID,
+      );
     },
   };
   const deps = {
@@ -4096,7 +4132,9 @@ async function issueWebsiteWildcard(
   const handling = new Set<string>();
   const releaseAll = async () => {
     for (const [id, challengeUUID] of open) {
-      await api.release(challengeUUID).catch((error) => log("warn", "Website ACME release failed.", String(error)));
+      await api.release(challengeUUID).catch((error) =>
+        log("warn", "Website ACME release failed.", String(error))
+      );
       open.delete(id);
     }
   };
@@ -4119,13 +4157,17 @@ async function issueWebsiteWildcard(
           const text = await Deno.readTextFile(path);
           await Deno.remove(path).catch(() => undefined);
           // Answered in the background: certbot waits on the hook while other files keep flowing.
-          void answerWebsiteHookRequest(deps, base, id, text, open).finally(() => handling.delete(entry.name));
+          void answerWebsiteHookRequest(deps, base, id, text, open).finally(() =>
+            handling.delete(entry.name)
+          );
         } else if (kind === "cleanup") {
           await Deno.remove(path).catch(() => undefined);
           const challengeUUID = open.get(id);
           if (challengeUUID) {
             open.delete(id);
-            await api.release(challengeUUID).catch((error) => log("warn", "Website ACME release failed.", String(error)));
+            await api.release(challengeUUID).catch((error) =>
+              log("warn", "Website ACME release failed.", String(error))
+            );
           }
         }
       }
@@ -4187,7 +4229,9 @@ async function ensureWebsiteEdge(
       status,
       expiresAt: expiresAt?.toISOString() ?? null,
       error: error ?? null,
-    }).catch((reportError) => log("warn", "Website edge certificate report failed.", String(reportError)));
+    }).catch((reportError) =>
+      log("warn", "Website edge certificate report failed.", String(reportError))
+    );
   try {
     let expiresAt = await websiteCertificateExpiry(config, base);
     // Port 80 first: ACME and, until the certificate exists, the sites over HTTP.
@@ -4205,7 +4249,11 @@ async function ensureWebsiteEdge(
     await report("issued", expiresAt);
     return { base, issued, expiresAt: expiresAt?.toISOString() ?? null, path: edge.path };
   } catch (error) {
-    await report("failed", null, String(error instanceof Error ? error.message : error).slice(0, 500));
+    await report(
+      "failed",
+      null,
+      String(error instanceof Error ? error.message : error).slice(0, 500),
+    );
     throw error;
   }
 }
@@ -4224,13 +4272,22 @@ async function downloadWebsiteSnapshot(
     { headers: sameApi ? bearerHeaders(agentToken, agentUUID) : {} },
     300_000,
     async (response) => {
-      if (!response.ok || !response.body) throw new Error(`Website snapshot download returned HTTP ${response.status}`);
-      const file = await Deno.open(target, { write: true, create: true, truncate: true, mode: 0o600 });
+      if (!response.ok || !response.body) {
+        throw new Error(`Website snapshot download returned HTTP ${response.status}`);
+      }
+      const file = await Deno.open(target, {
+        write: true,
+        create: true,
+        truncate: true,
+        mode: 0o600,
+      });
       let total = 0;
       try {
         for await (const chunk of response.body) {
           total += chunk.byteLength;
-          if (total > WEBSITE_SITE_MAX_ARCHIVE_BYTES) throw new Error("Website snapshot exceeds 100 MB");
+          if (total > WEBSITE_SITE_MAX_ARCHIVE_BYTES) {
+            throw new Error("Website snapshot exceeds 100 MB");
+          }
           let written = 0;
           while (written < chunk.byteLength) written += await file.write(chunk.subarray(written));
         }
@@ -4253,19 +4310,25 @@ async function executeWebsiteSiteJob(
     assertCapability(config, WEBSITE_SITE_CAPABILITY);
     const site = websiteSiteCommand(command, job.payload ?? {}, (path) => apiUrl(config, path));
     const script = `${WEBAPPS_REPO_DIR}/scripts/${site.script}`;
-    if (!await isExecutableFile(script)) throw new Error(`${site.script} is missing; update mnscloud-webapps first`);
+    if (!await isExecutableFile(script)) {
+      throw new Error(`${site.script} is missing; update mnscloud-webapps first`);
+    }
     const args = [script, "--env", WEBAPPS_ENV_FILE, ...site.args];
     if (site.artifactUrl && site.sha256) {
       workDir = await Deno.makeTempDir({ prefix: "mnscloud-website-" });
       const archive = `${workDir}/site.tar.gz`;
       await downloadWebsiteSnapshot(config, agentUUID, agentToken, site.artifactUrl, archive);
       const actual = await sha256Hex(await Deno.readFile(archive));
-      if (actual !== site.sha256) throw new Error(`Website snapshot checksum mismatch: got ${actual}`);
+      if (actual !== site.sha256) {
+        throw new Error(`Website snapshot checksum mismatch: got ${actual}`);
+      }
       args.push("--archive", archive);
     }
     const result = await runLocalCommand("bash", args, 600_000);
     if (result.code !== 0) {
-      throw new Error(diagnosticExcerpt(result.stderr || result.stdout || `${site.script} failed`, 2000));
+      throw new Error(
+        diagnosticExcerpt(result.stderr || result.stdout || `${site.script} failed`, 2000),
+      );
     }
     await jsonRequest(config, `/agent/jobs/${job.jobUUID}/complete`, agentToken, agentUUID, {
       jobType: "website.site",
@@ -6430,7 +6493,9 @@ async function applyCyberSecurityBlocklist(
   for (const args of [...plan.adds, ...plan.deletes]) {
     const result = await retryCrowdSecCommand(() => runLocalCommand("cscli", args, 30_000));
     if (result.code !== 0) {
-      throw new Error(`cscli ${args.slice(0, 2).join(" ")} failed: ${result.stderr || result.stdout}`);
+      throw new Error(
+        `cscli ${args.slice(0, 2).join(" ")} failed: ${result.stderr || result.stdout}`,
+      );
     }
   }
   await progress(
@@ -6676,6 +6741,99 @@ async function collectWindowsCyberSecurityStatus(config: AgentConfig) {
   };
 }
 
+/** Package manager of this Linux host, from the installed tools (never from the platform). */
+async function hostPackageManager(): Promise<PackageManager | null> {
+  if (IS_WINDOWS) return "windows";
+  if (await findExecutable("dpkg-query") && await findExecutable("apt-get")) return "dpkg";
+  if (await findExecutable("rpm") && (await findExecutable("dnf") || await findExecutable("yum"))) {
+    return "rpm";
+  }
+  if (await findExecutable("apk")) return "apk";
+  return null;
+}
+
+async function hostRebootRequired(): Promise<boolean> {
+  if (IS_WINDOWS) return false;
+  try {
+    await Deno.stat("/var/run/reboot-required");
+    return true;
+  } catch { /* Not a Debian reboot flag. */ }
+  if (await findExecutable("needs-restarting")) {
+    const result = await runLocalCommand("needs-restarting", ["-r"], 60_000);
+    return result.code === 1;
+  }
+  return false;
+}
+
+/**
+ * V6 patch job: validates the request, updates, refreshes the inventory (so the platform marks the
+ * fixed findings), reports the result and only then reboots, when the run's policy asks for it.
+ */
+async function executeCyberSecurityPatch(
+  job: LeaseJob,
+  config: AgentConfig,
+  agentUUID: string,
+  agentToken: string,
+) {
+  const progress = (step: string, percent: number, message: string) =>
+    reportJobProgress(config, job.jobUUID, agentUUID, agentToken, step, percent, message, {
+      status: "running",
+    });
+  let request;
+  try {
+    request = parsePatchRequest(job.payload);
+  } catch (error) {
+    await failJob(
+      config,
+      job.jobUUID,
+      agentUUID,
+      agentToken,
+      "CYBER_PATCH_INVALID_REQUEST",
+      error instanceof Error ? error.message : String(error),
+      "cyber.security",
+    );
+    return;
+  }
+  await progress("start", 5, "Patch started");
+  const result = await applyPatch(request, {
+    run: runLocalCommand,
+    windows: IS_WINDOWS,
+    powershell: powerShellExecutable,
+    encode: encodePowerShell,
+    manager: hostPackageManager,
+    rebootRequired: hostRebootRequired,
+    hasCommand: async (name) => await findExecutable(name) !== null,
+  }, progress);
+  await progress("inventory", 90, "Refreshing the software inventory");
+  const inventoryRefreshed = await securityInventory.refreshNow(
+    (payload) => jsonRequest(config, INVENTORY_PATH, agentToken, agentUUID, { ...payload }),
+  ).catch(() => false);
+  const changed = result.updated.length > 0 || (result.windows?.installed.length ?? 0) > 0;
+  const reboot = result.outcome !== "failed" &&
+    shouldReboot(request.rebootPolicy, result.rebootRequired, changed);
+  const final = { ...result, inventoryRefreshed, rebootScheduled: reboot };
+  await jsonRequest(config, `/agent/jobs/${job.jobUUID}/complete`, agentToken, agentUUID, {
+    jobType: "cyber.security",
+    result: final,
+  });
+  log("info", "Cyber Security patch finished.", {
+    jobUUID: job.jobUUID,
+    outcome: result.outcome,
+    updated: result.updated.length,
+    reboot,
+  });
+  if (reboot) {
+    const step = rebootStep(IS_WINDOWS);
+    const answer = await runLocalCommand(step.command, step.args, 60_000);
+    if (answer.code !== 0) {
+      log("warn", "Reboot after the patch could not be scheduled.", {
+        jobUUID: job.jobUUID,
+        code: answer.code,
+      });
+    }
+  }
+}
+
 async function executeCyberSecurityJob(
   job: LeaseJob,
   config: AgentConfig,
@@ -6771,6 +6929,11 @@ async function executeCyberSecurityJob(
         jobUUID: job.jobUUID,
         result,
       });
+      return;
+    }
+
+    if (leasedCommand === PATCH_COMMAND) {
+      await executeCyberSecurityPatch(job, config, agentUUID, agentToken);
       return;
     }
 

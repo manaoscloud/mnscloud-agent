@@ -829,6 +829,7 @@ main() {
   run "cp '${AGENT_SOURCE_DIR}/website-edge.ts' '${install_dir}/website-edge.ts'"
   run "cp '${AGENT_SOURCE_DIR}/cyber-security-policy.ts' '${install_dir}/cyber-security-policy.ts'"
   run "cp '${AGENT_SOURCE_DIR}/security-inventory.ts' '${install_dir}/security-inventory.ts'"
+  run "cp '${AGENT_SOURCE_DIR}/security-patch.ts' '${install_dir}/security-patch.ts'"
   run "cp '${AGENT_SOURCE_DIR}/deno.jsonc' '${install_dir}/deno.jsonc'"
   write_agent_build_metadata "$install_dir" "$(agent_version)" "$(agent_build_ref)"
 

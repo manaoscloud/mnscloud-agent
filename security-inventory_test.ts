@@ -728,3 +728,26 @@ Deno.test("inventory cache of an older collector format is recollected after the
     await Deno.remove(dir, { recursive: true });
   }
 });
+
+Deno.test("inventory refreshNow collects and uploads at once after a patch, only while enabled", async () => {
+  const dir = await Deno.makeTempDir();
+  try {
+    const h = harness();
+    await h.inventory.load(`${dir}/security-inventory.json`);
+    const sent: InventoryPayload[] = [];
+    const send = (payload: InventoryPayload) => {
+      sent.push(payload);
+      return Promise.resolve();
+    };
+    assertEquals(await h.inventory.refreshNow(send), false, "disabled: nothing collected");
+    await h.inventory.acknowledge({ enabled: true, needsFull: false }, send);
+    assertEquals(await h.inventory.refreshNow(send), true);
+    assertEquals(h.collected, 1);
+    assertEquals(sent.length, 1);
+    // A second change right after also uploads: the patch bypasses the upload spacing.
+    assertEquals(await h.inventory.refreshNow(send), true);
+    assertEquals(sent.length, 2);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
