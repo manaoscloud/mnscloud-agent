@@ -87,7 +87,10 @@ export function edgeSecurityHeaders(surface: EdgeSurface, indent = "    ") {
   }
   const frameAncestors = surface === "softphone" ? "'self'" : "'none'";
   const microphone = surface === "app" || surface === "softphone" ? "(self)" : "()";
-  const camera = surface === "scanner" || surface === "field" ? "(self)" : "()";
+  // POS reads barcodes, InfraGIS photographs assets and Pulse takes the live photo of a punch.
+  const camera = surface === "scanner" || surface === "field" || surface === "timeclock"
+    ? "(self)"
+    : "()";
   const geolocation = surface === "timeclock" || surface === "field" ? "(self)" : "()";
   const frameSrc = surface === "app" ? `; ${APP_FRAME_SRC}` : "";
   return [
