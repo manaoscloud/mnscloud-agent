@@ -32,7 +32,7 @@ jobs:
       - name: Installed runtime package
         run: python scripts/test-runtime-package.py
       - name: Host metrics tests
-        run: deno test --allow-all host-metrics_test.ts host-resources_test.ts bounded-io_test.ts schema-release_test.ts openvault-status_test.ts database-maintenance_test.ts runtime-reconcile_test.ts database-principal_test.ts pabx-state_test.ts pabx-registration-insight_test.ts pabx-presence_test.ts pabx-events_test.ts webapps-status_test.ts webapps-update_test.ts nginx-webapps_test.ts scheduler_test.ts logs-refresh_test.ts dns-probe_test.ts dns-monitor_test.ts website-edge_test.ts job-report_test.ts cyber-security-policy_test.ts security-inventory_test.ts security-patch_test.ts security-posture_test.ts network-device_test.ts
+        run: deno test --allow-all host-metrics_test.ts host-resources_test.ts bounded-io_test.ts schema-release_test.ts openvault-status_test.ts database-maintenance_test.ts runtime-reconcile_test.ts database-principal_test.ts pabx-state_test.ts pabx-registration-insight_test.ts pabx-presence_test.ts pabx-events_test.ts webapps-status_test.ts webapps-update_test.ts nginx-webapps_test.ts scheduler_test.ts logs-refresh_test.ts dns-probe_test.ts dns-monitor_test.ts website-edge_test.ts job-report_test.ts cyber-security-policy_test.ts security-inventory_test.ts security-patch_test.ts security-posture_test.ts network-device_test.ts macos_test.ts
       - name: Shell syntax check
         run: bash -n scripts/*.sh
       - name: Filesystem transfer contract
@@ -66,6 +66,39 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  macos-agent:
+    name: macOS Agent
+    # Real collectors on a real Mac (inventory, hardening checks, XProtect, launchd lists).
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2.0.5
+        with:
+          deno-version: v2.x
+      - name: Installed runtime package
+        run: python3 scripts/test-runtime-package.py
+      - name: macOS unit tests
+        run: deno test --allow-all macos_test.ts
+      - name: Installer syntax and dry run (bash 3.2)
+        run: |
+          for script in scripts/install-agent-macos.sh scripts/update-agent-macos.sh scripts/uninstall-agent-macos.sh; do
+            /bin/bash -n "$script"
+          done
+          sudo /bin/bash scripts/install-agent-macos.sh --dry-run --skip-latest --api-base https://example.invalid --install-label ci-mac
+          sudo /bin/bash scripts/uninstall-agent-macos.sh --dry-run
+          MNSCLOUD_MACOS_SERVICE_FILE="$RUNNER_TEMP/agent.plist" /bin/bash scripts/install-agent-macos.sh --service-file-only
+          plutil -lint "$RUNNER_TEMP/agent.plist"
+      - name: Live collectors on this Mac
+        run: sudo "$(command -v deno)" run --allow-all tests/macos-live-smoke.ts "$RUNNER_TEMP/macos-live.json"
+      - name: Upload the live result
+        uses: actions/upload-artifact@v7
+        with:
+          name: macos-live
+          path: ${{ runner.temp }}/macos-live.json
+          if-no-files-found: error
+          retention-days: 7
+
   windows-metrics:
     name: Windows host telemetry
     runs-on: windows-latest
@@ -77,7 +110,7 @@ jobs:
       - name: Installed runtime package
         run: python scripts/test-runtime-package.py
       - name: Host metrics tests
-        run: deno test --allow-all host-metrics_test.ts host-resources_test.ts bounded-io_test.ts schema-release_test.ts openvault-status_test.ts database-maintenance_test.ts runtime-reconcile_test.ts database-principal_test.ts pabx-state_test.ts pabx-registration-insight_test.ts pabx-presence_test.ts pabx-events_test.ts webapps-status_test.ts webapps-update_test.ts nginx-webapps_test.ts scheduler_test.ts logs-refresh_test.ts dns-probe_test.ts dns-monitor_test.ts website-edge_test.ts job-report_test.ts cyber-security-policy_test.ts security-inventory_test.ts security-patch_test.ts security-posture_test.ts network-device_test.ts
+        run: deno test --allow-all host-metrics_test.ts host-resources_test.ts bounded-io_test.ts schema-release_test.ts openvault-status_test.ts database-maintenance_test.ts runtime-reconcile_test.ts database-principal_test.ts pabx-state_test.ts pabx-registration-insight_test.ts pabx-presence_test.ts pabx-events_test.ts webapps-status_test.ts webapps-update_test.ts nginx-webapps_test.ts scheduler_test.ts logs-refresh_test.ts dns-probe_test.ts dns-monitor_test.ts website-edge_test.ts job-report_test.ts cyber-security-policy_test.ts security-inventory_test.ts security-patch_test.ts security-posture_test.ts network-device_test.ts macos_test.ts
       - name: Installer PowerShell syntax
         shell: pwsh
         run: |
