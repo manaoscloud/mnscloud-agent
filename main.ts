@@ -6970,11 +6970,10 @@ async function executeNetworkDeviceCollect(
       version: result.version,
     });
   } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
     const message = error instanceof NetworkDeviceError
-      ? error.message
-      : `Network device collection failed: ${
-        error instanceof Error ? error.message : String(error)
-      }`;
+      ? detail
+      : `Network device collection failed: ${detail}`;
     log("warn", "Network device collection failed.", { jobUUID: job.jobUUID, message });
     await failJob(
       config,

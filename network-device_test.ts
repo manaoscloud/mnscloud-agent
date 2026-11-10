@@ -40,22 +40,22 @@ Deno.test("SNMPv3 key localization matches RFC 3414 A.3.2 (SHA)", () => {
   assertThrows(() => localizeKey("sha1", "short", new Uint8Array(4)), NetworkDeviceError);
 });
 
-Deno.test("AES-128 CFB round trip with a partial last block", () => {
+Deno.test("AES-128 CFB round trip with a partial last block", async () => {
   const key = unhex("000102030405060708090a0b0c0d0e0f");
   const iv = unhex("f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff");
   const plain = new TextEncoder().encode("scoped PDU of 37 bytes for the test!!");
-  const cipher = aesCfb(key, iv, plain, false);
+  const cipher = await aesCfb(key, iv, plain, false);
   assertEquals(cipher.length, plain.length);
   assert(hex(cipher) !== hex(plain));
   assertEquals(
-    new TextDecoder().decode(aesCfb(key, iv, cipher, true)),
+    new TextDecoder().decode(await aesCfb(key, iv, cipher, true)),
     new TextDecoder().decode(plain),
   );
   // NIST SP 800-38A F.3.13 (CFB128-AES128, first block).
   const nistKey = unhex("2b7e151628aed2a6abf7158809cf4f3c");
   const nistIv = unhex("000102030405060708090a0b0c0d0e0f");
   assertEquals(
-    hex(aesCfb(nistKey, nistIv, unhex("6bc1bee22e409f96e93d7e117393172a"), false)),
+    hex(await aesCfb(nistKey, nistIv, unhex("6bc1bee22e409f96e93d7e117393172a"), false)),
     "3b3fd92eb72dad20333449f8e83cfb4a",
   );
 });

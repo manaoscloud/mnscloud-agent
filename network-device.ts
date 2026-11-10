@@ -7,7 +7,7 @@
  * platform matches with published vulnerabilities. Contract: docs/network-devices.md.
  */
 import { Buffer } from "node:buffer";
-import { createCipheriv, createHash, createHmac, randomBytes } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import dgram from "node:dgram";
 
 export const NETWORK_DEVICE_COMMAND = "cyber.security.network-device.collect";
@@ -235,7 +235,7 @@ function printable(bytes: Uint8Array): string {
   // Control characters (except tab and newline) are dropped.
   return Array.from(new TextDecoder("utf-8", { fatal: false }).decode(bytes))
     .filter((ch) => {
-      const code = ch.charCodeAt(0);
+      const code = ch.codePointAt(0) ?? 0;
       return code === 9 || code === 10 || (code >= 32 && code !== 127);
     })
     .join("")
@@ -322,19 +322,34 @@ export function localizeKey(
   return new Uint8Array(createHash(hash).update(ku).update(engineId).update(ku).digest());
 }
 
-/** AES-128 in CFB-128 mode (RFC 3826) over AES-ECB blocks (Deno has no aes-128-cfb). */
-export function aesCfb(
+/**
+ * AES-128 in CFB-128 mode (RFC 3826). Deno has no aes-128-cfb, so each keystream block E(feedback)
+ * comes from WebCrypto AES-CTR over one zero block with the feedback as the counter block.
+ */
+export async function aesCfb(
   key: Uint8Array,
   iv: Uint8Array,
   input: Uint8Array,
   decrypt: boolean,
-): Uint8Array {
-  const cipher = createCipheriv("aes-128-ecb", Buffer.from(key.subarray(0, 16)), null);
-  cipher.setAutoPadding(false);
+): Promise<Uint8Array> {
+  const cryptoKey = await crypto.subtle.importKey(
+    "raw",
+    Uint8Array.from(key.subarray(0, 16)),
+    { name: "AES-CTR" },
+    false,
+    ["encrypt"],
+  );
+  const zero = new Uint8Array(16);
   const out = new Uint8Array(input.length);
   let feedback = Uint8Array.from(iv);
   for (let offset = 0; offset < input.length; offset += 16) {
-    const stream = new Uint8Array(cipher.update(Buffer.from(feedback)));
+    const stream = new Uint8Array(
+      await crypto.subtle.encrypt(
+        { name: "AES-CTR", counter: feedback, length: 64 },
+        cryptoKey,
+        zero,
+      ),
+    );
     const chunk = input.subarray(offset, offset + 16);
     const next = new Uint8Array(16);
     for (let i = 0; i < chunk.length; i++) {
@@ -372,15 +387,15 @@ function usmParameters(
   );
 }
 
-export function encodeV3(
+export async function encodeV3(
   credentials: Extract<SnmpCredentials, { version: "v3" }> | null,
   engine: Engine,
   keys: V3Keys,
   messageId: number,
   requestId: number,
   oids: string[],
-  salt: Uint8Array = randomBytes(8),
-): Uint8Array {
+  salt: Uint8Array = crypto.getRandomValues(new Uint8Array(8)),
+): Promise<Uint8Array> {
   const auth = credentials ? AUTH[credentials.authProtocol] : null;
   const priv = credentials !== null && credentials.privProtocol === "aes";
   // Discovery (no credentials): noAuthNoPriv, reportable.
@@ -391,7 +406,7 @@ export function encodeV3(
   if (priv) {
     if (!keys.priv) throw new NetworkDeviceError("SNMPv3 privacy key missing");
     privParams = Uint8Array.from(salt);
-    data = encodeOctets(aesCfb(keys.priv, aesIv(engine, privParams), scoped, false));
+    data = encodeOctets(await aesCfb(keys.priv, aesIv(engine, privParams), scoped, false));
   }
   const header = sequence(
     encodeInteger(messageId),
@@ -422,12 +437,12 @@ type V3Answer = {
   reportOid: string | null;
 };
 
-export function decodeV3(
+export async function decodeV3(
   data: Uint8Array,
   credentials: Extract<SnmpCredentials, { version: "v3" }> | null,
   keys: V3Keys,
   requestId: number,
-): V3Answer {
+): Promise<V3Answer> {
   const message = decode(data);
   if (readInteger(child(message, 0)) !== 3) throw new NetworkDeviceError("Unexpected SNMP version");
   const flags = child(child(message, 1), 2).value[0] ?? 0;
@@ -458,12 +473,10 @@ export function decodeV3(
   }
   let scopedNode = child(message, 3);
   if (scopedNode.tag === TAG.octets) {
-    if (
-      !credentials || credentials.privProtocol !== "aes" || !keys.priv || privParams.length !== 8
-    ) {
+    if (credentials?.privProtocol !== "aes" || !keys.priv || privParams.length !== 8) {
       throw new NetworkDeviceError("Encrypted SNMPv3 answer cannot be read");
     }
-    scopedNode = decode(aesCfb(keys.priv, aesIv(engine, privParams), scopedNode.value, true));
+    scopedNode = decode(await aesCfb(keys.priv, aesIv(engine, privParams), scopedNode.value, true));
   }
   const reportNode = child(scopedNode, 2);
   if (reportNode.tag === TAG.report) {
@@ -548,7 +561,7 @@ export function allowedAddress(address: string): boolean {
 export type SnmpSession = { get(oids: string[]): Promise<Map<string, string | null>> };
 
 export function openSession(target: DeviceTarget, transport: Transport): SnmpSession {
-  let requestId = 1 + Math.floor(Math.random() * 0x3fffffff);
+  let requestId = 1 + (crypto.getRandomValues(new Uint32Array(1))[0] & 0x3fffffff);
   const next = () => (requestId = (requestId % 0x7ffffffe) + 1);
   const credentials = target.credentials;
   if (credentials.version === "v2c") {
@@ -566,8 +579,20 @@ export function openSession(target: DeviceTarget, transport: Transport): SnmpSes
   let keys: V3Keys = { auth: null, priv: null };
   const discover = async () => {
     const id = next();
-    const probe = encodeV3(null, { id: new Uint8Array(), boots: 0, time: 0 }, keys, id, id, []);
-    const answer = decodeV3(await transport(target.address, target.port, probe), null, keys, id);
+    const probe = await encodeV3(
+      null,
+      { id: new Uint8Array(), boots: 0, time: 0 },
+      keys,
+      id,
+      id,
+      [],
+    );
+    const answer = await decodeV3(
+      await transport(target.address, target.port, probe),
+      null,
+      keys,
+      id,
+    );
     if (!answer.engine.id.length) {
       throw new NetworkDeviceError("The device did not report its SNMPv3 engine");
     }
@@ -585,8 +610,8 @@ export function openSession(target: DeviceTarget, transport: Transport): SnmpSes
       if (!engine) await discover();
       for (let attempt = 0; attempt < 2; attempt++) {
         const id = next();
-        const packet = encodeV3(credentials, engine!, keys, id, id, oids);
-        const answer = decodeV3(
+        const packet = await encodeV3(credentials, engine!, keys, id, id, oids);
+        const answer = await decodeV3(
           await transport(target.address, target.port, packet),
           credentials,
           keys,
@@ -624,49 +649,65 @@ export function detectVendor(sysObjectId: string | null, sysDescr: string | null
   return "other";
 }
 
+/** The run of characters accepted by `allowed` that starts at `from` (no regex backtracking). */
+function runFrom(text: string, from: number, allowed: (ch: string) => boolean): string {
+  let end = from;
+  while (end < text.length && allowed(text[end])) end++;
+  return text.slice(from, end);
+}
+
+const isDigit = (ch: string) => ch >= "0" && ch <= "9";
+const isVersionChar = (ch: string) => /[0-9A-Za-z.\-]/.test(ch);
+
+/** The version-like token at the first digit of the text, or right after a marker word. */
+function tokenAt(text: string, marker = "", allowed = isVersionChar): string {
+  let from = 0;
+  if (marker) {
+    const at = text.toLowerCase().indexOf(marker.toLowerCase());
+    if (at < 0) return "";
+    from = at + marker.length;
+  }
+  while (from < text.length && !isDigit(text[from])) {
+    if (marker && from - text.toLowerCase().indexOf(marker.toLowerCase()) > marker.length + 24) {
+      return "";
+    }
+    from++;
+  }
+  return runFrom(text, from, allowed).replace(/[.\-]+$/, "");
+}
+
+const VERSION_PARSERS: Partial<Record<Vendor, (descr: string, raw: string) => string>> = {
+  // mtxrLicVersion "7.12.1" or "6.49.10 (long-term)"; RouterOS 7 also "7.16rc2".
+  mikrotik_routeros: (descr, raw) => tokenAt(raw) || tokenAt(descr, "RouterOS"),
+  // fgSysVersion "v7.2.5,build1517,230606 (GA.F)".
+  fortinet_fortios: (_descr, raw) => tokenAt(raw, "", (ch) => isDigit(ch) || ch === "."),
+  // panSysSwVersion "10.2.4-h4".
+  paloalto_panos: (_descr, raw) => tokenAt(raw),
+  // snwlSysFirmwareVersion "SonicOS 7.0.1-5145-R4321" → 7.0.1-5145.
+  sonicwall_sonicos: (descr, raw) => {
+    const token = tokenAt(raw) || tokenAt(descr, "SonicOS");
+    return /^\d+(\.\d+){2,3}(-\d+)?n?/i.exec(token)?.[0] ?? "";
+  },
+  // "JUNOS 21.4R3-S1.5" → 21.4r3-s1 (the respin after the service release is not in the advisories).
+  juniper_junos: (descr) => /^\d+\.\d+[RXFD]\d+(-S\d+)?/i.exec(tokenAt(descr, "JUNOS"))?.[0] ?? "",
+  // "..., Version 17.9.4a, RELEASE SOFTWARE".
+  cisco_iosxe: (descr) => tokenAt(descr, "Version", (ch) => /[0-9A-Za-z.]/.test(ch)),
+  // "Version 9.16(3)19" → 9.16.3.19, as in the NVD.
+  cisco_asa: (descr) =>
+    tokenAt(descr, "Version", (ch) => isDigit(ch) || ch === "." || ch === "(" || ch === ")")
+      .split("(").join(".").split(")").join("."),
+};
+
 /** Normalized version (lowercase, comparable with the NVD CPE version and update fields). */
 export function parseVersion(
   vendor: Vendor,
   sysDescr: string | null,
   vendorVersion: string | null,
 ): string | null {
-  const descr = sysDescr ?? "";
-  const raw = (vendorVersion ?? "").trim();
-  const pick = (text: string, pattern: RegExp) => pattern.exec(text)?.[1] ?? null;
-  let version: string | null = null;
-  switch (vendor) {
-    case "mikrotik_routeros":
-      version = pick(raw, /^(\d+\.\d+(?:\.\d+)?(?:(?:beta|rc)\d+)?)/i) ??
-        pick(descr, /RouterOS\s+v?(\d+\.\d+(?:\.\d+)?)/i);
-      break;
-    case "fortinet_fortios":
-      version = pick(raw, /v?(\d+\.\d+\.\d+)/) ?? pick(descr, /v(\d+\.\d+\.\d+)/);
-      break;
-    case "paloalto_panos":
-      version = pick(raw, /^(\d+\.\d+\.\d+(?:-h\d+)?)/i);
-      break;
-    case "sonicwall_sonicos":
-      version = pick(raw, /(\d+\.\d+\.\d+(?:\.\d+)?(?:-\d+)?n?)/i) ??
-        pick(descr, /SonicOS[^\d]*(\d+\.\d+\.\d+(?:\.\d+)?(?:-\d+)?n?)/i);
-      break;
-    case "juniper_junos":
-      // 21.4R3-S1.5 → 21.4r3-s1 (the respin after the service release is not in the advisories).
-      version = pick(descr, /JUNOS\s+(?:Software\s+Release\s+\[)?(\d+\.\d+[RXFD]\d+(?:-S\d+)?)/i);
-      break;
-    case "cisco_iosxe":
-      version = pick(descr, /Version\s+([0-9][0-9A-Za-z.]*)/);
-      break;
-    case "cisco_asa": {
-      // 9.16(3)19 → 9.16.3.19, as in the NVD.
-      const m = /Version\s+(\d+)\.(\d+)\((\d+)\)(\d+)?/i.exec(descr);
-      version = m ? [m[1], m[2], m[3], m[4]].filter((p) => p !== undefined).join(".") : null;
-      break;
-    }
-    default:
-      version = null;
-  }
-  if (!version) return null;
-  version = version.toLowerCase().replace(/[.,]+$/, "");
+  const parser = VERSION_PARSERS[vendor];
+  if (!parser) return null;
+  const version = parser(sysDescr ?? "", (vendorVersion ?? "").trim()).toLowerCase()
+    .replace(/\.{2,}/g, ".").replace(/^\.|\.$/g, "");
   return /^[0-9a-z][0-9a-z.()_+-]{0,79}$/.test(version) ? version : null;
 }
 
@@ -687,53 +728,49 @@ function parseModel(
 // ---------------------------------------------------------------------------------------------
 // Job
 
+const text = (v: unknown) => (typeof v === "string" ? v : "");
+const AUTH_PROTOCOLS = ["sha", "sha256"] as const;
+const PRIV_PROTOCOLS = ["aes", "none"] as const;
+
+function pickOne<T extends string>(value: unknown, allowed: readonly T[]): T | null {
+  return allowed.find((item) => item === value) ?? null;
+}
+
+function parseCredentials(version: unknown, raw: unknown): SnmpCredentials {
+  const c = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  if (version === "v2c") {
+    if (!text(c.community)) throw new NetworkDeviceError("The SNMP community is missing");
+    return { version: "v2c", community: text(c.community) };
+  }
+  if (version !== "v3") throw new NetworkDeviceError("Invalid SNMP version");
+  const authProtocol = pickOne(c.authProtocol, AUTH_PROTOCOLS);
+  const privProtocol = pickOne(c.privProtocol, PRIV_PROTOCOLS);
+  const complete = text(c.user) && authProtocol && privProtocol && text(c.authPassword) &&
+    (privProtocol !== "aes" || text(c.privPassword));
+  if (!complete) throw new NetworkDeviceError("The SNMPv3 credential is incomplete");
+  return {
+    version: "v3",
+    user: text(c.user),
+    authProtocol,
+    authPassword: text(c.authPassword),
+    privProtocol,
+    privPassword: text(c.privPassword) || undefined,
+  };
+}
+
 export function parseMaterial(
   data: Record<string, unknown>,
 ): DeviceTarget & { deviceUUID: string } {
-  const address = String(data.address ?? "").trim();
+  const address = text(data.address).trim();
   const port = Number(data.port ?? 161);
-  const deviceUUID = String(data.deviceUUID ?? "");
   if (!allowedAddress(address)) {
     throw new NetworkDeviceError("The device address is not a unicast IP address");
   }
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
     throw new NetworkDeviceError("Invalid SNMP port");
   }
-  const c = (data.credentials ?? {}) as Record<string, unknown>;
-  const text = (v: unknown) => (typeof v === "string" ? v : "");
-  let credentials: SnmpCredentials;
-  if (data.snmpVersion === "v2c") {
-    if (!text(c.community)) throw new NetworkDeviceError("The SNMP community is missing");
-    credentials = { version: "v2c", community: text(c.community) };
-  } else if (data.snmpVersion === "v3") {
-    const authProtocol = c.authProtocol === "sha256"
-      ? "sha256"
-      : c.authProtocol === "sha"
-      ? "sha"
-      : null;
-    const privProtocol = c.privProtocol === "aes"
-      ? "aes"
-      : c.privProtocol === "none"
-      ? "none"
-      : null;
-    if (!text(c.user) || !authProtocol || !privProtocol || !text(c.authPassword)) {
-      throw new NetworkDeviceError("The SNMPv3 credential is incomplete");
-    }
-    if (privProtocol === "aes" && !text(c.privPassword)) {
-      throw new NetworkDeviceError("The SNMPv3 credential is incomplete");
-    }
-    credentials = {
-      version: "v3",
-      user: text(c.user),
-      authProtocol,
-      authPassword: text(c.authPassword),
-      privProtocol,
-      privPassword: text(c.privPassword) || undefined,
-    };
-  } else {
-    throw new NetworkDeviceError("Invalid SNMP version");
-  }
-  return { deviceUUID, address, port, credentials };
+  const credentials = parseCredentials(data.snmpVersion, data.credentials);
+  return { deviceUUID: text(data.deviceUUID), address, port, credentials };
 }
 
 /** Reads the fixed identity and version objects of one device. */
@@ -762,7 +799,7 @@ export async function collectDevice(
       if (!(error instanceof NetworkDeviceError)) throw error;
     }
   }
-  const ticks = Number(system.get(OID.sysUpTime) ?? NaN);
+  const ticks = Number(system.get(OID.sysUpTime) ?? Number.NaN);
   return {
     networkDevice: 1,
     deviceUUID: target.deviceUUID,
