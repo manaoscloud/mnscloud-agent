@@ -27,7 +27,7 @@ export type NginxEdgeWebappsSettings = {
  * existing vhosts must pick up: the Agent re-renders every vhost once when its stored revision
  * differs.
  */
-export const NGINX_EDGE_RENDER_REVISION = "2026-11-06.website-institutional-root";
+export const NGINX_EDGE_RENDER_REVISION = "2026-11-10.pulse-camera";
 
 export type EdgeSurface =
   | "app"
@@ -87,7 +87,10 @@ export function edgeSecurityHeaders(surface: EdgeSurface, indent = "    ") {
   }
   const frameAncestors = surface === "softphone" ? "'self'" : "'none'";
   const microphone = surface === "app" || surface === "softphone" ? "(self)" : "()";
-  const camera = surface === "scanner" || surface === "field" ? "(self)" : "()";
+  // POS reads barcodes, InfraGIS photographs assets and Pulse takes the live photo of a punch.
+  const camera = surface === "scanner" || surface === "field" || surface === "timeclock"
+    ? "(self)"
+    : "()";
   const geolocation = surface === "timeclock" || surface === "field" ? "(self)" : "()";
   const frameSrc = surface === "app" ? `; ${APP_FRAME_SRC}` : "";
   return [
