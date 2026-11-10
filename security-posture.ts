@@ -337,6 +337,22 @@ function kernelChecks(facts: LinuxFacts): HardeningCheck[] {
       )
       : sysctlCheck(facts, code, "CIS 3.3", "low", key, ok);
   const ipv6Redirects = facts.sysctl["net.ipv6.conf.all.accept_redirects"];
+  const redirects = sysctlCheck(
+    facts,
+    "sysctl.accept_redirects",
+    "CIS 3.3",
+    "low",
+    "net.ipv4.conf.all.accept_redirects",
+    (v) =>
+      v === "0" &&
+      (ipv6Redirects === null || ipv6Redirects === undefined || ipv6Redirects === "0"),
+  );
+  if (
+    redirects.status !== "not_applicable" && ipv6Redirects !== null && ipv6Redirects !== undefined
+  ) {
+    redirects.evidence =
+      `${redirects.evidence}, net.ipv6.conf.all.accept_redirects = ${ipv6Redirects}`;
+  }
   return [
     sysctlCheck(
       facts,
@@ -362,16 +378,7 @@ function kernelChecks(facts: LinuxFacts): HardeningCheck[] {
       "kernel.dmesg_restrict",
       (v) => v === "1",
     ),
-    sysctlCheck(
-      facts,
-      "sysctl.accept_redirects",
-      "CIS 3.3",
-      "low",
-      "net.ipv4.conf.all.accept_redirects",
-      (v) =>
-        v === "0" &&
-        (ipv6Redirects === null || ipv6Redirects === undefined || ipv6Redirects === "0"),
-    ),
+    redirects,
     sysctlCheck(
       facts,
       "sysctl.source_route",

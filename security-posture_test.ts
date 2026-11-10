@@ -173,6 +173,18 @@ Deno.test("weak Linux settings fail with evidence and never leak password hashes
   );
 });
 
+Deno.test("IPv6 redirects fail the redirects check and show in its evidence", () => {
+  const base = facts();
+  const result = evaluateLinux(
+    facts({ sysctl: { ...base.sysctl, "net.ipv6.conf.all.accept_redirects": "1" } }),
+  ).find((item) => item.code === "sysctl.accept_redirects");
+  assertEquals(result?.status, "fail");
+  assertEquals(
+    result?.evidence,
+    "net.ipv4.conf.all.accept_redirects = 0, net.ipv6.conf.all.accept_redirects = 1",
+  );
+});
+
 Deno.test("no OpenSSH server = SSH checks not applicable", () => {
   const checks = evaluateLinux(facts({ sshd: null })).filter((item) =>
     item.code.startsWith("ssh.")
