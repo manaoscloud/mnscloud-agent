@@ -832,6 +832,7 @@ main() {
   run "cp '${AGENT_SOURCE_DIR}/security-patch.ts' '${install_dir}/security-patch.ts'"
   run "cp '${AGENT_SOURCE_DIR}/security-posture.ts' '${install_dir}/security-posture.ts'"
   run "cp '${AGENT_SOURCE_DIR}/network-device.ts' '${install_dir}/network-device.ts'"
+  run "cp '${AGENT_SOURCE_DIR}/macos-agent.ts' '${install_dir}/macos-agent.ts'"
   run "cp '${AGENT_SOURCE_DIR}/deno.jsonc' '${install_dir}/deno.jsonc'"
   write_agent_build_metadata "$install_dir" "$(agent_version)" "$(agent_build_ref)"
 

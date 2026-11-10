@@ -9,7 +9,8 @@ verify the other host services before choosing a lower version.
 Standalone native MNSCloud Agent.
 
 The Agent runs as a native service and communicates with the MNSCloud API through outbound HTTPS.
-Linux hosts use `systemd`; Windows hosts use a Windows Service. There is a single runtime: the Agent
+Linux hosts use `systemd`; Windows hosts use a Windows Service; Macs use a launchd daemon. There is a
+single runtime: the Agent
 only runs work allowed by local capabilities declared in `agent.conf`, API assignments, and typed
 jobs.
 
@@ -36,6 +37,9 @@ create or change a provider binding.
 - Windows installer: `scripts/install-agent-windows.ps1`
 - Linux uninstaller: `scripts/uninstall-agent.sh`
 - Windows uninstaller: `scripts/uninstall-agent-windows.ps1`
+- macOS installer/updater/uninstaller: `scripts/install-agent-macos.sh`, `scripts/update-agent-macos.sh`,
+  `scripts/uninstall-agent-macos.sh` (bash 3.2; contract in `docs/macos-agent.md`)
+- macOS service: launchd daemon `cloud.manaos.mnscloud.agent`
 - Linux service: `mnscloud-agent.service`
 - Windows service: `MNSCloudAgent`
 - Linux configuration: `/etc/mnscloud/agent/agent.conf`
@@ -57,6 +61,10 @@ Supported Windows systems:
 
 - Windows Server 2019/2022/2025
 - Windows 10/11 Pro/Enterprise
+
+Supported macOS systems (Cyber Security inventory and hardening checks only):
+
+- macOS 13 Ventura or newer, Apple silicon and Intel
 
 Other Linux distributions or Windows editions are experimental. They may work when the required
 runtime tools are available, but they are not guaranteed to be 100% compatible.

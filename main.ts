@@ -108,12 +108,14 @@ import {
   type PresenceObservation,
 } from "./pabx-presence.ts";
 import { JOB_LONG_POLL_MAX_SECONDS, jobLongPollSeconds, runLane } from "./scheduler.ts";
+import { MACOS_UPDATE_LABEL, macosUpdatePlist } from "./macos-agent.ts";
 import {
   collectSecurityInventory,
   encodePowerShell,
   findExecutable,
   INVENTORY_PATH,
   inventoryCachePath,
+  MACOS_PACKAGE_PATHS,
   packageDbStamp,
   SecurityInventory,
   type SecurityInventoryAnswer,
@@ -173,7 +175,7 @@ import {
   type ResourceSample,
 } from "./host-resources.ts";
 type AgentConfig = {
-  os: "linux" | "windows" | "other";
+  os: "linux" | "windows" | "macos" | "other";
   apiBase: string;
   name: string;
   hostname: string;
@@ -319,11 +321,13 @@ type PabxRegistrationReport = {
 type IniConfig = Record<string, Record<string, string>>;
 
 const IS_WINDOWS = Deno.build.os === "windows";
-const AGENT_OS: AgentConfig["os"] = IS_WINDOWS
-  ? "windows"
-  : Deno.build.os === "linux"
-  ? "linux"
-  : "other";
+const IS_MACOS = Deno.build.os === "darwin";
+function agentOs(): AgentConfig["os"] {
+  if (IS_WINDOWS) return "windows";
+  if (IS_MACOS) return "macos";
+  return Deno.build.os === "linux" ? "linux" : "other";
+}
+const AGENT_OS = agentOs();
 const PROGRAM_DATA = Deno.env.get("ProgramData") ?? "C:\\ProgramData";
 const CONFIG_PATH = Deno.env.get("MNSCLOUD_AGENT_CONFIG") ??
   (IS_WINDOWS ? `${PROGRAM_DATA}\\MNSCloud\\Agent\\agent.conf` : "/etc/mnscloud/agent/agent.conf");
@@ -1496,9 +1500,10 @@ const securityInventory = new SecurityInventory({
     collectSecurityInventory({
       run: runLocalCommand,
       windows: IS_WINDOWS,
+      macos: IS_MACOS,
       powershell: powerShellExecutable,
     }),
-  stamp: () => packageDbStamp(),
+  stamp: () => packageDbStamp(IS_MACOS ? MACOS_PACKAGE_PATHS : undefined),
   log: (level, message, extra) => log(level, message, extra),
   windows: IS_WINDOWS,
 });
@@ -2246,8 +2251,11 @@ async function runLocalCommand(
   args: string[],
   timeoutMs: number,
 ) {
-  const process = new Deno.Command(IS_WINDOWS ? command : "sh", {
-    args: IS_WINDOWS
+  // Linux runs each command in its own session (setsid) so a timeout kills the whole group; macOS
+  // has no setsid: the command runs directly and a timeout kills it.
+  const direct = IS_WINDOWS || IS_MACOS;
+  const process = new Deno.Command(direct ? command : "sh", {
+    args: direct
       ? args
       : ["-lc", `exec setsid ${[command, ...args].map(shellQuote).join(" ")}`],
     stdin: "null",
@@ -2255,7 +2263,7 @@ async function runLocalCommand(
     stderr: "piped",
   }).spawn();
   return await captureCommand(process, timeoutMs, () => {
-    if (!IS_WINDOWS) {
+    if (!direct) {
       try {
         Deno.kill(-process.pid, "SIGKILL");
       } catch { /* Group already exited. */ }
@@ -4753,6 +4761,18 @@ async function scheduleLinuxAgentUpdate(
   ], Math.max(config.commandTimeoutMs, 15_000));
 }
 
+async function scheduleMacosAgentUpdate(config: AgentConfig, targetRef: string) {
+  const path = "/var/lib/mnscloud/agent/agent-update.plist";
+  await Deno.writeTextFile(path, macosUpdatePlist(config.updateRepoDir, targetRef), { mode: 0o644 });
+  // A previous update job stays loaded after it ran: remove it before loading the new one.
+  await runLocalCommand("/bin/launchctl", ["bootout", `system/${MACOS_UPDATE_LABEL}`], 15_000);
+  return await runLocalCommand(
+    "/bin/launchctl",
+    ["bootstrap", "system", path],
+    Math.max(config.commandTimeoutMs, 15_000),
+  );
+}
+
 async function scheduleWindowsAgentUpdate(
   config: AgentConfig,
   targetRef: string,
@@ -4814,11 +4834,11 @@ async function executeRuntimeUpdateJob(
     let result: { code: number; stdout: string; stderr: string };
     if (product === "mnscloud-agent") {
       scheduled = true;
-      result = IS_WINDOWS
-        ? await scheduleWindowsAgentUpdate(config, targetRef)
-        : await scheduleLinuxAgentUpdate(config, job.jobUUID, targetRef);
+      if (IS_WINDOWS) result = await scheduleWindowsAgentUpdate(config, targetRef);
+      else if (IS_MACOS) result = await scheduleMacosAgentUpdate(config, targetRef);
+      else result = await scheduleLinuxAgentUpdate(config, job.jobUUID, targetRef);
     } else {
-      if (IS_WINDOWS) {
+      if (IS_WINDOWS || IS_MACOS) {
         throw new Error(
           `${target.label} runtime update is supported on Linux agents only.`,
         );
@@ -6866,6 +6886,7 @@ function postureDeps(config: AgentConfig): PostureDeps {
   return {
     run: runLocalCommand,
     windows: IS_WINDOWS,
+    macos: IS_MACOS,
     powershell: powerShellExecutable,
     encode: encodePowerShell,
     readText: (path) => Deno.readTextFile(path).catch(() => null),

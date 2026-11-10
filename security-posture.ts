@@ -64,7 +64,7 @@ export type HardeningCheck = {
   evidence: string | null;
 };
 export type AntivirusState = {
-  engine: "defender" | "clamav" | "none";
+  engine: "defender" | "clamav" | "xprotect" | "none";
   installed: 0 | 1;
   serviceRunning: 0 | 1;
   realtime: 0 | 1 | null;
@@ -95,7 +95,7 @@ export type ActionResult = {
 };
 export type PostureResult = {
   posture: 1;
-  platform: "linux" | "windows";
+  platform: "linux" | "windows" | "macos";
   checks?: HardeningCheck[];
   antivirus: AntivirusState;
   threats: Threat[];
@@ -107,6 +107,8 @@ export type PostureResult = {
 export type PostureDeps = {
   run: CommandRunner;
   windows: boolean;
+  /** macOS host (V10a): fixed system commands, XProtect state only. */
+  macos?: boolean;
   powershell: () => string;
   encode: (script: string) => string;
   readText: (path: string) => Promise<string | null>;
@@ -1195,6 +1197,231 @@ async function windowsAction(deps: PostureDeps, action: AntivirusAction): Promis
 }
 
 // ---------------------------------------------------------------------------------------------
+// macOS facts and checks (V10a)
+
+export type MacFacts = {
+  fileVault: string | null;
+  firewall: string | null;
+  stealth: string | null;
+  gatekeeper: string | null;
+  sip: string | null;
+  softwareUpdate: Map<string, string> | null;
+  pendingUpdates: string[] | null;
+  launchdDisabled: Map<string, boolean> | null;
+  sshd: Map<string, string> | null;
+  loginWindow: Map<string, string> | null;
+  xprotectVersion: string | null;
+  xprotectUpdatedAt: string | null;
+};
+
+/** Strips one pair of surrounding double quotes. */
+function unquote(value: string) {
+  return value.length >= 2 && value.startsWith('"') && value.endsWith('"') ? value.slice(1, -1) : value;
+}
+
+/** `defaults read <plist>` of a flat domain: `Key = value;` lines (quotes removed). */
+export function parseDefaults(text: string): Map<string, string> {
+  const values = new Map<string, string>();
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    const equals = trimmed.indexOf(" = ");
+    if (equals <= 0 || !trimmed.endsWith(";")) continue;
+    const key = unquote(trimmed.slice(0, equals).trim());
+    if (!/^[\w.-]{1,80}$/.test(key)) continue;
+    values.set(key, unquote(trimmed.slice(equals + 3, -1).trim()));
+  }
+  return values;
+}
+
+const LAUNCHD_STATES: Record<string, boolean> = {
+  disabled: true,
+  true: true,
+  enabled: false,
+  false: false,
+};
+
+/**
+ * `launchctl print-disabled system`: `"label" => disabled|enabled` (macOS 11+) or
+ * `"label" => true|false` (true = disabled). Value = disabled.
+ */
+export function parseLaunchdDisabled(text: string): Map<string, boolean> {
+  const values = new Map<string, boolean>();
+  for (const line of text.split("\n")) {
+    const [left, right] = line.split("=>");
+    if (right === undefined) continue;
+    const label = unquote(left.trim());
+    const state = LAUNCHD_STATES[right.trim()];
+    if (label && state !== undefined) values.set(label, state);
+  }
+  return values;
+}
+
+/** Labels of `softwareupdate --list` (`* Label: macOS Sonoma 14.7.1-23H222`); none = []. */
+export function parseSoftwareUpdates(text: string): string[] {
+  const labels: string[] = [];
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("*")) continue;
+    const rest = trimmed.slice(1).trim();
+    if (rest.startsWith("Label:")) labels.push(rest.slice("Label:".length).trim());
+  }
+  return labels.filter(Boolean).slice(0, 20);
+}
+
+function flag(values: Map<string, string> | null, key: string, fallback: boolean) {
+  const value = values?.get(key);
+  if (value === undefined) return fallback;
+  return value === "1" || value.toLowerCase() === "true" || value.toLowerCase() === "yes";
+}
+
+/** A launchd service is on when it is not disabled (absent = default off for sharing services). */
+function serviceOn(facts: MacFacts, label: string) {
+  const disabled = facts.launchdDisabled?.get(label);
+  return disabled === undefined ? false : !disabled;
+}
+
+function macUpdateChecks(facts: MacFacts): HardeningCheck[] {
+  const updates = facts.softwareUpdate;
+  const pending = facts.pendingUpdates;
+  return [
+    // Absent keys keep the macOS defaults: check, critical and security data updates on.
+    check("mac.update_check", "CIS macOS", "medium",
+      updates ? passIf(flag(updates, "AutomaticCheckEnabled", true)) : "error",
+      `AutomaticCheckEnabled=${updates?.get("AutomaticCheckEnabled") ?? "default"}`),
+    check("mac.security_updates", "CIS macOS", "high",
+      updates
+        ? passIf(flag(updates, "CriticalUpdateInstall", true) && flag(updates, "ConfigDataInstall", true))
+        : "error",
+      `CriticalUpdateInstall=${updates?.get("CriticalUpdateInstall") ?? "default"} ConfigDataInstall=${
+        updates?.get("ConfigDataInstall") ?? "default"
+      }`),
+    check("mac.auto_install", "CIS macOS", "medium",
+      updates ? passIf(flag(updates, "AutomaticallyInstallMacOSUpdates", false)) : "error",
+      `AutomaticallyInstallMacOSUpdates=${updates?.get("AutomaticallyInstallMacOSUpdates") ?? "default"}`),
+    pendingCheck(pending),
+  ];
+}
+
+function pendingCheck(pending: string[] | null): HardeningCheck {
+  if (pending === null) return check("mac.updates_pending", "CIS macOS", "high", "error", "softwareupdate failed");
+  return check("mac.updates_pending", "CIS macOS", "high", passIf(pending.length === 0),
+    pending.length ? pending.join(", ") : "No new software available");
+}
+
+function sshPasswordCheck(sshOn: boolean, password: string | undefined): HardeningCheck {
+  if (!sshOn) return check("mac.ssh_password_auth", "CIS macOS", "medium", "not_applicable", "Remote Login is off");
+  return check("mac.ssh_password_auth", "CIS macOS", "medium",
+    password === undefined ? "error" : passIf(password === "no"), `PasswordAuthentication ${password ?? "unknown"}`);
+}
+
+function macAccessChecks(facts: MacFacts): HardeningCheck[] {
+  const sshOn = serviceOn(facts, "com.openssh.sshd");
+  const password = facts.sshd?.get("passwordauthentication");
+  return [
+    sshPasswordCheck(sshOn, password),
+    check("mac.screen_sharing", "CIS macOS", "medium",
+      facts.launchdDisabled ? passIf(!serviceOn(facts, "com.apple.screensharing")) : "error",
+      serviceOn(facts, "com.apple.screensharing") ? "Screen Sharing is on" : "Screen Sharing is off"),
+    check("mac.guest_account", "CIS macOS", "medium",
+      facts.loginWindow ? passIf(!flag(facts.loginWindow, "GuestEnabled", false)) : "error",
+      `GuestEnabled=${facts.loginWindow?.get("GuestEnabled") ?? "default"}`),
+    check("mac.auto_login", "CIS macOS", "high",
+      facts.loginWindow ? passIf(!facts.loginWindow.get("autoLoginUser")) : "error",
+      facts.loginWindow?.get("autoLoginUser") ? "Automatic login is on" : "Automatic login is off"),
+  ];
+}
+
+/** macOS checks (CIS Apple macOS Benchmark references), from fixed system commands. */
+export function evaluateMacos(facts: MacFacts): HardeningCheck[] {
+  const fileVault = facts.fileVault ?? "";
+  const firewall = facts.firewall ?? "";
+  return [
+    check("mac.filevault", "CIS macOS", "high",
+      facts.fileVault === null ? "error" : passIf(/FileVault is On/i.test(fileVault)), fileVault),
+    check("mac.firewall", "CIS macOS", "medium",
+      facts.firewall === null ? "error" : passIf(/enabled|State = [12]/i.test(firewall) && !/disabled/i.test(firewall)),
+      firewall),
+    check("mac.firewall_stealth", "CIS macOS", "low",
+      facts.stealth === null ? "error" : passIf(/stealth mode is on|enabled/i.test(facts.stealth)), facts.stealth),
+    check("mac.gatekeeper", "CIS macOS", "high",
+      facts.gatekeeper === null ? "error" : passIf(/assessments enabled/i.test(facts.gatekeeper)), facts.gatekeeper),
+    check("mac.sip", "CIS macOS", "high",
+      facts.sip === null ? "error" : passIf(/status:\s*enabled/i.test(facts.sip)), facts.sip),
+    ...macUpdateChecks(facts),
+    ...macAccessChecks(facts),
+  ];
+}
+
+const XPROTECT_PLIST = "/Library/Apple/System/Library/CoreServices/XProtect.bundle/Contents/Info.plist";
+
+/** XProtect is built in and updated by macOS: state only, no actions. */
+export function xprotectState(facts: MacFacts): AntivirusState {
+  const installed = facts.xprotectVersion ? 1 : 0;
+  return {
+    engine: "xprotect",
+    installed,
+    serviceRunning: installed,
+    realtime: installed,
+    mode: null,
+    engineVersion: null,
+    signatureVersion: facts.xprotectVersion,
+    signatureUpdatedAt: facts.xprotectUpdatedAt,
+    quickScanAt: null,
+    fullScanAt: null,
+    installable: 0,
+    note: installed ? null : "XProtect was not found",
+  };
+}
+
+async function macCommand(deps: PostureDeps, command: string, args: string[], timeoutMs = 30_000) {
+  const result = await deps.run(command, args, timeoutMs);
+  return result.code === 0 ? `${result.stdout}`.trim() : null;
+}
+
+export async function collectMacFacts(deps: PostureDeps): Promise<MacFacts> {
+  const softwareUpdate = await macCommand(deps, "/usr/bin/defaults", [
+    "read",
+    "/Library/Preferences/com.apple.SoftwareUpdate",
+  ]);
+  const loginWindow = await macCommand(deps, "/usr/bin/defaults", [
+    "read",
+    "/Library/Preferences/com.apple.loginwindow",
+  ]);
+  const disabled = await macCommand(deps, "/bin/launchctl", ["print-disabled", "system"]);
+  const sshd = await macCommand(deps, "/usr/sbin/sshd", ["-T"]);
+  // softwareupdate asks Apple's servers: slow, and it fails without network (error, not fail).
+  const list = await deps.run("/usr/sbin/softwareupdate", ["--list"], 180_000);
+  const listText = `${list.stdout}\n${list.stderr}`;
+  const pendingUpdates = list.code === 0 || /No new software available/i.test(listText)
+    ? parseSoftwareUpdates(listText)
+    : null;
+  const xprotect = await macCommand(deps, "/usr/bin/defaults", [
+    "read",
+    XPROTECT_PLIST.replace(/\.plist$/, ""),
+    "CFBundleShortVersionString",
+  ]);
+  const mtime = await macCommand(deps, "/usr/bin/stat", ["-f", "%m", XPROTECT_PLIST]);
+  const seconds = Number(mtime);
+  return {
+    fileVault: await macCommand(deps, "/usr/bin/fdesetup", ["status"]),
+    firewall: await macCommand(deps, "/usr/libexec/ApplicationFirewall/socketfilterfw", ["--getglobalstate"]),
+    stealth: await macCommand(deps, "/usr/libexec/ApplicationFirewall/socketfilterfw", ["--getstealthmode"]),
+    gatekeeper: await macCommand(deps, "/usr/sbin/spctl", ["--status"]),
+    sip: await macCommand(deps, "/usr/bin/csrutil", ["status"]),
+    // An absent domain is an empty map: macOS defaults apply.
+    softwareUpdate: softwareUpdate === null ? new Map() : parseDefaults(softwareUpdate),
+    pendingUpdates,
+    launchdDisabled: disabled === null ? null : parseLaunchdDisabled(disabled),
+    sshd: sshd === null ? null : parseSshdConfig(sshd),
+    loginWindow: loginWindow === null ? new Map() : parseDefaults(loginWindow),
+    xprotectVersion: xprotect && /^\d[\d.]{0,31}$/.test(xprotect) ? xprotect : null,
+    xprotectUpdatedAt: Number.isFinite(seconds) && seconds > 0
+      ? new Date(seconds * 1000).toISOString()
+      : null,
+  };
+}
+
+// ---------------------------------------------------------------------------------------------
 // Jobs
 
 async function linuxAntivirus(deps: PostureDeps, state: ClamState) {
@@ -1211,6 +1438,17 @@ export async function collectPosture(deps: PostureDeps): Promise<PostureResult> 
       posture: 1,
       platform: "windows",
       ...windows,
+      durationMs: deps.now().getTime() - started,
+    };
+  }
+  if (deps.macos) {
+    const facts = await collectMacFacts(deps);
+    return {
+      posture: 1,
+      platform: "macos",
+      checks: evaluateMacos(facts),
+      antivirus: xprotectState(facts),
+      threats: [],
       durationMs: deps.now().getTime() - started,
     };
   }
@@ -1240,6 +1478,18 @@ export async function runAntivirusAction(
       antivirus: windows.antivirus,
       threats: windows.threats,
       actionResult,
+      durationMs: deps.now().getTime() - started,
+    };
+  }
+  if (deps.macos) {
+    // The platform refuses these jobs for a Mac; an old one still gets a clear answer.
+    const facts = await collectMacFacts(deps);
+    return {
+      posture: 1,
+      platform: "macos",
+      antivirus: xprotectState(facts),
+      threats: [],
+      actionResult: { action, outcome: "failed", message: "macOS updates and runs XProtect by itself" },
       durationMs: deps.now().getTime() - started,
     };
   }

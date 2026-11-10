@@ -54,8 +54,15 @@ export const PACKAGE_DB_PATHS = [
   "/lib/apk/db/installed",
 ];
 
+/** macOS: installs and system updates touch these (application folders and the install log). */
+export const MACOS_PACKAGE_PATHS = [
+  "/Library/Receipts/InstallHistory.plist",
+  "/System/Library/CoreServices/SystemVersion.plist",
+  "/Applications",
+];
+
 export type InventoryOs = {
-  family: "linux" | "windows";
+  family: "linux" | "windows" | "macos";
   id: string | null;
   versionId: string | null;
   codename: string | null;
@@ -67,7 +74,7 @@ export type InventoryOs = {
   displayVersion: string | null;
 };
 
-export type PackageManager = "dpkg" | "rpm" | "apk" | "windows";
+export type PackageManager = "dpkg" | "rpm" | "apk" | "windows" | "macos";
 
 export type InventoryPackage = {
   name: string;
@@ -466,6 +473,120 @@ export function parseWindowsInventory(text: string): InventoryCore {
 }
 
 // ---------------------------------------------------------------------------------------------
+// macOS
+
+/** `sw_vers` output (`ProductName:\tmacOS`, `ProductVersion:\t14.6.1`, `BuildVersion:\t23G93`). */
+export function parseSwVers(text: string) {
+  const values = new Map<string, string>();
+  for (const line of text.split("\n")) {
+    const colon = line.indexOf(":");
+    if (colon > 0) values.set(line.slice(0, colon).trim(), line.slice(colon + 1).trim());
+  }
+  const value = (key: string) => cleanText(values.get(key), 64);
+  const version = value("ProductVersion");
+  return {
+    name: value("ProductName"),
+    version: version && /^\d+(\.\d+){0,3}$/.test(version) ? version : null,
+    build: value("BuildVersion"),
+  };
+}
+
+/** Folder of an application bundle path (`/Applications/Safari.app` → `/Applications`). */
+function bundleFolder(path: string | null) {
+  if (!path?.endsWith(".app")) return path;
+  const slash = path.lastIndexOf("/");
+  return slash > 0 ? path.slice(0, slash) : path;
+}
+
+/**
+ * Applications from `system_profiler SPApplicationsDataType -json -detailLevel mini`: name,
+ * version and folder (source). Duplicates (same name and version) are kept once.
+ */
+export function parseMacApplications(text: string): InventoryPackage[] {
+  const data = asRecord(JSON.parse(text || "{}"));
+  const seen = new Set<string>();
+  const packages: InventoryPackage[] = [];
+  for (const entry of asArray(data.SPApplicationsDataType)) {
+    const app = asRecord(entry);
+    const folder = bundleFolder(cleanText(app.path, 1024));
+    const item = makePackage(app._name, app.version, macAppArch(app.arch_kind), folder);
+    if (!item || item.name.toLowerCase() === "macos") continue;
+    const key = `${item.name}\u0000${item.version}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    packages.push(item);
+  }
+  return packages;
+}
+
+function lsofProtocol(value: string): "tcp" | "udp" | null {
+  if (value === "TCP") return "tcp";
+  return value === "UDP" ? "udp" : null;
+}
+
+/** `address:port` of an lsof `n` field (`*:22`, `[::1]:631`); null for `*:*` or a bad port. */
+export function lsofEndpoint(value: string): { address: string; port: number } | null {
+  const colon = value.lastIndexOf(":");
+  if (colon < 0) return null;
+  const portText = value.slice(colon + 1);
+  if (!/^\d{1,5}$/.test(portText)) return null;
+  const port = Number(portText);
+  let host = value.slice(0, colon);
+  if (host.startsWith("[") && host.endsWith("]")) host = host.slice(1, -1);
+  const zone = host.indexOf("%");
+  if (zone >= 0) host = host.slice(0, zone);
+  const address = host === "*" ? "0.0.0.0" : cleanText(host, 64);
+  return address && port <= 65535 ? { address, port } : null;
+}
+
+/**
+ * Listening sockets from `lsof -nP -iTCP -sTCP:LISTEN -iUDP -F pcPn`: one `p`/`c` block per
+ * process, then `P` (protocol) and `n` (address:port) per socket. Connected UDP sockets
+ * (`a->b`) are skipped.
+ */
+export function parseLsof(text: string): InventoryPort[] {
+  const ports = new Map<string, InventoryPort>();
+  let process: string | null = null;
+  let protocol: "tcp" | "udp" | null = null;
+  for (const line of text.split("\n")) {
+    const value = line.slice(1).trim();
+    switch (line[0]) {
+      case "p":
+        process = null;
+        protocol = null;
+        break;
+      case "c":
+        process = cleanText(value, LIMITS.process);
+        break;
+      case "P":
+        protocol = lsofProtocol(value);
+        break;
+      case "n": {
+        const endpoint = protocol && !value.includes("->") ? lsofEndpoint(value) : null;
+        if (!protocol || !endpoint) break;
+        const key = `${protocol}|${endpoint.address}|${endpoint.port}`;
+        if (!ports.has(key)) ports.set(key, { protocol, ...endpoint, process });
+        break;
+      }
+    }
+  }
+  return [...ports.values()];
+}
+
+/** `arch_kind` of system_profiler: universal and Apple silicon builds are arm64. */
+function macAppArch(value: unknown) {
+  if (value === "arch_arm_i64" || value === "arch_arm") return "arm64";
+  if (value === "arch_i64") return "x86_64";
+  return null;
+}
+
+/** `uname -m` of a Mac: arm64 (Apple silicon) or x86_64. */
+export function macArch(value: string | null) {
+  if (!value) return null;
+  return value === "arm64" ? "arm64" : cleanText(value, LIMITS.arch);
+}
+
+// ---------------------------------------------------------------------------------------------
 // Command wrapping (Linux resource cap)
 
 export type WrapperTools = {
@@ -727,9 +848,78 @@ async function collectLinux(runner: CappedRunner): Promise<InventoryCore> {
   };
 }
 
+/**
+ * macOS: the release itself is the package `macos` (matched by the platform against the NVD),
+ * then every application with its version, and the listening sockets. Commands run under `nice`.
+ */
+async function collectMacos(runner: CappedRunner): Promise<InventoryCore> {
+  const swVers = await runner.exec("/usr/bin/sw_vers", []);
+  if (swVers.code !== 0) throw new Error(`sw_vers exited with ${swVers.code}.`);
+  const release = parseSwVers(swVers.stdout);
+  if (!release.version) throw new Error("macOS version not found.");
+  const kernel = await runner.exec("/usr/bin/uname", ["-r"]);
+  const machine = await runner.exec("/usr/bin/uname", ["-m"]);
+  const arch = macArch(machine.code === 0 ? cleanText(machine.stdout, LIMITS.arch) : null);
+  const apps = await runner.exec("/usr/sbin/system_profiler", [
+    "SPApplicationsDataType",
+    "-json",
+    "-detailLevel",
+    "mini",
+  ]);
+  if (apps.code !== 0) throw new Error(`system_profiler exited with ${apps.code}.`);
+  const packages = [
+    { name: "macos", version: release.version, arch, source: null },
+    ...parseMacApplications(apps.stdout),
+  ];
+  // Safari lives in a system cryptex: system_profiler may leave it out, its bundle has the version.
+  if (!packages.some((item) => item.name === "Safari")) {
+    const safari = await runner.exec("/usr/bin/defaults", [
+      "read",
+      "/Applications/Safari.app/Contents/Info",
+      "CFBundleShortVersionString",
+    ]);
+    const item = safari.code === 0
+      ? makePackage("Safari", safari.stdout.trim(), arch, "/Applications")
+      : null;
+    if (item) packages.push(item);
+  }
+  let ports: InventoryPort[] = [];
+  const lsof = await runner.exec("/usr/sbin/lsof", [
+    "-nP",
+    "-iTCP",
+    "-sTCP:LISTEN",
+    "-iUDP",
+    "-F",
+    "pcPn",
+  ]);
+  // lsof exits 1 when one of the selections matched nothing.
+  if (lsof.code === 0 || lsof.code === 1) ports = parseLsof(lsof.stdout);
+  return {
+    os: {
+      family: "macos",
+      id: "macos",
+      versionId: release.version,
+      codename: null,
+      name: `${release.name ?? "macOS"} ${release.version}`,
+      kernel: kernel.code === 0 ? cleanText(kernel.stdout, 128) : null,
+      arch,
+      build: release.build,
+      ubr: null,
+      displayVersion: null,
+    },
+    packageManager: "macos",
+    packages,
+    hotfixes: [],
+    ports,
+    rebootRequired: null,
+  };
+}
+
 export type CollectOptions = {
   run: CommandRunner;
   windows: boolean;
+  /** macOS host (Deno.build.os darwin). */
+  macos?: boolean;
   powershell: () => string;
   now?: () => number;
   /** Test seams: slice cgroup directory (default `sliceCgroupPath`) and file reader (`cat`). */
@@ -756,6 +946,9 @@ export async function collectSecurityInventory(options: CollectOptions): Promise
     ], deadline.timeout());
     if (result.code !== 0) throw new Error(`Windows inventory exited with ${result.code}.`);
     core = parseWindowsInventory(result.stdout);
+  } else if (options.macos) {
+    const runner = new CappedRunner(options.run, await detectWrapperTools(), deadline);
+    core = await collectMacos(runner);
   } else {
     const runner = new CappedRunner(options.run, await detectWrapperTools(), deadline);
     const resolve = options.sliceCgroup ?? (() => sliceCgroupPath(options.run));

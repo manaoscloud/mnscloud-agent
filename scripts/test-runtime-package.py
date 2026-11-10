@@ -10,6 +10,7 @@ root = Path(__file__).resolve().parent.parent
 plans = [
     ("Linux", "install-agent.sh", r"cp '\$\{AGENT_SOURCE_DIR\}/([^']+\.(?:ts|jsonc))'"),
     ("Windows", "install-agent-windows.ps1", r'Copy-Item -Path "\$PSScriptRoot\\\.\.\\([^"\\]+\.(?:ts|jsonc))"'),
+    ("macOS", "install-agent-macos.sh", r"cp '\$\{AGENT_SOURCE_DIR\}/([^']+\.(?:ts|jsonc))'"),
 ]
 for platform, installer, pattern in plans:
     names = re.findall(pattern, (root / "scripts" / installer).read_text())
