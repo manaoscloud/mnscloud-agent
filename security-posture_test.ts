@@ -8,12 +8,14 @@ import {
   ANTIVIRUS_COMMAND,
   AntivirusRequestError,
   clamInstallSteps,
+  collectLinuxFacts,
   collectPosture,
   defenderState,
   defenderThreats,
   evaluateLinux,
   evaluateWindows,
   type LinuxFacts,
+  memInfoKb,
   mergeScan,
   parseAntivirusAction,
   parseClamFindings,
@@ -21,6 +23,7 @@ import {
   parseSshdConfig,
   POSTURE_COMMAND,
   type PostureDeps,
+  readProc,
   runAntivirusAction,
   threatKey,
   WINDOWS_POSTURE_SCRIPT,
@@ -48,6 +51,14 @@ function fakeDeps(options: {
       const answer = Object.entries(options.answers ?? {}).find(([prefix]) =>
         key.startsWith(prefix)
       )?.[1];
+      if (!answer && command === "cat" && args[0]?.startsWith("/proc/")) {
+        const text = files[args[0]];
+        return Promise.resolve({
+          code: text === undefined ? 1 : 0,
+          stdout: text ?? "",
+          stderr: "",
+        });
+      }
       return Promise.resolve({
         code: answer?.code ?? 0,
         stdout: answer?.stdout ?? "",
@@ -57,7 +68,9 @@ function fakeDeps(options: {
     windows: options.windows ?? false,
     powershell: () => "powershell.exe",
     encode: (script) => `encoded:${script.length}`,
-    readText: (path) => Promise.resolve(files[path] ?? written[path] ?? null),
+    // Deno 2 refuses direct /proc reads without --allow-all: /proc is served only through `cat`.
+    readText: (path) =>
+      Promise.resolve(path.startsWith("/proc/") ? null : files[path] ?? written[path] ?? null),
     statMode: (path) =>
       Promise.resolve(
         path === "/etc/shadow"
@@ -165,6 +178,25 @@ Deno.test("no OpenSSH server = SSH checks not applicable", () => {
     item.code.startsWith("ssh.")
   );
   assertEquals(checks.map((item) => item.status), Array(5).fill("not_applicable"));
+});
+
+Deno.test("sysctl values and memory are read through cat, not a direct /proc read", async () => {
+  const { deps, calls } = fakeDeps({
+    files: {
+      "/proc/sys/kernel/randomize_va_space": "2\n",
+      "/proc/sys/net/ipv4/tcp_syncookies": "1\n",
+    },
+  });
+  const linux = await collectLinuxFacts(deps);
+  assertEquals(linux.sysctl["kernel.randomize_va_space"], "2");
+  assertEquals(linux.sysctl["net.ipv4.tcp_syncookies"], "1");
+  assertEquals(linux.sysctl["fs.suid_dumpable"], null);
+  assert(
+    calls.some((call) =>
+      call.command === "cat" && call.args[0] === "/proc/sys/kernel/randomize_va_space"
+    ),
+  );
+  assertEquals(memInfoKb(await readProc(deps, "/proc/meminfo"), "MemTotal"), null);
 });
 
 Deno.test("ClamAV version, findings and scan state", async () => {

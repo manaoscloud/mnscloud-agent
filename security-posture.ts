@@ -470,7 +470,7 @@ export async function collectLinuxFacts(deps: PostureDeps): Promise<LinuxFacts> 
   }
   const sysctl: Record<string, string | null> = {};
   for (const key of SYSCTL_KEYS) {
-    sysctl[key] = (await deps.readText(sysctlPath(key)))?.trim() ?? null;
+    sysctl[key] = (await readProc(deps, sysctlPath(key)))?.trim() || null;
   }
   const units = await activeUnits(deps);
   return {
@@ -527,6 +527,15 @@ export function parseClamVersion(text: string) {
   };
 }
 
+/**
+ * Reads a /proc file through `cat`: Deno 2 refuses to read /proc without --allow-all, so a direct
+ * read returns null on the installed Agent (same path as the status sampler in main.ts).
+ */
+export async function readProc(deps: PostureDeps, path: string): Promise<string | null> {
+  const result = await deps.run("cat", [path], TIMEOUTS.check);
+  return result.code === 0 ? result.stdout : null;
+}
+
 export function memInfoKb(text: string | null, key: string): number | null {
   const match = new RegExp(`^${key}:\\s+(\\d+)\\s*kB`, "m").exec(text ?? "");
   return match ? Number(match[1]) : null;
@@ -539,7 +548,7 @@ async function processRunning(deps: PostureDeps, name: string) {
 
 export async function clamavState(deps: PostureDeps, state: ClamState, units: Set<string>) {
   const installed = await deps.hasCommand("clamscan");
-  const total = memInfoKb(await deps.readText("/proc/meminfo"), "MemTotal");
+  const total = memInfoKb(await readProc(deps, "/proc/meminfo"), "MemTotal");
   const enoughMemory = total !== null && total >= CLAMAV_MIN_TOTAL_MEMORY_KB;
   const managers = await deps.packageManager();
   if (!installed) {
@@ -667,7 +676,7 @@ async function clamScan(
   const daemon = (units.has("clamav-daemon") || units.has("clamd@scan") || units.has("clamd")) &&
     await deps.hasCommand("clamdscan");
   if (!daemon) {
-    const available = memInfoKb(await deps.readText("/proc/meminfo"), "MemAvailable");
+    const available = memInfoKb(await readProc(deps, "/proc/meminfo"), "MemAvailable");
     if (available === null || available < CLAMAV_MIN_AVAILABLE_MEMORY_KB) {
       return {
         state,
@@ -776,7 +785,7 @@ async function clamInstall(deps: PostureDeps): Promise<ActionResult> {
   if (await deps.hasCommand("clamscan")) {
     return { action: "install", outcome: "success", message: "ClamAV is already installed" };
   }
-  const total = memInfoKb(await deps.readText("/proc/meminfo"), "MemTotal");
+  const total = memInfoKb(await readProc(deps, "/proc/meminfo"), "MemTotal");
   if (total === null || total < CLAMAV_MIN_TOTAL_MEMORY_KB) {
     return {
       action: "install",
