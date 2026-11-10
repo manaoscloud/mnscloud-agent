@@ -337,6 +337,22 @@ function kernelChecks(facts: LinuxFacts): HardeningCheck[] {
       )
       : sysctlCheck(facts, code, "CIS 3.3", "low", key, ok);
   const ipv6Redirects = facts.sysctl["net.ipv6.conf.all.accept_redirects"];
+  const redirects = sysctlCheck(
+    facts,
+    "sysctl.accept_redirects",
+    "CIS 3.3",
+    "low",
+    "net.ipv4.conf.all.accept_redirects",
+    (v) =>
+      v === "0" &&
+      (ipv6Redirects === null || ipv6Redirects === undefined || ipv6Redirects === "0"),
+  );
+  if (
+    redirects.status !== "not_applicable" && ipv6Redirects !== null && ipv6Redirects !== undefined
+  ) {
+    redirects.evidence =
+      `${redirects.evidence}, net.ipv6.conf.all.accept_redirects = ${ipv6Redirects}`;
+  }
   return [
     sysctlCheck(
       facts,
@@ -362,16 +378,7 @@ function kernelChecks(facts: LinuxFacts): HardeningCheck[] {
       "kernel.dmesg_restrict",
       (v) => v === "1",
     ),
-    sysctlCheck(
-      facts,
-      "sysctl.accept_redirects",
-      "CIS 3.3",
-      "low",
-      "net.ipv4.conf.all.accept_redirects",
-      (v) =>
-        v === "0" &&
-        (ipv6Redirects === null || ipv6Redirects === undefined || ipv6Redirects === "0"),
-    ),
+    redirects,
     sysctlCheck(
       facts,
       "sysctl.source_route",
@@ -470,7 +477,7 @@ export async function collectLinuxFacts(deps: PostureDeps): Promise<LinuxFacts> 
   }
   const sysctl: Record<string, string | null> = {};
   for (const key of SYSCTL_KEYS) {
-    sysctl[key] = (await deps.readText(sysctlPath(key)))?.trim() ?? null;
+    sysctl[key] = (await readProc(deps, sysctlPath(key)))?.trim() || null;
   }
   const units = await activeUnits(deps);
   return {
@@ -527,6 +534,15 @@ export function parseClamVersion(text: string) {
   };
 }
 
+/**
+ * Reads a /proc file through `cat`: Deno 2 refuses to read /proc without --allow-all, so a direct
+ * read returns null on the installed Agent (same path as the status sampler in main.ts).
+ */
+export async function readProc(deps: PostureDeps, path: string): Promise<string | null> {
+  const result = await deps.run("cat", [path], TIMEOUTS.check);
+  return result.code === 0 ? result.stdout : null;
+}
+
 export function memInfoKb(text: string | null, key: string): number | null {
   const match = new RegExp(`^${key}:\\s+(\\d+)\\s*kB`, "m").exec(text ?? "");
   return match ? Number(match[1]) : null;
@@ -539,7 +555,7 @@ async function processRunning(deps: PostureDeps, name: string) {
 
 export async function clamavState(deps: PostureDeps, state: ClamState, units: Set<string>) {
   const installed = await deps.hasCommand("clamscan");
-  const total = memInfoKb(await deps.readText("/proc/meminfo"), "MemTotal");
+  const total = memInfoKb(await readProc(deps, "/proc/meminfo"), "MemTotal");
   const enoughMemory = total !== null && total >= CLAMAV_MIN_TOTAL_MEMORY_KB;
   const managers = await deps.packageManager();
   if (!installed) {
@@ -667,7 +683,7 @@ async function clamScan(
   const daemon = (units.has("clamav-daemon") || units.has("clamd@scan") || units.has("clamd")) &&
     await deps.hasCommand("clamdscan");
   if (!daemon) {
-    const available = memInfoKb(await deps.readText("/proc/meminfo"), "MemAvailable");
+    const available = memInfoKb(await readProc(deps, "/proc/meminfo"), "MemAvailable");
     if (available === null || available < CLAMAV_MIN_AVAILABLE_MEMORY_KB) {
       return {
         state,
@@ -776,7 +792,7 @@ async function clamInstall(deps: PostureDeps): Promise<ActionResult> {
   if (await deps.hasCommand("clamscan")) {
     return { action: "install", outcome: "success", message: "ClamAV is already installed" };
   }
-  const total = memInfoKb(await deps.readText("/proc/meminfo"), "MemTotal");
+  const total = memInfoKb(await readProc(deps, "/proc/meminfo"), "MemTotal");
   if (total === null || total < CLAMAV_MIN_TOTAL_MEMORY_KB) {
     return {
       action: "install",
@@ -806,7 +822,9 @@ async function clamInstall(deps: PostureDeps): Promise<ActionResult> {
       return { action: "install", outcome: "failed", message: failure(result, step.label) };
     }
   }
-  if (manager === "rpm") {
+  // Packages do not always start the updater (dnf never does; Debian skips it under a
+  // policy-rc.d), so enable it explicitly: without it no signatures are ever downloaded.
+  if (manager !== "apk" && await deps.hasCommand("systemctl")) {
     await deps.run("systemctl", ["enable", "--now", "clamav-freshclam"], TIMEOUTS.check);
   }
   return {
