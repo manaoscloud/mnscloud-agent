@@ -117,10 +117,11 @@ function concat(...parts: Uint8Array[]): Uint8Array {
 
 export function encodeInteger(value: number): Uint8Array {
   const bytes: number[] = [];
-  let v = value;
+  // SNMP integers here are request ids, sizes and engine counters: 0 to 2^31-1.
+  let v = value >>> 0;
   do {
     bytes.unshift(v & 0xff);
-    v = Math.floor(v / 256);
+    v = v >>> 8;
   } while (v > 0);
   if (bytes[0] & 0x80) bytes.unshift(0);
   return tlv(TAG.integer, Uint8Array.from(bytes));
@@ -561,8 +562,9 @@ export function allowedAddress(address: string): boolean {
 export type SnmpSession = { get(oids: string[]): Promise<Map<string, string | null>> };
 
 export function openSession(target: DeviceTarget, transport: Transport): SnmpSession {
-  let requestId = 1 + (crypto.getRandomValues(new Uint32Array(1))[0] & 0x3fffffff);
-  const next = () => (requestId = (requestId % 0x7ffffffe) + 1);
+  // A request id is not a secret: an unpredictable start only avoids matching stale answers.
+  let requestId = (crypto.getRandomValues(new Uint32Array(1))[0] >>> 2) | 1;
+  const next = () => (requestId = requestId >= 0x3ffffffe ? 1 : requestId + 1);
   const credentials = target.credentials;
   if (credentials.version === "v2c") {
     return {
