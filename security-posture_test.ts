@@ -271,6 +271,11 @@ Deno.test("ClamAV install refuses small hosts and uses the host package manager"
       ["apt-get", "install"],
     ],
   );
+  assert(
+    big.calls.some((call) =>
+      call.command === "systemctl" && call.args.join(" ") === "enable --now clamav-freshclam"
+    ),
+  );
   assertEquals(clamInstallSteps("rpm")[0].args, ["-y", "install", "clamav", "clamav-update"]);
   assertEquals(clamInstallSteps("apk")[0].args, ["add", "clamav-scanner", "freshclam"]);
 });

@@ -822,7 +822,9 @@ async function clamInstall(deps: PostureDeps): Promise<ActionResult> {
       return { action: "install", outcome: "failed", message: failure(result, step.label) };
     }
   }
-  if (manager === "rpm") {
+  // Packages do not always start the updater (dnf never does; Debian skips it under a
+  // policy-rc.d), so enable it explicitly: without it no signatures are ever downloaded.
+  if (manager !== "apk" && await deps.hasCommand("systemctl")) {
     await deps.run("systemctl", ["enable", "--now", "clamav-freshclam"], TIMEOUTS.check);
   }
   return {
