@@ -138,6 +138,14 @@ import {
   runAntivirusAction,
 } from "./security-posture.ts";
 import {
+  collectDevice,
+  NETWORK_DEVICE_CAPABILITY,
+  NETWORK_DEVICE_COMMAND,
+  NetworkDeviceError,
+  parseMaterial,
+  udpTransport,
+} from "./network-device.ts";
+import {
   byteBudget,
   captureCommand,
   diagnosticExcerpt,
@@ -385,6 +393,8 @@ async function applyRuntimeCapabilities(config: AgentConfig) {
   config.capabilities[PATCH_CAPABILITY] = IS_WINDOWS || await hostPackageManager() !== null;
   // Cyber Security hardening checks and native antivirus (V8): every Linux and Windows Agent.
   config.capabilities[POSTURE_CAPABILITY] = true;
+  // Cyber Security network devices (V9): read-only SNMP GET of devices on this Agent's network.
+  config.capabilities[NETWORK_DEVICE_CAPABILITY] = true;
   config.capabilities["mnscloud.api.update"] = await isExecutableFile(
     "/opt/mnscloud/mnscloud-api/scripts/update-api.sh",
   );
@@ -6928,6 +6938,55 @@ async function executeCyberSecurityPosture(
   });
 }
 
+/**
+ * V9 job: reads one network device over SNMP GET. The device address and credential come from the
+ * platform only for this leased job and are never written to disk or logs.
+ */
+async function executeNetworkDeviceCollect(
+  job: LeaseJob,
+  config: AgentConfig,
+  agentUUID: string,
+  agentToken: string,
+) {
+  let target;
+  try {
+    const material = await jsonRequest<{ data?: Record<string, unknown> }>(
+      config,
+      `/agent/cyber-security/network-devices/${job.jobUUID}/material`,
+      agentToken,
+      agentUUID,
+      {},
+    );
+    target = parseMaterial(material.data ?? {});
+    const result = await collectDevice(target, udpTransport());
+    await jsonRequest(config, `/agent/jobs/${job.jobUUID}/complete`, agentToken, agentUUID, {
+      jobType: "cyber.security",
+      result,
+    });
+    log("info", "Network device collected.", {
+      jobUUID: job.jobUUID,
+      deviceUUID: result.deviceUUID,
+      vendor: result.vendor,
+      version: result.version,
+    });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    const message = error instanceof NetworkDeviceError
+      ? detail
+      : `Network device collection failed: ${detail}`;
+    log("warn", "Network device collection failed.", { jobUUID: job.jobUUID, message });
+    await failJob(
+      config,
+      job.jobUUID,
+      agentUUID,
+      agentToken,
+      "CYBER_NETWORK_DEVICE_FAILED",
+      message.slice(0, 500),
+      "cyber.security",
+    );
+  }
+}
+
 async function executeCyberSecurityJob(
   job: LeaseJob,
   config: AgentConfig,
@@ -7033,6 +7092,11 @@ async function executeCyberSecurityJob(
 
     if (leasedCommand === POSTURE_COMMAND || leasedCommand === ANTIVIRUS_COMMAND) {
       await executeCyberSecurityPosture(job, leasedCommand, config, agentUUID, agentToken);
+      return;
+    }
+
+    if (leasedCommand === NETWORK_DEVICE_COMMAND) {
+      await executeNetworkDeviceCollect(job, config, agentUUID, agentToken);
       return;
     }
 
