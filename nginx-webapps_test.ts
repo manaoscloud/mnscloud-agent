@@ -60,16 +60,17 @@ Deno.test("edge headers: App and softphone may use the microphone, only the soft
   assertEquals(softphone.includes("microphone=(self)"), true);
   assertEquals(webapp.includes("frame-ancestors 'none'"), true);
   assertEquals(webapp.includes("microphone=()"), true);
-  // POS web reads barcodes with the camera of its own origin; nothing else gets the camera.
+  // POS web reads barcodes with the camera of its own origin.
   const scanner = edgeSecurityHeaders("scanner", "");
   assertEquals(scanner.includes("camera=(self)"), true);
   assertEquals(scanner.includes("microphone=()"), true);
   assertEquals(scanner.includes("frame-ancestors 'none'"), true);
   for (const other of [app, softphone, webapp]) assertEquals(other.includes("camera=()"), true);
-  // Pulse records the punch position with the geolocation of its own origin; nobody else gets it.
+  // Pulse records the punch position and its live photo with the geolocation and the camera of
+  // its own origin; nobody else gets the geolocation.
   const timeclock = edgeSecurityHeaders("timeclock", "");
   assertEquals(timeclock.includes("geolocation=(self)"), true);
-  assertEquals(timeclock.includes("camera=()"), true);
+  assertEquals(timeclock.includes("camera=(self)"), true);
   assertEquals(timeclock.includes("microphone=()"), true);
   assertEquals(timeclock.includes("frame-ancestors 'none'"), true);
   for (const other of [app, softphone, webapp, scanner]) {
