@@ -322,13 +322,12 @@ type IniConfig = Record<string, Record<string, string>>;
 
 const IS_WINDOWS = Deno.build.os === "windows";
 const IS_MACOS = Deno.build.os === "darwin";
-const AGENT_OS: AgentConfig["os"] = IS_WINDOWS
-  ? "windows"
-  : IS_MACOS
-  ? "macos"
-  : Deno.build.os === "linux"
-  ? "linux"
-  : "other";
+function agentOs(): AgentConfig["os"] {
+  if (IS_WINDOWS) return "windows";
+  if (IS_MACOS) return "macos";
+  return Deno.build.os === "linux" ? "linux" : "other";
+}
+const AGENT_OS = agentOs();
 const PROGRAM_DATA = Deno.env.get("ProgramData") ?? "C:\\ProgramData";
 const CONFIG_PATH = Deno.env.get("MNSCLOUD_AGENT_CONFIG") ??
   (IS_WINDOWS ? `${PROGRAM_DATA}\\MNSCloud\\Agent\\agent.conf` : "/etc/mnscloud/agent/agent.conf");
@@ -4835,11 +4834,9 @@ async function executeRuntimeUpdateJob(
     let result: { code: number; stdout: string; stderr: string };
     if (product === "mnscloud-agent") {
       scheduled = true;
-      result = IS_WINDOWS
-        ? await scheduleWindowsAgentUpdate(config, targetRef)
-        : IS_MACOS
-        ? await scheduleMacosAgentUpdate(config, targetRef)
-        : await scheduleLinuxAgentUpdate(config, job.jobUUID, targetRef);
+      if (IS_WINDOWS) result = await scheduleWindowsAgentUpdate(config, targetRef);
+      else if (IS_MACOS) result = await scheduleMacosAgentUpdate(config, targetRef);
+      else result = await scheduleLinuxAgentUpdate(config, job.jobUUID, targetRef);
     } else {
       if (IS_WINDOWS || IS_MACOS) {
         throw new Error(

@@ -477,14 +477,25 @@ export function parseWindowsInventory(text: string): InventoryCore {
 
 /** `sw_vers` output (`ProductName:\tmacOS`, `ProductVersion:\t14.6.1`, `BuildVersion:\t23G93`). */
 export function parseSwVers(text: string) {
-  const value = (key: string) =>
-    cleanText(text.match(new RegExp(`^${key}:\\s*(.+)$`, "m"))?.[1], 64);
+  const values = new Map<string, string>();
+  for (const line of text.split("\n")) {
+    const colon = line.indexOf(":");
+    if (colon > 0) values.set(line.slice(0, colon).trim(), line.slice(colon + 1).trim());
+  }
+  const value = (key: string) => cleanText(values.get(key), 64);
   const version = value("ProductVersion");
   return {
     name: value("ProductName"),
     version: version && /^\d+(\.\d+){0,3}$/.test(version) ? version : null,
     build: value("BuildVersion"),
   };
+}
+
+/** Folder of an application bundle path (`/Applications/Safari.app` → `/Applications`). */
+function bundleFolder(path: string | null) {
+  if (!path?.endsWith(".app")) return path;
+  const slash = path.lastIndexOf("/");
+  return slash > 0 ? path.slice(0, slash) : path;
 }
 
 /**
@@ -497,8 +508,7 @@ export function parseMacApplications(text: string): InventoryPackage[] {
   const packages: InventoryPackage[] = [];
   for (const entry of asArray(data.SPApplicationsDataType)) {
     const app = asRecord(entry);
-    const path = cleanText(app.path, 1024);
-    const folder = path ? path.replace(/\/[^/]+\.app$/, "") : null;
+    const folder = bundleFolder(cleanText(app.path, 1024));
     const item = makePackage(app._name, app.version, macAppArch(app.arch_kind), folder);
     if (!item || item.name.toLowerCase() === "macos") continue;
     const key = `${item.name}\u0000${item.version}`;
@@ -509,40 +519,58 @@ export function parseMacApplications(text: string): InventoryPackage[] {
   return packages;
 }
 
+function lsofProtocol(value: string): "tcp" | "udp" | null {
+  if (value === "TCP") return "tcp";
+  return value === "UDP" ? "udp" : null;
+}
+
+/** `address:port` of an lsof `n` field (`*:22`, `[::1]:631`); null for `*:*` or a bad port. */
+export function lsofEndpoint(value: string): { address: string; port: number } | null {
+  const colon = value.lastIndexOf(":");
+  if (colon < 0) return null;
+  const portText = value.slice(colon + 1);
+  if (!/^\d{1,5}$/.test(portText)) return null;
+  const port = Number(portText);
+  let host = value.slice(0, colon);
+  if (host.startsWith("[") && host.endsWith("]")) host = host.slice(1, -1);
+  const zone = host.indexOf("%");
+  if (zone >= 0) host = host.slice(0, zone);
+  const address = host === "*" ? "0.0.0.0" : cleanText(host, 64);
+  return address && port <= 65535 ? { address, port } : null;
+}
+
 /**
  * Listening sockets from `lsof -nP -iTCP -sTCP:LISTEN -iUDP -F pcPn`: one `p`/`c` block per
  * process, then `P` (protocol) and `n` (address:port) per socket. Connected UDP sockets
  * (`a->b`) are skipped.
  */
 export function parseLsof(text: string): InventoryPort[] {
-  const ports: InventoryPort[] = [];
-  const seen = new Set<string>();
+  const ports = new Map<string, InventoryPort>();
   let process: string | null = null;
   let protocol: "tcp" | "udp" | null = null;
   for (const line of text.split("\n")) {
-    const field = line[0];
     const value = line.slice(1).trim();
-    if (field === "p") {
-      process = null;
-      protocol = null;
-    } else if (field === "c") {
-      process = cleanText(value, LIMITS.process);
-    } else if (field === "P") {
-      protocol = value === "TCP" ? "tcp" : value === "UDP" ? "udp" : null;
-    } else if (field === "n" && protocol && !value.includes("->")) {
-      const match = value.match(/^(.*):(\d+|\*)$/);
-      if (!match || match[2] === "*") continue;
-      const number = Number(match[2]);
-      const raw = match[1].replace(/^\[(.*)\]$/, "$1").replace(/%.*$/, "");
-      const address = raw === "*" ? "0.0.0.0" : cleanText(raw, 64);
-      if (!address || number < 0 || number > 65535) continue;
-      const key = `${protocol}|${address}|${number}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      ports.push({ protocol, address, port: number, process });
+    switch (line[0]) {
+      case "p":
+        process = null;
+        protocol = null;
+        break;
+      case "c":
+        process = cleanText(value, LIMITS.process);
+        break;
+      case "P":
+        protocol = lsofProtocol(value);
+        break;
+      case "n": {
+        const endpoint = protocol && !value.includes("->") ? lsofEndpoint(value) : null;
+        if (!protocol || !endpoint) break;
+        const key = `${protocol}|${endpoint.address}|${endpoint.port}`;
+        if (!ports.has(key)) ports.set(key, { protocol, ...endpoint, process });
+        break;
+      }
     }
   }
-  return ports;
+  return [...ports.values()];
 }
 
 /** `arch_kind` of system_profiler: universal and Apple silicon builds are arm64. */
@@ -843,6 +871,18 @@ async function collectMacos(runner: CappedRunner): Promise<InventoryCore> {
     { name: "macos", version: release.version, arch, source: null },
     ...parseMacApplications(apps.stdout),
   ];
+  // Safari lives in a system cryptex: system_profiler may leave it out, its bundle has the version.
+  if (!packages.some((item) => item.name === "Safari")) {
+    const safari = await runner.exec("/usr/bin/defaults", [
+      "read",
+      "/Applications/Safari.app/Contents/Info",
+      "CFBundleShortVersionString",
+    ]);
+    const item = safari.code === 0
+      ? makePackage("Safari", safari.stdout.trim(), arch, "/Applications")
+      : null;
+    if (item) packages.push(item);
+  }
   let ports: InventoryPort[] = [];
   const lsof = await runner.exec("/usr/sbin/lsof", [
     "-nP",

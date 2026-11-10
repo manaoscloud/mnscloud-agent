@@ -5,7 +5,7 @@
  */
 
 function shellQuote(value: string) {
-  return `'${value.replaceAll("'", "'\\''")}'`;
+  return `'${value.replaceAll("'", String.raw`'\''`)}'`;
 }
 
 export const MACOS_UPDATE_LABEL = "cloud.manaos.mnscloud.agent-update";
@@ -21,7 +21,6 @@ export function macosUpdatePlist(repoDir: string, targetRef: string) {
   ].join(" && ");
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
-    '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
     '<plist version="1.0">',
     "<dict>",
     `  <key>Label</key><string>${MACOS_UPDATE_LABEL}</string>`,

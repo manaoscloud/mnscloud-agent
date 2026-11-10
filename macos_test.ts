@@ -383,3 +383,28 @@ Deno.test("macOS update job: one-shot launchd job that survives the Agent restar
   );
   assertMatch(macosUpdatePlist("/opt/x", "v1'x"), /--ref 'v1'\\''x'/, "the ref is shell quoted");
 });
+
+Deno.test("macOS inventory collector: Safari from its bundle when system_profiler leaves it out", async () => {
+  const apps = JSON.stringify({
+    SPApplicationsDataType: [{
+      _name: "Notes",
+      path: "/System/Applications/Notes.app",
+      version: "4.11",
+    }],
+  });
+  const { run } = fakeRunner({
+    "/usr/bin/sw_vers": ok(SW_VERS),
+    "/usr/bin/uname": (args) => ok(args[0] === "-r" ? "24.1.0\n" : "arm64\n"),
+    "/usr/sbin/system_profiler": ok(apps),
+    "/usr/sbin/lsof": ok(""),
+    "/usr/bin/defaults": ok("18.1\n"),
+  });
+  const payload = await collectSecurityInventory({
+    run,
+    windows: false,
+    macos: true,
+    powershell: () => "pwsh",
+  });
+  const safari = payload.packages.find((item) => item.name === "Safari");
+  assertEquals([safari?.version, safari?.source], ["18.1", "/Applications"]);
+});

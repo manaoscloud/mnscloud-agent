@@ -53,11 +53,18 @@ ok() { log OK "$*"; }
 fail() { log ERROR "$*"; exit 1; }
 
 run() {
+  local command="$1"
   if $DRY_RUN; then
-    log DRY-RUN "$1"
+    log DRY-RUN "$command"
   else
-    /bin/bash -c "$1"
+    /bin/bash -c "$command"
   fi
+}
+
+# Contents of a one-line file without whitespace (identity files, VERSION).
+file_word() {
+  local path="$1"
+  tr -d '[:space:]' < "$path"
 }
 
 write_file() {
@@ -89,7 +96,8 @@ require_tools() {
 }
 
 normalize_url() {
-  printf "%s" "$1" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g; s#/*$##'
+  local url="$1"
+  printf "%s" "$url" | sed -E 's/^[[:blank:]]+|[[:blank:]]+$//g; s#/*$##'
 }
 
 read_config_value() {
@@ -103,7 +111,7 @@ read_config_value() {
 }
 
 agent_version() {
-  if [[ -f "${AGENT_SOURCE_DIR}/VERSION" ]]; then tr -d '[:space:]' < "${AGENT_SOURCE_DIR}/VERSION"; else printf "1.0.0"; fi
+  if [[ -f "${AGENT_SOURCE_DIR}/VERSION" ]]; then file_word "${AGENT_SOURCE_DIR}/VERSION"; else printf "1.0.0"; fi
 }
 
 agent_build_ref() {
@@ -155,7 +163,7 @@ ensure_deno() {
     return 0
   fi
   info "Installing Deno ${DENO_VERSION} with the official deno.land installer."
-  curl -fsSL https://deno.land/install.sh | CI=1 DENO_INSTALL="$DENO_DIR_PREFIX" sh -s -- --no-modify-path "v${DENO_VERSION}" >/dev/null
+  curl --proto '=https' --tlsv1.2 -fsSL https://deno.land/install.sh | CI=1 DENO_INSTALL="$DENO_DIR_PREFIX" sh -s -- --no-modify-path "v${DENO_VERSION}" >/dev/null
   deno_version_ok || fail "Deno ${DENO_VERSION} could not be installed."
   ok "Deno installed: $("$DENO_BIN" --version | head -n1)"
 }
@@ -189,7 +197,6 @@ mnscloud.agent.update = true
 write_service_file() {
   local install_dir="$1" config_file="$2"
   write_file "$SERVICE_FILE" "<?xml version=\"1.0\" encoding=\"UTF-8\"?>
-<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">
 <plist version=\"1.0\">
 <dict>
   <key>Label</key><string>${SERVICE_LABEL}</string>
@@ -229,7 +236,9 @@ enrollment_payload() {
 }
 
 json_field() {
-  "$DENO_BIN" eval --quiet "const p = JSON.parse(await Deno.readTextFile('$1')); console.log(p?.data?.$2 ?? '')"
+  local file="$1" field="$2"
+  FIELD_FILE="$file" FIELD_NAME="$field" "$DENO_BIN" eval --quiet \
+    'const p = JSON.parse(await Deno.readTextFile(Deno.env.get("FIELD_FILE"))); console.log(p?.data?.[Deno.env.get("FIELD_NAME")] ?? "")'
 }
 
 activate_enrollment() {
@@ -269,8 +278,8 @@ activate_enrollment() {
 heartbeat() {
   local api_base="$1" uuid_file="$2" token_file="$3" hostname="$4" capabilities="$5"
   local agent_uuid agent_token payload response_file http_code
-  agent_uuid="$(tr -d '[:space:]' < "$uuid_file")"
-  agent_token="$(tr -d '[:space:]' < "$token_file")"
+  agent_uuid="$(file_word "$uuid_file")"
+  agent_token="$(file_word "$token_file")"
   payload="{\"hostname\":\"${hostname}\",\"version\":\"$(agent_version)\",\"buildRef\":\"$(agent_build_ref)\",\"updateChannel\":\"stable\",\"installerValidation\":true${capabilities}}"
   response_file="$(mktemp)"
   http_code="$(curl -sS -o "$response_file" -w "%{http_code}" -X POST "${api_base}/api/v1/agent/heartbeat" \
@@ -364,7 +373,7 @@ main() {
   write_file "${install_dir}/VERSION" "$(agent_version)
 "
   if [[ -f "${data_dir}/agent.uuid" ]]; then
-    agent_uuid="$(tr -d '[:space:]' < "${data_dir}/agent.uuid")"
+    agent_uuid="$(file_word "${data_dir}/agent.uuid")"
   else
     agent_uuid="$(uuidgen | tr '[:upper:]' '[:lower:]')"
     write_file "${data_dir}/agent.uuid" "$agent_uuid"
@@ -383,7 +392,7 @@ main() {
   run "launchctl kickstart -k system/${SERVICE_LABEL}"
   sync_installed_capabilities "$api_base" "${data_dir}/agent.uuid" "${data_dir}/agent.token" "$hostname"
   ok "MNSCloud Agent installed as the launchd daemon ${SERVICE_LABEL}."
-  info "Agent UUID: $(tr -d '[:space:]' < "${data_dir}/agent.uuid" 2>/dev/null || printf '%s' "$agent_uuid")"
+  info "Agent UUID: $(file_word "${data_dir}/agent.uuid" 2>/dev/null || printf '%s' "$agent_uuid")"
 }
 
 main "$@"

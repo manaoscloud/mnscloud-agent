@@ -19,7 +19,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 run() {
-  if $DRY_RUN; then echo "${LOG_PREFIX} DRY-RUN $1"; else /bin/bash -c "$1"; fi
+  local command="$1"
+  if $DRY_RUN; then echo "${LOG_PREFIX} DRY-RUN ${command}"; else /bin/bash -c "$command"; fi
 }
 
 $DRY_RUN || [[ "$(id -u)" -eq 0 ]] || { echo "${LOG_PREFIX} ERROR run as root" >&2; exit 1; }

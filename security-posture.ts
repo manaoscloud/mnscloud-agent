@@ -1214,15 +1214,31 @@ export type MacFacts = {
   xprotectUpdatedAt: string | null;
 };
 
+/** Strips one pair of surrounding double quotes. */
+function unquote(value: string) {
+  return value.length >= 2 && value.startsWith('"') && value.endsWith('"') ? value.slice(1, -1) : value;
+}
+
 /** `defaults read <plist>` of a flat domain: `Key = value;` lines (quotes removed). */
 export function parseDefaults(text: string): Map<string, string> {
   const values = new Map<string, string>();
   for (const line of text.split("\n")) {
-    const match = line.match(/^\s{4}"?([A-Za-z0-9_.-]+)"?\s*=\s*"?([^";]*)"?;\s*$/);
-    if (match) values.set(match[1], match[2].trim());
+    const trimmed = line.trim();
+    const equals = trimmed.indexOf(" = ");
+    if (equals <= 0 || !trimmed.endsWith(";")) continue;
+    const key = unquote(trimmed.slice(0, equals).trim());
+    if (!/^[\w.-]{1,80}$/.test(key)) continue;
+    values.set(key, unquote(trimmed.slice(equals + 3, -1).trim()));
   }
   return values;
 }
+
+const LAUNCHD_STATES: Record<string, boolean> = {
+  disabled: true,
+  true: true,
+  enabled: false,
+  false: false,
+};
 
 /**
  * `launchctl print-disabled system`: `"label" => disabled|enabled` (macOS 11+) or
@@ -1231,15 +1247,25 @@ export function parseDefaults(text: string): Map<string, string> {
 export function parseLaunchdDisabled(text: string): Map<string, boolean> {
   const values = new Map<string, boolean>();
   for (const line of text.split("\n")) {
-    const match = line.match(/^\s*"([^"]+)"\s*=>\s*(disabled|enabled|true|false)\s*$/);
-    if (match) values.set(match[1], match[2] === "disabled" || match[2] === "true");
+    const [left, right] = line.split("=>");
+    if (right === undefined) continue;
+    const label = unquote(left.trim());
+    const state = LAUNCHD_STATES[right.trim()];
+    if (label && state !== undefined) values.set(label, state);
   }
   return values;
 }
 
 /** Labels of `softwareupdate --list` (`* Label: macOS Sonoma 14.7.1-23H222`); none = []. */
 export function parseSoftwareUpdates(text: string): string[] {
-  return [...text.matchAll(/^\s*\*\s*Label:\s*(.+?)\s*$/gm)].map((match) => match[1]).slice(0, 20);
+  const labels: string[] = [];
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("*")) continue;
+    const rest = trimmed.slice(1).trim();
+    if (rest.startsWith("Label:")) labels.push(rest.slice("Label:".length).trim());
+  }
+  return labels.filter(Boolean).slice(0, 20);
 }
 
 function flag(values: Map<string, string> | null, key: string, fallback: boolean) {
@@ -1272,19 +1298,27 @@ function macUpdateChecks(facts: MacFacts): HardeningCheck[] {
     check("mac.auto_install", "CIS macOS", "medium",
       updates ? passIf(flag(updates, "AutomaticallyInstallMacOSUpdates", false)) : "error",
       `AutomaticallyInstallMacOSUpdates=${updates?.get("AutomaticallyInstallMacOSUpdates") ?? "default"}`),
-    check("mac.updates_pending", "CIS macOS", "high",
-      pending === null ? "error" : passIf(pending.length === 0),
-      pending === null ? "softwareupdate failed" : pending.length ? pending.join(", ") : "No new software available"),
+    pendingCheck(pending),
   ];
+}
+
+function pendingCheck(pending: string[] | null): HardeningCheck {
+  if (pending === null) return check("mac.updates_pending", "CIS macOS", "high", "error", "softwareupdate failed");
+  return check("mac.updates_pending", "CIS macOS", "high", passIf(pending.length === 0),
+    pending.length ? pending.join(", ") : "No new software available");
+}
+
+function sshPasswordCheck(sshOn: boolean, password: string | undefined): HardeningCheck {
+  if (!sshOn) return check("mac.ssh_password_auth", "CIS macOS", "medium", "not_applicable", "Remote Login is off");
+  return check("mac.ssh_password_auth", "CIS macOS", "medium",
+    password === undefined ? "error" : passIf(password === "no"), `PasswordAuthentication ${password ?? "unknown"}`);
 }
 
 function macAccessChecks(facts: MacFacts): HardeningCheck[] {
   const sshOn = serviceOn(facts, "com.openssh.sshd");
   const password = facts.sshd?.get("passwordauthentication");
   return [
-    check("mac.ssh_password_auth", "CIS macOS", "medium",
-      !sshOn ? "not_applicable" : password === undefined ? "error" : passIf(password === "no"),
-      !sshOn ? "Remote Login is off" : `PasswordAuthentication ${password ?? "unknown"}`),
+    sshPasswordCheck(sshOn, password),
     check("mac.screen_sharing", "CIS macOS", "medium",
       facts.launchdDisabled ? passIf(!serviceOn(facts, "com.apple.screensharing")) : "error",
       serviceOn(facts, "com.apple.screensharing") ? "Screen Sharing is on" : "Screen Sharing is off"),
@@ -1380,7 +1414,7 @@ export async function collectMacFacts(deps: PostureDeps): Promise<MacFacts> {
     launchdDisabled: disabled === null ? null : parseLaunchdDisabled(disabled),
     sshd: sshd === null ? null : parseSshdConfig(sshd),
     loginWindow: loginWindow === null ? new Map() : parseDefaults(loginWindow),
-    xprotectVersion: xprotect && /^[0-9][0-9.]{0,31}$/.test(xprotect) ? xprotect : null,
+    xprotectVersion: xprotect && /^\d[\d.]{0,31}$/.test(xprotect) ? xprotect : null,
     xprotectUpdatedAt: Number.isFinite(seconds) && seconds > 0
       ? new Date(seconds * 1000).toISOString()
       : null,
