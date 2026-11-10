@@ -128,6 +128,16 @@ import {
   shouldReboot,
 } from "./security-patch.ts";
 import {
+  ANTIVIRUS_COMMAND,
+  AntivirusRequestError,
+  collectPosture,
+  parseAntivirusAction,
+  POSTURE_CAPABILITY,
+  POSTURE_COMMAND,
+  type PostureDeps,
+  runAntivirusAction,
+} from "./security-posture.ts";
+import {
   byteBudget,
   captureCommand,
   diagnosticExcerpt,
@@ -373,6 +383,8 @@ async function applyRuntimeCapabilities(config: AgentConfig) {
   config.capabilities[DNS_MONITOR_CAPABILITY] = true;
   // Cyber Security patch management (V6): typed updates through the host package manager.
   config.capabilities[PATCH_CAPABILITY] = IS_WINDOWS || await hostPackageManager() !== null;
+  // Cyber Security hardening checks and native antivirus (V8): every Linux and Windows Agent.
+  config.capabilities[POSTURE_CAPABILITY] = true;
   config.capabilities["mnscloud.api.update"] = await isExecutableFile(
     "/opt/mnscloud/mnscloud-api/scripts/update-api.sh",
   );
@@ -6834,6 +6846,88 @@ async function executeCyberSecurityPatch(
   }
 }
 
+/** Host access of the V8 posture jobs (checks read files and run fixed commands only). */
+function postureDeps(config: AgentConfig): PostureDeps {
+  const index = Math.max(
+    config.agentTokenFile.lastIndexOf("/"),
+    config.agentTokenFile.lastIndexOf("\\"),
+  );
+  const dir = index >= 0 ? config.agentTokenFile.slice(0, index) : ".";
+  return {
+    run: runLocalCommand,
+    windows: IS_WINDOWS,
+    powershell: powerShellExecutable,
+    encode: encodePowerShell,
+    readText: (path) => Deno.readTextFile(path).catch(() => null),
+    statMode: async (path) => {
+      try {
+        const info = await Deno.stat(path);
+        return { mode: info.mode ?? 0, uid: info.uid ?? -1 };
+      } catch {
+        return null;
+      }
+    },
+    hasCommand: async (name) => !IS_WINDOWS && await findExecutable(name) !== null,
+    writeText: (path, text) => writeAtomic(path, text),
+    statePath: `${dir}${IS_WINDOWS ? "\\" : "/"}security-antivirus.json`,
+    packageManager: hostPackageManager,
+    now: () => new Date(),
+  };
+}
+
+/**
+ * V8 jobs: the daily hardening and antivirus check, and one antivirus action (update, scans, ClamAV
+ * install). Both report the antivirus state so the platform shows it right after the action.
+ */
+async function executeCyberSecurityPosture(
+  job: LeaseJob,
+  command: string,
+  config: AgentConfig,
+  agentUUID: string,
+  agentToken: string,
+) {
+  let action;
+  try {
+    action = command === ANTIVIRUS_COMMAND ? parseAntivirusAction(job.payload) : null;
+  } catch (error) {
+    if (!(error instanceof AntivirusRequestError)) throw error;
+    await failJob(
+      config,
+      job.jobUUID,
+      agentUUID,
+      agentToken,
+      "CYBER_ANTIVIRUS_INVALID_REQUEST",
+      error.message,
+      "cyber.security",
+    );
+    return;
+  }
+  await reportJobProgress(
+    config,
+    job.jobUUID,
+    agentUUID,
+    agentToken,
+    action ?? "check",
+    10,
+    action ? `Antivirus ${action} started` : "Hardening and antivirus check started",
+    { status: "running" },
+  );
+  const deps = postureDeps(config);
+  const result = action ? await runAntivirusAction(deps, action) : await collectPosture(deps);
+  await jsonRequest(config, `/agent/jobs/${job.jobUUID}/complete`, agentToken, agentUUID, {
+    jobType: "cyber.security",
+    result,
+  });
+  log("info", "Cyber Security posture job finished.", {
+    jobUUID: job.jobUUID,
+    command,
+    action,
+    checks: result.checks?.length ?? null,
+    threats: result.threats.length,
+    outcome: result.actionResult?.outcome ?? null,
+  });
+}
+
 async function executeCyberSecurityJob(
   job: LeaseJob,
   config: AgentConfig,
@@ -6934,6 +7028,11 @@ async function executeCyberSecurityJob(
 
     if (leasedCommand === PATCH_COMMAND) {
       await executeCyberSecurityPatch(job, config, agentUUID, agentToken);
+      return;
+    }
+
+    if (leasedCommand === POSTURE_COMMAND || leasedCommand === ANTIVIRUS_COMMAND) {
+      await executeCyberSecurityPosture(job, leasedCommand, config, agentUUID, agentToken);
       return;
     }
 
