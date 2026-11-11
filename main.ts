@@ -4500,9 +4500,10 @@ function assertSafeRuntimeUpdateRef(ref: string) {
  * converge with `scripts/update-<name>.sh` and private environment `/etc/mnscloud/<name>.env`.
  * New modules are added here instead of repeating the capability, version and update entries.
  */
-const CONVENTIONAL_MODULE_RUNTIMES = ["dns"] as const;
+const CONVENTIONAL_MODULE_RUNTIMES = ["dns", "access-gateway"] as const;
 const MODULE_RUNTIME_LABELS: Record<(typeof CONVENTIONAL_MODULE_RUNTIMES)[number], string> = {
   dns: "DNS",
+  "access-gateway": "Access Gateway",
 };
 
 function moduleRuntimeDir(name: string) {

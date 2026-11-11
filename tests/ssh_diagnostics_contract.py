@@ -217,9 +217,9 @@ class DiagnosticsContract(unittest.TestCase):
         with patch.object(collector, 'run', side_effect=OSError), \
                 patch.object(collector, 'trusted_read', side_effect=OSError):
             result = collector.versions()
-        self.assertEqual(result['diagnostics'], '4.5')
+        self.assertEqual(result['diagnostics'], '4.6')
         for key in ('rtpengine-daemon', 'coturn', 'clickhouse-server', 'vector', 'pdns-server', 'pdns-recursor',
-                    'dnsdist', 'dns_checkout_version', 'media_checkout_version',
+                    'dnsdist', 'dns_checkout_version', 'access-gateway_checkout_version', 'media_checkout_version',
                     'turn_checkout_version', 'logs_checkout_version',
                     'kamailio-webrtc_checkout_version'):
             self.assertEqual(result[key], 'UNAVAILABLE')
@@ -272,10 +272,10 @@ class DiagnosticsContract(unittest.TestCase):
         for unit in ('mnscloud-authentication', 'mnscloud-authentication-config', 'mnscloud-openvault',
                      'mnscloud-openvault-tls-renew', 'mnscloud-webapps', 'mnscloud-webapps-sync', 'incus',
                      'mnscloud-grow-rootfs', 'mnscloud-agent', 'mnscloud-logs-storage', 'mnscloud-logs-ingest',
-                     'mnscloud-logs-config', 'pdns', 'pdns-recursor', 'dnsdist'):
+                     'mnscloud-logs-config', 'pdns', 'pdns-recursor', 'dnsdist', 'mnscloud-access-gateway'):
             self.assertIn(unit, collector.UNITS)
             self.assertIn(unit + '.service', dispatcher)
-        for name in ('authentication', 'openvault', 'logs', 'dns'):
+        for name in ('authentication', 'openvault', 'logs', 'dns', 'access-gateway'):
             self.assertIn(name, collector.FILES)
         for checkout in ('webapps', 'agent'):
             self.assertIn(checkout, collector.CHECKOUTS)
@@ -546,6 +546,85 @@ class DiagnosticsV4Contract(unittest.TestCase):
                                               'pjsipContacts': 5, 'pjsipEndpoints': 7, 'pjsipRegistrations': 0})
         self.assertNotIn('freeswitch', result)
         self.assertNotIn('CANARY', json.dumps(result))
+
+    def test_gateway_summary_returns_states_and_counts_only(self):
+        now = 1_800_000_000.0
+
+        def journal(*rows):
+            return ''.join(json.dumps({'__REALTIME_TIMESTAMP': str(int(when * 1e6)), 'MESSAGE': text}) + '\n'
+                           for when, text in rows)
+
+        def runner_for(active='active', sessions=2, table=True, port=7443, rows=()):
+            outputs = {
+                'show': 'LoadState=loaded\nActiveState=%s\nSubState=running\nNRestarts=1\n'
+                        'ActiveEnterTimestamp=Wed 2027-01-15 08:00:00 UTC\nEnvironment=CANARY=1\n' % active,
+                'list-units': ''.join('mnscloud-access-gateway-session-CANARY%d.service loaded active running '
+                                      'CANARY 198.51.100.%d\n' % (i, i) for i in range(sessions))
+                              + 'mnscloud-access-gateway.service loaded active running x\n',
+                'tables': 'table inet filter\n' + ('table inet mnscloud_access_gateway\n' if table else ''),
+                'ss': 'tcp LISTEN 0 511 10.0.0.5:%d 0.0.0.0:* users:(("CANARY",pid=1,fd=6))\n' % port,
+                'journalctl': journal(*rows),
+            }
+
+            def runner(args):
+                for key in ('show', 'list-units', 'tables'):
+                    if key in args:
+                        return outputs[key]
+                if args[0].endswith('/ss'):
+                    return outputs['ss']
+                if args[0].endswith('/journalctl'):
+                    self.assertIn('--unit=mnscloud-access-gateway.service', args)
+                    return outputs['journalctl']
+                raise OSError
+            return runner
+
+        def reader(path):
+            self.assertEqual(path, collector.GATEWAY_ENV)
+            return 'MNSCLOUD_API_BASE_URL=https://api.example/api/v1\nACCESS_GATEWAY_LISTEN_PORT=7443\n'
+
+        present = patch.object(collector.os.path, 'lexists', return_value=True)
+        present.start()
+        self.addCleanup(present.stop)
+        healthy = collector.gateway_summary(runner_for(rows=(
+            (now - 600, '[mnscloud-access-gateway] listening on 10.0.0.5:7443'),
+            (now - 300, '[mnscloud-access-gateway] heartbeat failed: Control plane rejected the request '
+                        '(HTTP 503 ACCESS_GATEWAY_UNAVAILABLE); CANARY hint token=CANARY'),
+            (now - 200, '[mnscloud-access-gateway] connection CANARY: sandbox failed: CANARY'),
+        )), reader, now)
+        self.assertEqual(healthy['status'], 'OK')
+        self.assertEqual(healthy['activeSessions'], 2)
+        self.assertIs(healthy['nftTablePresent'], True)
+        self.assertEqual(healthy['listener'], {'port': 7443, 'bound': True, 'binding': 'OK'})
+        self.assertEqual(healthy['controller']['NRestarts'], 1)
+        self.assertNotIn('Environment', healthy['controller'])
+        self.assertEqual(healthy['heartbeat']['result'], 'NO_RECENT_FAILURE')
+        self.assertEqual(healthy['heartbeat']['failuresInWindow'], 1)
+        self.assertEqual(healthy['heartbeat']['lastFailure'], {'httpStatus': 503, 'code': 'ACCESS_GATEWAY_UNAVAILABLE'})
+        self.assertNotIn('CANARY', json.dumps(healthy))
+        self.assertNotIn('198.51.100', json.dumps(healthy))
+
+        failing = collector.gateway_summary(runner_for(table=False, port=9000, rows=(
+            (now - 30, '[mnscloud-access-gateway] heartbeat failed: fetch failed CANARY'),)), reader, now)
+        self.assertEqual(failing['status'], 'DEGRADED')
+        self.assertEqual(failing['heartbeat']['result'], 'FAILED')
+        self.assertEqual(failing['heartbeat']['lastFailure'], {'httpStatus': None, 'code': 'NETWORK_OR_LOCAL_ERROR'})
+        self.assertIs(failing['nftTablePresent'], False)
+        self.assertIs(failing['listener']['bound'], False)
+        self.assertNotIn('CANARY', json.dumps(failing))
+        stopped = collector.gateway_summary(runner_for(active='inactive', sessions=0), reader, now)
+        self.assertEqual(stopped['heartbeat']['result'], 'CONTROLLER_NOT_ACTIVE')
+        self.assertEqual(stopped['activeSessions'], 0)
+
+        def absent(args):
+            raise AssertionError('no command runs on a host without the gateway')
+        with patch.object(collector.os.path, 'lexists', return_value=False):
+            self.assertEqual(collector.gateway_summary(absent, reader, now), {'status': 'NOT_AN_ACCESS_GATEWAY_HOST'})
+
+        def bad_reader(path):
+            return 'ACCESS_GATEWAY_LISTEN_PORT=22\n'
+        self.assertEqual(collector.gateway_listen_port(bad_reader), (7443, 'INVALID_PORT'))
+        result = dispatch('gateway-summary extra')
+        self.assertEqual(result.returncode, 126)
 
     def test_schema_status_uses_fixed_queries_after_dropping_privileges(self):
         calls, dropped = [], []

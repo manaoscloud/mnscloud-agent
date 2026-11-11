@@ -38,7 +38,7 @@ printf '203.0.113.9 - CANARYUSER [%s] "GET /api/v1/health?token=CANARY HTTP/1.1"
   "$(date '+%d/%b/%Y:%H:%M:%S %z')" > /var/log/nginx/access.log
 printf '{"product":"mnscloud-app","version":"0.2.85","gitRef":"v0.2.85","secret":"CANARY"}' > /var/www/mnscloud-app/build.json
 for op in config config-check logs logs-text versions connectivity asterisk-odbc artifacts health agent host \
-  network timers edge log-usage voip-summary schema-status access-summary; do
+  network timers edge log-usage voip-summary gateway-summary schema-status access-summary; do
   runuser -u mns-diagnostics -- env SSH_ORIGINAL_COMMAND="$op" /usr/local/sbin/mns-diagnostics > "/tmp/$op.json"
   python3 -c 'import json,sys; v=open(sys.argv[1]).read(); json.loads(v); assert "CANARY" not in v' "/tmp/$op.json"
 done
@@ -46,8 +46,9 @@ grep -q VISIBLE_MARKER /tmp/logs-text.json
 python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["served"]["mnscloud-app"]["version"] == "0.2.85"' /tmp/artifacts.json
 python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["total"] == 1 and v["top"][0]["path"] == "/api/v1/health"' /tmp/access-summary.json
 python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["status"] == "NOT_A_DATABASE_HOST"' /tmp/schema-status.json
+python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["status"] == "NOT_AN_ACCESS_GATEWAY_HOST"' /tmp/gateway-summary.json
 runuser -u mns-diagnostics -- env SSH_ORIGINAL_COMMAND='access-summary 60' /usr/local/sbin/mns-diagnostics | grep -q '"sinceMinutes": 60'
-runuser -u mns-diagnostics -- env SSH_ORIGINAL_COMMAND='mns-diagnostics versions 2>/dev/null' /usr/local/sbin/mns-diagnostics | grep -q '"diagnostics": "4.5"'
+runuser -u mns-diagnostics -- env SSH_ORIGINAL_COMMAND='mns-diagnostics versions 2>/dev/null' /usr/local/sbin/mns-diagnostics | grep -q '"diagnostics": "4.6"'
 # schema-plan (4.5): a valid tag reaches the collector through its own sudo entry; anything else is denied.
 runuser -u mns-diagnostics -- env SSH_ORIGINAL_COMMAND='schema-plan v0.1.1' /usr/local/sbin/mns-diagnostics | grep -q '"status": "NOT_A_DATABASE_HOST"'
 if runuser -u mns-diagnostics -- env SSH_ORIGINAL_COMMAND="schema-plan v1' OR '1'='1" /usr/local/sbin/mns-diagnostics 2>/tmp/plan-denied; then
@@ -146,5 +147,5 @@ sha256sum -c /tmp/key-check
 bash /agent/scripts/install-diagnostics.sh | grep -q 'Converged'
 runuser -u mns-diagnostics -- env SSH_ORIGINAL_COMMAND=help /usr/local/sbin/mns-diagnostics | grep -q 'journal UNIT'
 sha256sum -c /tmp/key-check
-printf 'PASS: Agent-managed install/idempotence/update, collectors (diagnostics 4.5), masked usernames, denied sudo, key/UID preservation and rollback.\n'
+printf 'PASS: Agent-managed install/idempotence/update, collectors (diagnostics 4.6), masked usernames, denied sudo, key/UID preservation and rollback.\n'
 TEST
