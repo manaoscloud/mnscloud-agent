@@ -21,10 +21,11 @@ import subprocess
 import sys
 from urllib.parse import urlsplit
 
-DIAGNOSTICS_VERSION = '4.5'
+DIAGNOSTICS_VERSION = '4.6'
 DIAGNOSTICS_USER = 'mns-diagnostics'
 CONFIG_DIR = Path('/etc/mnscloud')
-FILES = ('api', 'app', 'nginx', 'workers', 'rabbitmq', 'db', 'authentication', 'openvault', 'logs', 'dns')
+FILES = ('api', 'app', 'nginx', 'workers', 'rabbitmq', 'db', 'authentication', 'openvault', 'logs', 'dns',
+         'access-gateway')
 UNITS = ('nginx', 'mariadb', 'rabbitmq-server', 'mnscloud-api',
          'mnscloud-workers', 'mnscloud-agent', 'asterisk', 'freeswitch', 'kamailio',
          'opensips', 'rtpengine-daemon', 'mnscloud-media-heartbeat', 'coturn',
@@ -32,7 +33,7 @@ UNITS = ('nginx', 'mariadb', 'rabbitmq-server', 'mnscloud-api',
          'mnscloud-authentication-config', 'mnscloud-openvault', 'mnscloud-openvault-tls-renew',
          'mnscloud-webapps', 'mnscloud-webapps-sync', 'incus', 'mnscloud-grow-rootfs',
          'mnscloud-logs-storage', 'mnscloud-logs-ingest', 'mnscloud-logs-config',
-         'pdns', 'pdns-recursor', 'dnsdist', 'mnscloud-dns-config')
+         'pdns', 'pdns-recursor', 'dnsdist', 'mnscloud-dns-config', 'mnscloud-access-gateway')
 # Any installed MNSCloud unit is covered without a diagnostics release (diagnostics 4.0): names are
 # validated against this pattern before they reach systemctl/journalctl.
 MNSCLOUD_UNIT = re.compile(r'mnscloud-[a-z0-9]+(?:-[a-z0-9]+){0,8}')
@@ -109,15 +110,18 @@ REQUIRED = {
              'LOGS_SYSLOG_UDP_PORT', 'LOGS_SYSLOG_TCP_PORT'),
     # Engine API keys live in dns-secrets.env, which diagnostics never reads.
     'dns': ('MNSCLOUD_API_BASE_URL', 'DNS_SERVER_UUID', 'DNS_ROLES', 'DNS_NODE_ADDRESS'),
+    # Binding only (no secret): the listener TLS key lives under access-gateway/tls, never read.
+    'access-gateway': ('MNSCLOUD_API_BASE_URL', 'ACCESS_GATEWAY_UUID', 'ACCESS_GATEWAY_KEY',
+                       'ACCESS_GATEWAY_LISTEN_ADDRESS', 'ACCESS_GATEWAY_LISTEN_PORT'),
 }
 HOST_KEYS = {'DB_HOST', 'APP_HOST', 'APP_LISTEN_ADDR', 'MNSCLOUD_API_LISTEN_ADDR',
              'MNSCLOUD_PRIMARY_DOMAIN', 'MNSCLOUD_API_DOMAIN', 'MNSCLOUD_WEBSITE_DOMAIN',
              'MNSCLOUD_RABBITMQ_HOSTNAME', 'MNSCLOUD_NODE_ADDRESS',
              'AUTHENTICATION_LISTEN_ADDRESS', 'OPENVAULT_PRIVATE_HOST', 'LOGS_LISTEN_ADDRESS',
-             'DNS_NODE_ADDRESS'}
+             'DNS_NODE_ADDRESS', 'ACCESS_GATEWAY_LISTEN_ADDRESS'}
 PORT_KEYS = {'DB_PORT', 'APP_PORT', 'APP_LISTEN_PORT', 'MNSCLOUD_API_LISTEN_PORT',
              'MNSCLOUD_RABBITMQ_AMQP_PORT', 'MNSCLOUD_RABBITMQ_MANAGEMENT_PORT',
-             'LOGS_SYSLOG_UDP_PORT', 'LOGS_SYSLOG_TCP_PORT'}
+             'LOGS_SYSLOG_UDP_PORT', 'LOGS_SYSLOG_TCP_PORT', 'ACCESS_GATEWAY_LISTEN_PORT'}
 URL_KEYS = {'RABBITMQ_URL', 'MNSCLOUD_API_BASE_URL', 'APP_API_BASE_URL',
             'MNSCLOUD_RELEASE_API_BASE_URL', 'MNSCLOUD_APP_UPSTREAMS',
             'MNSCLOUD_API_UPSTREAMS', 'MNSCLOUD_WEBSITE_UPSTREAM',
@@ -133,7 +137,7 @@ NAME_KEYS = {'DB_NAME', 'DB_USER', 'RABBITMQ_DEFAULT_USER',
              'MNSCLOUD_NODE_NAME', 'MNSCLOUD_CLUSTER_NAME', 'AUTHENTICATION_SERVER_UUID',
              'OPENVAULT_MODE', 'OPENVAULT_NODE_ID', 'OPENVAULT_TLS_MODE', 'OPENVAULT_SEAL',
              'OPENVAULT_AWSKMS_REGION', 'OPENVAULT_OPENBAO_VERSION', 'OPENVAULT_RUNTIME_KIT_CHANNEL',
-             'OPENVAULT_AGENT_INSTALL_LABEL'}
+             'OPENVAULT_AGENT_INSTALL_LABEL', 'ACCESS_GATEWAY_UUID', 'ACCESS_GATEWAY_KEY'}
 NUMBER_KEYS = {'WORKER_PREFETCH', 'WORKER_CONNECT_RETRIES', 'WORKER_CONNECT_RETRY_MS',
                'WORKER_AGENT_HEALTH_SCAN_INTERVAL_MS', 'WORKER_AGENT_HEALTH_BATCH_LIMIT',
                'WORKER_AGENT_HEALTH_DEGRADED_AFTER_SECONDS',
@@ -659,7 +663,7 @@ AGENT_INSTALL = Path('/opt/mnscloud/agent')
 # Runtime products whose checkout the Agent reports as installed (main.ts collectRuntimeVersions).
 RUNTIME_CHECKOUTS = ('api', 'app', 'nginx', 'rabbitmq', 'workers', 'authentication', 'logs', 'dns', 'freeswitch',
                      'asterisk', 'opensips-sbc', 'kamailio-softswitch', 'kamailio-webrtc', 'turn', 'media',
-                     'webapps', 'openvault')
+                     'webapps', 'openvault', 'access-gateway')
 
 
 def safe_scalar(value):
@@ -1331,6 +1335,138 @@ def voip_summary(runner=None):
     return output
 
 
+# gateway-summary (diagnostics 4.6): state of the mnscloud-access-gateway runtime. The gateway writes
+# no status file, so it is derived from systemd, ss, the nftables table names and the controller
+# journal. Counts, states and HTTP status/error codes only: never connection ids, devices,
+# addresses of sessions, tickets, journal text or credentials.
+GATEWAY_UNIT = 'mnscloud-access-gateway.service'
+GATEWAY_ENV = CONFIG_DIR / 'access-gateway.env'
+GATEWAY_SESSION_UNIT = re.compile(r'mnscloud-access-gateway-session-[A-Za-z0-9_-]{1,96}\.service')
+GATEWAY_TABLE = ('table', 'inet', 'mnscloud_access_gateway')
+GATEWAY_DEFAULT_PORT = 7443
+GATEWAY_JOURNAL_MINUTES = 60
+# The controller sends a heartbeat every 30 s and logs only failures; a failure newer than two
+# intervals is the current state.
+GATEWAY_HEARTBEAT_STALE_SECONDS = 75
+GATEWAY_REJECTION = re.compile(r'\(HTTP ([1-5][0-9]{2})(?: ([A-Z][A-Z0-9_]{1,63}))?\)')
+GATEWAY_PREFIX = '[mnscloud-access-gateway] '
+
+
+def gateway_listen_port(reader=trusted_read):
+    try:
+        value = parse_env(reader(GATEWAY_ENV)).get('ACCESS_GATEWAY_LISTEN_PORT', '')
+    except FileNotFoundError:
+        return GATEWAY_DEFAULT_PORT, 'MISSING_FILE'
+    except (OSError, ValueError, UnicodeError):
+        return GATEWAY_DEFAULT_PORT, 'UNREADABLE_OR_UNSAFE'
+    if not value:
+        return GATEWAY_DEFAULT_PORT, 'OK'
+    if value.isdecimal() and 1024 <= int(value) <= 65535:
+        return int(value), 'OK'
+    return GATEWAY_DEFAULT_PORT, 'INVALID_PORT'
+
+
+def gateway_journal_events(text):
+    """Fixed controller events of the journal window: (UTC epoch seconds, kind, detail)."""
+    events = []
+    for raw in text.splitlines():
+        try:
+            row = json.loads(raw)
+        except ValueError:
+            continue
+        message, stamp = row.get('MESSAGE', ''), str(row.get('__REALTIME_TIMESTAMP', ''))
+        if not isinstance(message, str) or not stamp.isdecimal() or not message.startswith(GATEWAY_PREFIX):
+            continue
+        message, when = message[len(GATEWAY_PREFIX):], int(stamp) / 1e6
+        if message.startswith('heartbeat failed: '):
+            match = GATEWAY_REJECTION.search(message)
+            detail = ({'httpStatus': int(match.group(1)), 'code': match.group(2)} if match
+                      else {'httpStatus': None, 'code': 'NETWORK_OR_LOCAL_ERROR'})
+            events.append((when, 'heartbeat-failed', detail))
+        elif message.startswith('listening on '):
+            events.append((when, 'listening', None))
+        elif message == 'configuration refreshed':
+            events.append((when, 'config-refreshed', None))
+        elif message.startswith('fatal: '):
+            events.append((when, 'fatal', None))
+    return events
+
+
+def gateway_heartbeat(events, active, now):
+    def iso(value):
+        return datetime.fromtimestamp(value, timezone.utc).isoformat() if value is not None else None
+    failures = [item for item in events if item[1] == 'heartbeat-failed']
+    started = max((item[0] for item in events if item[1] == 'listening'), default=None)
+    refreshed = max((item[0] for item in events if item[1] == 'config-refreshed'), default=None)
+    last = failures[-1] if failures else None
+    if not active:
+        result = 'CONTROLLER_NOT_ACTIVE'
+    elif last and now - last[0] <= GATEWAY_HEARTBEAT_STALE_SECONDS and (started is None or last[0] >= started):
+        result = 'FAILED'
+    else:
+        result = 'NO_RECENT_FAILURE'
+    return {'result': result, 'windowMinutes': GATEWAY_JOURNAL_MINUTES, 'failuresInWindow': len(failures),
+            'lastFailureAt': iso(last[0]) if last else None, 'lastFailure': last[2] if last else None,
+            'lastStartAt': iso(started), 'lastConfigRefreshAt': iso(refreshed),
+            'fatalInWindow': sum(1 for item in events if item[1] == 'fatal'),
+            'note': 'The controller logs only failed heartbeats; NO_RECENT_FAILURE is not a confirmed success.'}
+
+
+GATEWAY_MARKERS = (Path('/opt/mnscloud/mnscloud-access-gateway'), Path('/etc/systemd/system') / GATEWAY_UNIT)
+
+
+def gateway_summary(runner=None, reader=trusted_read, now=None):
+    if not any(os.path.lexists(marker) for marker in GATEWAY_MARKERS):
+        return {'status': 'NOT_AN_ACCESS_GATEWAY_HOST'}
+    runner = runner or (lambda args: run(args, limit=1048576, timeout=8))
+    output = {}
+    try:
+        state = {}
+        for line in runner(['/usr/bin/systemctl', '--no-pager', 'show',
+                            '--property=LoadState,ActiveState,SubState,NRestarts,ActiveEnterTimestamp',
+                            GATEWAY_UNIT]).splitlines():
+            key, sep, value = line.partition('=')
+            if sep and key in ('LoadState', 'ActiveState', 'SubState', 'NRestarts', 'ActiveEnterTimestamp'):
+                state[key] = safe_scalar(int(value) if key == 'NRestarts' and value.isdecimal() else value)
+        output['controller'] = state or 'UNAVAILABLE'
+    except (OSError, ValueError, subprocess.SubprocessError):
+        output['controller'] = 'UNAVAILABLE'
+    controller = output['controller'] if isinstance(output['controller'], dict) else {}
+    active = controller.get('ActiveState') == 'active'
+    try:
+        units = runner(['/usr/bin/systemctl', '--no-pager', 'list-units', '--type=service', '--state=active',
+                        '--no-legend', '--plain', 'mnscloud-access-gateway-session-*'])
+        output['activeSessions'] = sum(1 for line in units.splitlines()
+                                       if line.split() and GATEWAY_SESSION_UNIT.fullmatch(line.split()[0]))
+    except (OSError, ValueError, subprocess.SubprocessError):
+        output['activeSessions'] = 'UNAVAILABLE'
+    try:
+        tables = runner(['/usr/sbin/nft', 'list', 'tables'])
+        output['nftTablePresent'] = any(tuple(line.split()) == GATEWAY_TABLE for line in tables.splitlines())
+    except (OSError, ValueError, subprocess.SubprocessError):
+        output['nftTablePresent'] = 'UNAVAILABLE'
+    port, env_status = gateway_listen_port(reader)
+    try:
+        bound = any(item['proto'] == 'tcp' and item['port'] == port
+                    for item in parse_listeners(runner(['/usr/bin/ss', '-H', '-l', '-n', '-t', '-u'])))
+    except (OSError, ValueError, subprocess.SubprocessError):
+        bound = 'UNAVAILABLE'
+    output['listener'] = {'port': port, 'bound': bound, 'binding': env_status}
+    try:
+        text = runner(['/usr/bin/journalctl', '--no-pager', '--output=json',
+                       '--output-fields=MESSAGE', '--since=-' + str(GATEWAY_JOURNAL_MINUTES) + 'min',
+                       '--lines=' + str(JOURNAL_LINES), '--unit=' + GATEWAY_UNIT])
+        output['heartbeat'] = gateway_heartbeat(gateway_journal_events(text), active,
+                                                time.time() if now is None else now)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        output['heartbeat'] = 'UNAVAILABLE'
+    output['status'] = 'OK' if (active and output['nftTablePresent'] is True and bound is True
+                                and isinstance(output['heartbeat'], dict)
+                                and output['heartbeat']['result'] == 'NO_RECENT_FAILURE') else 'DEGRADED'
+    output['scope'] = 'COUNTS_AND_STATES_ONLY_NO_SESSIONS_DEVICES_TICKETS_OR_CREDENTIALS'
+    return output
+
+
 # schema-status: the diagnostics account authenticates to the local MariaDB through unix_socket (no
 # password exists) and holds SELECT on the columns below only (diagnostics/db_account.py).
 DB_ENV = CONFIG_DIR / 'db.env'
@@ -1803,6 +1939,7 @@ OPERATIONS = {
     'access-summary': ('access-summary', True, False),
     'log-usage': ('log-usage', False, False),
     'voip-summary': ('voip-summary', False, False),
+    'gateway-summary': ('gateway-summary', False, False),
     'schema-status': ('schema-status', False, False),
     'schema-plan': ('schema-plan', True, False),
 }
@@ -1861,6 +1998,7 @@ def main():
         result = {'logs': logs, 'logs-text': logs_text, 'versions': versions, 'asterisk-odbc': asterisk_odbc,
                   'artifacts': artifacts, 'health': health, 'agent': agent, 'host': host, 'network': network,
                   'timers': timers, 'edge': edge, 'log-usage': log_usage, 'voip-summary': voip_summary,
+                  'gateway-summary': gateway_summary,
                   'schema-status': schema_status}[operation]()
     print(json.dumps(result, indent=2, ensure_ascii=True))
     return 0

@@ -48,6 +48,7 @@ privilege; failures never block the Agent and are retried on its next update.
 | `access-summary [MINUTES]` | Edge access log counts by method, normalized path (ids/values replaced) and status for the last `MINUTES` (1-1440, default 15), from the newest 32 MiB; no client addresses, users, queries, referrers or agents |
 | `log-usage` | Size of fixed log/data directories, journal disk usage and the 10 largest files under `/var/log` |
 | `voip-summary` | Registration, call and session counters of Kamailio, OpenSIPS, Asterisk, FreeSWITCH and rtpengine when installed; numbers only |
+| `gateway-summary` | Access gateway hosts: controller unit state, count of active session units, whether the nftables table `inet mnscloud_access_gateway` exists, whether the listener port (`ACCESS_GATEWAY_LISTEN_PORT`, default 7443) is bound, and the last heartbeat failure (HTTP status and error code) of the last 60 minutes of the controller journal; no session ids, devices, tickets, journal text or credentials |
 | `schema-status` | Database hosts: active `SchemaAppliedRevision` rows and the last 10 `SchemaReconcileJob` stages/status/error codes, through the passwordless local diagnostics database account |
 
 The extended commands accept no arguments, except `journal`, `container-logs`, `log-query`, `audio-stat` and `access-summary`. The privileged
@@ -381,3 +382,25 @@ fixed: one `SELECT` of those columns for that tag, ordered by creation. Output i
 The only new sudo entry is the exact `collector.py schema-plan` operation. Install/update/rollback
 preserve the account and key. Validate the security contract and the disposable-container suite
 before release; deliver with the normal Agent DEV rollout and an authorized PROD rollout.
+
+
+## Access gateway summary (diagnostics 4.6)
+
+Version 4.6 (2026-11-11, task `access-gateway-runtime`) adds the `mnscloud-access-gateway` runtime
+the same way as Logs and DNS: the `mnscloud-access-gateway` unit (`services`, `logs`, `logs-text`,
+`journal`), `access-gateway.env` (binding only: API base, gateway UUID/key, listen address/port; the
+listener TLS key under `/etc/mnscloud/access-gateway/tls/` is never read) and the
+`mnscloud-access-gateway` checkout (`versions`, `artifacts`).
+
+`gateway-summary` takes no argument and has its own exact sudo entry (`collector.py gateway-summary`).
+The gateway writes no status file, so the collector derives the state from fixed commands only:
+`systemctl show` of the controller unit (listed properties), `systemctl list-units` of
+`mnscloud-access-gateway-session-*` (count only), `nft list tables` (presence of the table name
+only, never rules or sets), `ss -H -l -n -t -u` (whether the listener port is bound) and the last 60
+minutes of the controller journal, of which only fixed controller events are parsed. The controller
+logs failed heartbeats only, so `heartbeat.result` is `FAILED` (a failure in the last 75 seconds, after
+the last start), `NO_RECENT_FAILURE` (not a confirmed success) or `CONTROLLER_NOT_ACTIVE`; a
+failure reports only its HTTP status and `ACCESS_GATEWAY_*` code, or `NETWORK_OR_LOCAL_ERROR`. On a
+host without the gateway checkout or unit it returns `NOT_AN_ACCESS_GATEWAY_HOST` without running
+any command. Install/update/rollback preserve the account and key; deliver with the normal Agent
+DEV rollout and an authorized PROD rollout.
