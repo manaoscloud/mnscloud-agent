@@ -26,7 +26,7 @@ export const RUNTIME_RECONCILE_PRODUCTS: Record<string, RuntimeReconcileProduct>
     origin: /^https:\/\/github\.com\/manaoscloud\/mnscloud-nginx(?:\.git)?\/?$/,
     adapter: "scripts/reconcile-runtime-config.py",
     envPath: "/etc/mnscloud/nginx.env",
-    resources: ["nginx.webapps"],
+    resources: ["nginx.webapps", "nginx.access_gateways"],
   },
   "mnscloud-workers": {
     repo: "/opt/mnscloud/mnscloud-workers",

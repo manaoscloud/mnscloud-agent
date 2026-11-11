@@ -3,6 +3,7 @@ import {
   assertRejects,
   assertThrows,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { renderNginxEdgeDomainConfig } from "./main.ts";
 import {
   adapterArgs,
   type GitRunner,
@@ -201,4 +202,46 @@ Deno.test("WebApps listener reconcile uses the WebApps adapter", () => {
     RUNTIME_RECONCILE_PRODUCTS[request.product].envPath,
     "/etc/mnscloud/webapps/webapps.env",
   );
+});
+
+Deno.test("nginx.access_gateways reconcile is accepted for mnscloud-nginx only", () => {
+  const request = parseRuntimeReconcileJob({
+    product: "mnscloud-nginx",
+    releaseTag: "v0.1.32",
+    resource: "nginx.access_gateways",
+    stage: "plan",
+    desired: {
+      MNSCLOUD_ACCESS_GATEWAY_UPSTREAMS: "gw1=10.0.0.5:8443",
+      MNSCLOUD_ACCESS_GATEWAY_FINGERPRINTS: "gw1=" + "a".repeat(64),
+    },
+  });
+  assertEquals(request.resource, "nginx.access_gateways");
+  assertEquals(RUNTIME_RECONCILE_PRODUCTS["mnscloud-nginx"].envPath, "/etc/mnscloud/nginx.env");
+  assertThrows(() =>
+    parseRuntimeReconcileJob({ ...request, product: "mnscloud-workers" })
+  );
+});
+
+Deno.test("ThemeDomain App vhosts include the access gateway relays in http and https", () => {
+  // deno-lint-ignore no-explicit-any
+  const config: any = {
+    nginxEdgeAcmeRoot: "/var/www/acme",
+    nginxEdgeAppUpstream: "http://app.internal:80",
+    nginxEdgeApiUpstream: "http://api.internal:3000",
+    nginxEdgeWebappsEnabled: false,
+    nginxEdgeWebappsUpstream: "",
+    nginxEdgeWebappsPaths: [],
+    nginxEdgeSoftphonePaths: [],
+    nginxEdgeScannerPaths: [],
+    nginxEdgeTimeclockPaths: [],
+    nginxEdgeFieldPaths: [],
+    nginxEdgeWebappsIni: {},
+    nginxEdgeSslLiveDir: "/etc/letsencrypt/live",
+    capabilities: {},
+  };
+  const include = "include /etc/nginx/mnscloud/access-gateways/*.conf;";
+  const https = renderNginxEdgeDomainConfig(config, "app.example.test", true);
+  assertEquals(https.split(include).length - 1, 2);
+  const http = renderNginxEdgeDomainConfig(config, "app.example.test", false);
+  assertEquals(http.split(include).length - 1, 1);
 });
