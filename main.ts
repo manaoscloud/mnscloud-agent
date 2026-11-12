@@ -2255,9 +2255,7 @@ async function runLocalCommand(
   // has no setsid: the command runs directly and a timeout kills it.
   const direct = IS_WINDOWS || IS_MACOS;
   const process = new Deno.Command(direct ? command : "sh", {
-    args: direct
-      ? args
-      : ["-lc", `exec setsid ${[command, ...args].map(shellQuote).join(" ")}`],
+    args: direct ? args : ["-lc", `exec setsid ${[command, ...args].map(shellQuote).join(" ")}`],
     stdin: "null",
     stdout: "piped",
     stderr: "piped",
@@ -4514,17 +4512,95 @@ function moduleRuntimeDir(name: string) {
   return `/opt/mnscloud/mnscloud-${name}`;
 }
 
+/**
+ * Private runtime repositories whose release reaches the host as a git bundle kept by the API (FA5):
+ * hosts have no GitHub credential. Without a package (older API) the update falls back to origin.
+ */
+const RUNTIME_PACKAGE_PRODUCTS = new Set(["mnscloud-dns"]);
+const RUNTIME_PACKAGE_MAX_BYTES = 100 * 1024 * 1024;
+
+/**
+ * Downloads the package of `product` `version` with this Agent's identity, checks its SHA-256 against
+ * the API header and returns the bundle path, or null when there is none (caller uses origin).
+ */
+async function downloadRuntimePackage(
+  config: AgentConfig,
+  agentUUID: string,
+  agentToken: string,
+  product: string,
+  version: string,
+): Promise<string | null> {
+  if (!RUNTIME_PACKAGE_PRODUCTS.has(product) || !/^\d+\.\d+\.\d+$/.test(version)) return null;
+  const url = apiUrl(config, `/agent/runtime/packages/${product}/${version}`);
+  if (new URL(url).protocol !== "https:" && !url.startsWith("http://127.0.0.1")) return null;
+  const dir = "/var/lib/mnscloud/agent/runtime-packages";
+  await Deno.mkdir(dir, { recursive: true, mode: 0o700 });
+  const target = `${dir}/${product}-${version}.bundle`;
+  let expected = "";
+  try {
+    await withResponse(
+      url,
+      { headers: bearerHeaders(agentToken, agentUUID) },
+      300_000,
+      async (response) => {
+        if (!response.ok || !response.body) {
+          throw new Error(`Runtime package download returned HTTP ${response.status}`);
+        }
+        expected = (response.headers.get("x-content-sha256") ?? "").trim().toLowerCase();
+        const file = await Deno.open(target, {
+          write: true,
+          create: true,
+          truncate: true,
+          mode: 0o600,
+        });
+        let total = 0;
+        try {
+          for await (const chunk of response.body) {
+            total += chunk.byteLength;
+            if (total > RUNTIME_PACKAGE_MAX_BYTES) {
+              throw new Error("Runtime package exceeds 100 MB");
+            }
+            let written = 0;
+            while (written < chunk.byteLength) written += await file.write(chunk.subarray(written));
+          }
+        } finally {
+          file.close();
+        }
+      },
+    );
+    const digest = new Uint8Array(
+      await crypto.subtle.digest("SHA-256", await Deno.readFile(target)),
+    );
+    const actual = [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+    if (!/^[0-9a-f]{64}$/.test(expected) || actual !== expected) {
+      throw new Error("Runtime package digest mismatch");
+    }
+    return target;
+  } catch (error) {
+    await Deno.remove(target).catch(() => undefined);
+    console.warn(
+      `[runtime.update] ${product} ${version} package unavailable, using origin: ${
+        error instanceof Error ? error.message : error
+      }`,
+    );
+    return null;
+  }
+}
+
 /** Update target of a conventional module runtime after checking out the approved release. */
 function checkoutRuntimeTarget(name: (typeof CONVENTIONAL_MODULE_RUNTIMES)[number]) {
   return {
     label: MODULE_RUNTIME_LABELS[name],
     capability: `mnscloud.${name}.update`,
     repoDir: moduleRuntimeDir(name),
-    command: (targetRef: string) => [
+    command: (targetRef: string, _job?: LeaseJob, bundlePath?: string | null) => [
       "bash",
       "-lc",
       [
-        "git fetch --tags --prune origin",
+        // A private release comes as the API's git bundle (FA5); otherwise from origin.
+        bundlePath
+          ? `git fetch --tags ${shellQuote(bundlePath)}`
+          : "git fetch --tags --prune origin",
         `git checkout ${shellQuote(targetRef)}`,
         `bash scripts/update-${name}.sh --env /etc/mnscloud/${name}.env`,
       ].join(" && "),
@@ -4539,7 +4615,7 @@ function runtimeUpdateTarget(product: string) {
       label: string;
       capability: string;
       repoDir?: string;
-      command?: (targetRef: string, job: LeaseJob) => string[];
+      command?: (targetRef: string, job: LeaseJob, bundlePath?: string | null) => string[];
     }
   > = {
     "mnscloud-agent": {
@@ -4768,7 +4844,9 @@ async function scheduleLinuxAgentUpdate(
 
 async function scheduleMacosAgentUpdate(config: AgentConfig, targetRef: string) {
   const path = "/var/lib/mnscloud/agent/agent-update.plist";
-  await Deno.writeTextFile(path, macosUpdatePlist(config.updateRepoDir, targetRef), { mode: 0o644 });
+  await Deno.writeTextFile(path, macosUpdatePlist(config.updateRepoDir, targetRef), {
+    mode: 0o644,
+  });
   // A previous update job stays loaded after it ran: remove it before loading the new one.
   await runLocalCommand("/bin/launchctl", ["bootout", `system/${MACOS_UPDATE_LABEL}`], 15_000);
   return await runLocalCommand(
@@ -4853,12 +4931,19 @@ async function executeRuntimeUpdateJob(
           `${target.label} runtime update command is not configured.`,
         );
       }
+      const bundlePath = await downloadRuntimePackage(
+        config,
+        agentUUID,
+        agentToken,
+        product,
+        targetVersion || targetRef.replace(/^v/, ""),
+      );
       const command = [
         `export MNSCLOUD_RUNTIME_UPDATE_IN_PROGRESS=1`,
         `export MNSCLOUD_RUNTIME_UPDATE_JOB_UUID=${shellQuote(job.jobUUID)}`,
         `export MNSCLOUD_RUNTIME_UPDATE_PRODUCT=${shellQuote(product)}`,
         `cd ${shellQuote(target.repoDir)}`,
-        target.command(targetRef, job).map(shellQuote).join(" "),
+        target.command(targetRef, job, bundlePath).map(shellQuote).join(" "),
       ].join(" && ");
       const timeoutMs = Math.max(config.commandTimeoutMs, 3_600_000);
       let heartbeatCount = 0;
