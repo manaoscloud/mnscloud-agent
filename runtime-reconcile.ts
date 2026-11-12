@@ -35,6 +35,13 @@ export const RUNTIME_RECONCILE_PRODUCTS: Record<string, RuntimeReconcileProduct>
     envPath: "/etc/mnscloud/workers.env",
     resources: ["workers.handlers"],
   },
+  "mnscloud-api": {
+    repo: "/opt/mnscloud/mnscloud-api",
+    origin: /^https:\/\/github\.com\/manaoscloud\/mnscloud-api(?:\.git)?\/?$/,
+    adapter: "scripts/reconcile-runtime-config.py",
+    envPath: "/etc/mnscloud/api.env",
+    resources: ["api.access_gateways"],
+  },
   "mnscloud-db": {
     repo: "/opt/mnscloud/mnscloud-db",
     origin: /^https:\/\/github\.com\/manaoscloud\/mnscloud-db(?:\.git)?\/?$/,

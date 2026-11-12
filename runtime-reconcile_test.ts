@@ -217,9 +217,23 @@ Deno.test("nginx.access_gateways reconcile is accepted for mnscloud-nginx only",
   });
   assertEquals(request.resource, "nginx.access_gateways");
   assertEquals(RUNTIME_RECONCILE_PRODUCTS["mnscloud-nginx"].envPath, "/etc/mnscloud/nginx.env");
-  assertThrows(() =>
-    parseRuntimeReconcileJob({ ...request, product: "mnscloud-workers" })
-  );
+  assertThrows(() => parseRuntimeReconcileJob({ ...request, product: "mnscloud-workers" }));
+});
+
+Deno.test("api.access_gateways reconcile is accepted for mnscloud-api only", () => {
+  const request = parseRuntimeReconcileJob({
+    product: "mnscloud-api",
+    releaseTag: "v1.3.990",
+    resource: "api.access_gateways",
+    stage: "plan",
+    desired: {
+      ACCESS_GATEWAY_EDGE_SOURCES: "10.0.0.5/32",
+      ACCESS_GATEWAY_LAB_TARGETS: "",
+    },
+  });
+  assertEquals(request.resource, "api.access_gateways");
+  assertEquals(RUNTIME_RECONCILE_PRODUCTS["mnscloud-api"].envPath, "/etc/mnscloud/api.env");
+  assertThrows(() => parseRuntimeReconcileJob({ ...request, product: "mnscloud-nginx" }));
 });
 
 Deno.test("ThemeDomain App vhosts include the access gateway relays in http and https", () => {

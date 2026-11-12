@@ -134,6 +134,7 @@ registered module (`runtime-reconcile.ts`) is installed:
 
 | Product | Resource | Env file |
 | --- | --- | --- |
+| `mnscloud-api` | `api.access_gateways` (access gateway edge sources, denylist, DEV lab targets, OpenVault address) | `/etc/mnscloud/api.env` |
 | `mnscloud-db` | `mariadb.server` | `/etc/mnscloud/db-migration.env` |
 | `mnscloud-workers` | `workers.handlers` | `/etc/mnscloud/workers.env` |
 | `mnscloud-webapps` | `webapps.apps` (enabled apps), `webapps.listener` (listen address and allowed clients) | `/etc/mnscloud/webapps/webapps.env` |
