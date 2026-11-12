@@ -3401,7 +3401,7 @@ function nginxEdgeDefinesApiZone(config: AgentConfig) {
   return config.capabilities["mnscloud.nginx.update"] === true;
 }
 
-function renderNginxEdgeDomainConfig(
+export function renderNginxEdgeDomainConfig(
   config: AgentConfig,
   domain: string,
   sslEnabled: boolean,
@@ -3469,6 +3469,8 @@ ${frontendSecurityHeaders("    ", rootSurface)}
   }
 
   ${envJsBlock}
+
+  include /etc/nginx/mnscloud/access-gateways/*.conf;
 
   location ^~ /api/v1/filesystem/transfers/ {
     include /etc/nginx/mnscloud/snippets/proxy-filesystem-transfer.conf;
@@ -3563,6 +3565,8 @@ ${frontendSecurityHeaders("    ", rootSurface)}
   }
 
   ${envJsBlock}
+
+  include /etc/nginx/mnscloud/access-gateways/*.conf;
 
   location ^~ /api/v1/filesystem/transfers/ {
     include /etc/nginx/mnscloud/snippets/proxy-filesystem-transfer.conf;

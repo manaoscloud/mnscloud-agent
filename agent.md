@@ -137,7 +137,7 @@ registered module (`runtime-reconcile.ts`) is installed:
 | `mnscloud-db` | `mariadb.server` | `/etc/mnscloud/db-migration.env` |
 | `mnscloud-workers` | `workers.handlers` | `/etc/mnscloud/workers.env` |
 | `mnscloud-webapps` | `webapps.apps` (enabled apps), `webapps.listener` (listen address and allowed clients) | `/etc/mnscloud/webapps/webapps.env` |
-| `mnscloud-nginx` | `nginx.webapps` (published webapps paths) | `/etc/mnscloud/nginx.env` |
+| `mnscloud-nginx` | `nginx.webapps` (published webapps paths), `nginx.access_gateways` (private access gateway relays and pinned certificates) | `/etc/mnscloud/nginx.env` |
  A Master queues `runtime.reconcile` jobs
 through `POST /api/v1/system/runtime/reconcile-jobs` with a product, an explicit module release
 tag, a logical resource (for example `mariadb.server`) and a stage:
