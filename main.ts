@@ -4599,7 +4599,8 @@ function checkoutRuntimeTarget(name: (typeof CONVENTIONAL_MODULE_RUNTIMES)[numbe
       [
         // A private release comes as the API's git bundle (FA5); otherwise from origin.
         bundlePath
-          ? `git fetch --tags ${shellQuote(bundlePath)}`
+          // The bundle holds only the release tag (no HEAD): fetch its tags explicitly.
+          ? `git fetch ${shellQuote(bundlePath)} ${shellQuote("+refs/tags/*:refs/tags/*")}`
           : "git fetch --tags --prune origin",
         `git checkout ${shellQuote(targetRef)}`,
         `bash scripts/update-${name}.sh --env /etc/mnscloud/${name}.env`,
