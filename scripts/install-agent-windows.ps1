@@ -278,6 +278,7 @@ Invoke-Step {
   Copy-Item -Path "$PSScriptRoot\..\voip-rate.ts" -Destination "$InstallDir\voip-rate.ts" -Force
   Copy-Item -Path "$PSScriptRoot\..\pabx-registration-insight.ts" -Destination "$InstallDir\pabx-registration-insight.ts" -Force
   Copy-Item -Path "$PSScriptRoot\..\pabx-presence.ts" -Destination "$InstallDir\pabx-presence.ts" -Force
+  Copy-Item -Path "$PSScriptRoot\..\pabx-freeswitch-user-agent.ts" -Destination "$InstallDir\pabx-freeswitch-user-agent.ts" -Force
   Copy-Item -Path "$PSScriptRoot\..\pabx-events.ts" -Destination "$InstallDir\pabx-events.ts" -Force
   Copy-Item -Path "$PSScriptRoot\..\logs-refresh.ts" -Destination "$InstallDir\logs-refresh.ts" -Force
   Copy-Item -Path "$PSScriptRoot\..\dns-probe.ts" -Destination "$InstallDir\dns-probe.ts" -Force

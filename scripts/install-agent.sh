@@ -822,6 +822,7 @@ main() {
   run "cp '${AGENT_SOURCE_DIR}/voip-rate.ts' '${install_dir}/voip-rate.ts'"
   run "cp '${AGENT_SOURCE_DIR}/pabx-registration-insight.ts' '${install_dir}/pabx-registration-insight.ts'"
   run "cp '${AGENT_SOURCE_DIR}/pabx-presence.ts' '${install_dir}/pabx-presence.ts'"
+  run "cp '${AGENT_SOURCE_DIR}/pabx-freeswitch-user-agent.ts' '${install_dir}/pabx-freeswitch-user-agent.ts'"
   run "cp '${AGENT_SOURCE_DIR}/pabx-events.ts' '${install_dir}/pabx-events.ts'"
   run "cp '${AGENT_SOURCE_DIR}/logs-refresh.ts' '${install_dir}/logs-refresh.ts'"
   run "cp '${AGENT_SOURCE_DIR}/dns-probe.ts' '${install_dir}/dns-probe.ts'"

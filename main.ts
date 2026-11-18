@@ -107,6 +107,11 @@ import {
   type PresenceEngine,
   type PresenceObservation,
 } from "./pabx-presence.ts";
+import {
+  applySofiaUserAgents,
+  readSofiaRegistrations,
+  sofiaProfiles,
+} from "./pabx-freeswitch-user-agent.ts";
 import { JOB_LONG_POLL_MAX_SECONDS, jobLongPollSeconds, runLane } from "./scheduler.ts";
 import { MACOS_UPDATE_LABEL, macosUpdatePlist } from "./macos-agent.ts";
 import {
@@ -1342,6 +1347,19 @@ function parseFreeSwitchRegistrationsText(
   return registrations;
 }
 
+/** Fills the SIP User-Agent (phone or softphone) that `show registrations` does not carry. */
+async function withFreeSwitchUserAgents(
+  config: AgentConfig,
+  reports: PabxRegistrationReport[],
+): Promise<PabxRegistrationReport[]> {
+  if (!reports.length || reports.every((item) => item.userAgent?.trim())) return reports;
+  const sofia = await readSofiaRegistrations(
+    sofiaProfiles(reports),
+    (args) => runLocalCommand(config.freeswitchCli, args, config.commandTimeoutMs),
+  );
+  return applySofiaUserAgents(reports, sofia);
+}
+
 /** FreeSWITCH registrations, or null when the engine could not be read. */
 async function collectFreeSwitchRegistrations(
   config: AgentConfig,
@@ -1354,8 +1372,11 @@ async function collectFreeSwitchRegistrations(
     );
     if (result.code === 0 && result.stdout) {
       const rows = rowsFromJsonPayload(JSON.parse(result.stdout));
-      return rows.map(normalizeFreeSwitchRegistrationRow)
-        .filter((item): item is PabxRegistrationReport => item !== null);
+      return await withFreeSwitchUserAgents(
+        config,
+        rows.map(normalizeFreeSwitchRegistrationRow)
+          .filter((item): item is PabxRegistrationReport => item !== null),
+      );
     }
   } catch (error) {
     log(
@@ -1371,7 +1392,9 @@ async function collectFreeSwitchRegistrations(
       ["-x", "show registrations"],
       config.commandTimeoutMs,
     );
-    if (result.code === 0) return parseFreeSwitchRegistrationsText(result.stdout);
+    if (result.code === 0) {
+      return await withFreeSwitchUserAgents(config, parseFreeSwitchRegistrationsText(result.stdout));
+    }
   } catch (error) {
     log(
       "warn",
@@ -2591,6 +2614,7 @@ async function runPabxExtensionRegistrationDiagnostic(engine: string, config: Ag
     } catch {
       reports = parseFreeSwitchRegistrationsText(result.stdout);
     }
+    reports = await withFreeSwitchUserAgents(config, reports);
     return { command: config.freeswitchCli, args, result, reports };
   }
   if (engine === "asterisk") {
@@ -2624,6 +2648,7 @@ function extensionRegistrationStatus(
     registrationStatus: registration ? "registered" : "not_registered",
     endpoint: registration?.networkIP ?? null,
     contact: registration?.contact ?? null,
+    userAgent: registration?.userAgent ?? null,
     expiresAt: registration?.expiresAt ?? null,
   };
 }
