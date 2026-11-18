@@ -471,7 +471,12 @@ With a compatible assignment and capability, the Agent can:
 
 Extension presence is read once per heartbeat, never per page view: FreeSWITCH with
 `fs_cli -x "show registrations as json"`, Asterisk with `asterisk -rx "pjsip show contacts"` (the AOR
-`<extension>@<domain>` identifies the extension; the contact URI only gives the device address). It
+`<extension>@<domain>` identifies the extension; the contact URI only gives the device address).
+`show registrations` has no SIP User-Agent, so the FreeSWITCH read adds
+`fs_cli -x "sofia xmlstatus profile <profile> reg"` for each profile in the registration URLs and
+fills `userAgent` (the phone or softphone) by user, realm and network IP
+(`pabx-freeswitch-user-agent.ts`); a failed read only leaves the User-Agent empty. The extension
+runtime diagnostic returns the same `userAgent` per extension. It
 is sent as `pabxPresence` (`pabx-presence.ts`): `engines` lists only the engines read successfully,
 so a failed read never turns extensions offline; `registrations` and `removed` carry only the
 changes since the last report the API applied, and a complete report (`full: true`) goes on start,
