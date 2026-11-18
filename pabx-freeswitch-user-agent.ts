@@ -25,17 +25,17 @@ const MAX_USER_AGENT = 240;
 
 function xmlText(value: string) {
   return value
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
-    .replace(/&amp;/g, "&")
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&quot;", '"')
+    .replaceAll("&apos;", "'")
+    .replaceAll("&amp;", "&")
     .replace(/\s+/g, " ")
     .trim();
 }
 
 function tag(block: string, name: string) {
-  const match = block.match(new RegExp(`<${name}>([\\s\\S]*?)</${name}>`));
+  const match = new RegExp(String.raw`<${name}>([\s\S]*?)</${name}>`).exec(block);
   return match ? xmlText(match[1]) : "";
 }
 
@@ -64,11 +64,11 @@ export function parseSofiaRegistrationsXml(output: string): FreeSwitchSofiaRegis
 export function sofiaProfiles(registrations: RegistrationWithUserAgent[]): string[] {
   const profiles = new Set<string>();
   for (const item of registrations) {
-    const match = String(item.contact ?? "").match(/^sofia\/([^/]+)\//);
+    const match = /^sofia\/([^/]+)\//.exec(String(item.contact ?? ""));
     if (match && SOFIA_PROFILE.test(match[1])) profiles.add(match[1]);
   }
   if (!profiles.size) profiles.add("internal");
-  return [...profiles].sort();
+  return [...profiles].sort((a, b) => a.localeCompare(b));
 }
 
 /** Fills the missing `userAgent` of each registration (same user and realm, same IP first). */
@@ -94,15 +94,14 @@ export async function readSofiaRegistrations(
   profiles: string[],
   run: (args: string[]) => Promise<{ code: number; stdout: string }>,
 ): Promise<FreeSwitchSofiaRegistration[]> {
-  const rows: FreeSwitchSofiaRegistration[] = [];
-  for (const profile of profiles) {
-    if (!SOFIA_PROFILE.test(profile)) continue;
+  const reads = profiles.filter((profile) => SOFIA_PROFILE.test(profile)).map(async (profile) => {
     try {
       const result = await run(["-x", `sofia xmlstatus profile ${profile} reg`]);
-      if (result.code === 0) rows.push(...parseSofiaRegistrationsXml(result.stdout));
+      return result.code === 0 ? parseSofiaRegistrationsXml(result.stdout) : [];
     } catch {
       // The User-Agent is informative: a failed read keeps the registrations unchanged.
+      return [];
     }
-  }
-  return rows;
+  });
+  return (await Promise.all(reads)).flat();
 }
