@@ -1,8 +1,12 @@
 import { assertEquals, assertThrows } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   applyPatch,
+  dpkgInconsistent,
   linuxPatchSteps,
+  lowPriority,
+  MIN_FREE_KIB,
   packageChanges,
+  parseFreeKiB,
   parsePatchRequest,
   parseVersions,
   parseWindowsPatch,
@@ -87,17 +91,154 @@ Deno.test("reboot follows the explicit policy", () => {
   assertEquals(rebootStep(true).command, "shutdown.exe");
 });
 
+const DF_OK = {
+  code: 0,
+  stdout: "Filesystem 1024-blocks Used Available Capacity Mounted on\n" +
+    "/dev/sda1 20000000 8000000 12000000 40% /\n/dev/sda1 20000000 8000000 12000000 40% /\n",
+  stderr: "",
+};
+
 function runner(answers: Record<string, CommandResult>, calls: string[]) {
   return (command: string, args: string[]) => {
-    const key = args.includes("update") && !args.includes("--only-upgrade")
+    const audits = calls.filter((c) => c === "audit").length;
+    const key = command === "df"
+      ? "df"
+      : command === "dpkg" && args.includes("--audit")
+      ? `audit${audits}`
+      : args.includes("--configure")
+      ? "recover"
+      : args.includes("update") && !args.includes("--only-upgrade")
       ? "refresh"
       : command === "dpkg-query"
       ? `versions${calls.filter((c) => c === "dpkg-query").length}`
       : "upgrade";
-    calls.push(command);
-    return Promise.resolve(answers[key] ?? { code: 0, stdout: "", stderr: "" });
+    calls.push(
+      key.startsWith("audit") ? "audit" : key === "df" || key === "recover" ? key : command,
+    );
+    const fallback = key === "df" ? DF_OK : { code: 0, stdout: "", stderr: "" };
+    return Promise.resolve(answers[key] ?? fallback);
   };
 }
+
+const linuxDeps = (run: ReturnType<typeof runner>, tools = true) => ({
+  run,
+  windows: false,
+  powershell: () => "powershell",
+  encode: (s: string) => s,
+  manager: () => Promise.resolve("dpkg" as const),
+  rebootRequired: () => Promise.resolve(false),
+  hasCommand: () => Promise.resolve(tools),
+});
+
+const request = () =>
+  parsePatchRequest({
+    runUUID: RUN,
+    scope: "findings",
+    packages: ["openssl"],
+    rebootPolicy: "never",
+  });
+
+Deno.test("low priority wraps steps with nice and ionice when present", () => {
+  const step = { label: "upgrade", command: "env", args: ["apt-get", "-y"] };
+  assertEquals(lowPriority(step, { nice: true, ionice: true }).args, [
+    "-n",
+    "10",
+    "ionice",
+    "-c2",
+    "-n7",
+    "env",
+    "apt-get",
+    "-y",
+  ]);
+  assertEquals(lowPriority(step, { nice: true, ionice: false }).args, [
+    "-n",
+    "10",
+    "env",
+    "apt-get",
+    "-y",
+  ]);
+  assertEquals(lowPriority(step, { nice: false, ionice: true }), step);
+});
+
+Deno.test("free space and dpkg audit parsing", () => {
+  assertEquals(parseFreeKiB(DF_OK.stdout), 12000000);
+  assertEquals(
+    parseFreeKiB(
+      "Filesystem 1024-blocks Used Available Capacity Mounted on\n/a 1 1 300 1% /var\n/b 1 1 9000 1% /\n",
+    ),
+    300,
+  );
+  assertEquals(parseFreeKiB("garbage"), null);
+  assertEquals(dpkgInconsistent({ code: 0, stdout: "", stderr: "" }), false);
+  assertEquals(
+    dpkgInconsistent({
+      code: 0,
+      stdout: "The following packages are only half configured",
+      stderr: "",
+    }),
+    true,
+  );
+  assertEquals(dpkgInconsistent({ code: 1, stdout: "", stderr: "" }), true);
+});
+
+Deno.test("apply refuses to start without free disk space and touches nothing", async () => {
+  const calls: string[] = [];
+  const small = `Filesystem 1024-blocks Used Available Capacity Mounted on\n/a 1 1 ${
+    MIN_FREE_KIB - 1
+  } 99% /var\n`;
+  const result = await applyPatch(
+    request(),
+    linuxDeps(runner({ df: { code: 0, stdout: small, stderr: "" } }, calls)),
+    () => Promise.resolve(),
+  );
+  assertEquals(result.outcome, "failed");
+  assertEquals(result.error?.startsWith("Not enough free disk space"), true);
+  assertEquals(calls, ["df"]);
+});
+
+Deno.test("apply repairs half-configured packages before updating", async () => {
+  const calls: string[] = [];
+  const result = await applyPatch(
+    request(),
+    linuxDeps(runner({
+      audit0: { code: 0, stdout: "half configured: libc6", stderr: "" },
+      versions0: { code: 0, stdout: "openssl\t3.0.11-1\n", stderr: "" },
+      versions1: { code: 0, stdout: "openssl\t3.0.15-1\n", stderr: "" },
+    }, calls)),
+    () => Promise.resolve(),
+  );
+  assertEquals(result.outcome, "success");
+  assertEquals(result.recovery, { attempted: true, repaired: true });
+  assertEquals(calls.slice(0, 4), ["df", "audit", "recover", "audit"]);
+});
+
+Deno.test("apply stops when dpkg cannot be repaired", async () => {
+  const calls: string[] = [];
+  const broken = { code: 1, stdout: "half configured: libc6", stderr: "" };
+  const result = await applyPatch(
+    request(),
+    linuxDeps(runner({ audit0: broken, audit1: broken }, calls)),
+    () => Promise.resolve(),
+  );
+  assertEquals(result.outcome, "failed");
+  assertEquals(result.recovery, { attempted: true, repaired: false });
+  assertEquals(calls.includes("nice"), false);
+});
+
+Deno.test("apply finishes interrupted dpkg configuration after a killed upgrade", async () => {
+  const calls: string[] = [];
+  const result = await applyPatch(
+    request(),
+    linuxDeps(runner({
+      upgrade: { code: 137, stdout: "", stderr: "killed" },
+      audit1: { code: 0, stdout: "half configured: openssl", stderr: "" },
+    }, calls)),
+    () => Promise.resolve(),
+  );
+  assertEquals(result.outcome, "failed");
+  assertEquals(result.recovery, { attempted: true, repaired: true });
+  assertEquals(calls.slice(-4), ["audit", "recover", "audit", "dpkg-query"]);
+});
 
 Deno.test("apply reports success with the updated versions", async () => {
   const calls: string[] = [];
@@ -125,7 +266,7 @@ Deno.test("apply reports success with the updated versions", async () => {
   assertEquals(result.outcome, "success");
   assertEquals(result.updated, [{ name: "openssl", from: "3.0.11-1", to: "3.0.15-1" }]);
   assertEquals(result.rebootRequired, true);
-  assertEquals(calls, ["dpkg-query", "env", "env", "dpkg-query"]);
+  assertEquals(calls, ["df", "audit", "dpkg-query", "nice", "nice", "dpkg-query"]);
 });
 
 Deno.test("apply turns a failed upgrade into a failed outcome without throwing", async () => {

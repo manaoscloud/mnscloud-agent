@@ -30,6 +30,14 @@ package manager comes from the host, never from the payload.
 | Alpine | `apk update`, `apk upgrade -- <packages>` |
 | Windows | Windows Update Agent API (`Microsoft.Update.Session`): search pending software updates, keep the KBs asked (or security/critical ones), download, install. Drivers and feature upgrades are never selected |
 
+Before a Linux update the Agent checks that `/var` and `/` have at least 512 MiB free (`df -Pk`)
+and, on dpkg hosts, that the package database is consistent (`dpkg --audit`). Half-configured
+packages are first finished with `dpkg --configure -a` (noninteractive, local config files kept);
+if they cannot be repaired the job fails without updating anything. When an update step fails or is
+killed by the timeout (the whole process group is killed), the same audit and repair run again, so
+the host is never left with half-configured packages. The result reports `freeKiB` and
+`recovery` (`attempted`, `repaired`).
+
 A package that is not installed is never added. Versions are read before and after
 (`dpkg-query`, `rpm -q`, `apk info -v`) and the result lists each updated package.
 
@@ -52,5 +60,7 @@ The reboot is delayed (Linux `shutdown -r +2`, Windows `shutdown /r /t 120`) wit
 
 ## Resource use
 
-The update runs as the package manager normally does (not inside `mnscloud-security.slice`: an
-upgrade needs more than the inventory cap). The platform lease of a patch job is 180 minutes.
+The update steps run at low CPU and IO priority (`nice -n 10`, `ionice -c2 -n7` when present), not
+inside `mnscloud-security.slice`: an upgrade needs more memory than the inventory cap, and a memory
+kill in the middle of dpkg would leave packages broken. The platform lease of a patch job is 180
+minutes. Jobs run one at a time, so a patch delays the Agent's other jobs until it ends.
