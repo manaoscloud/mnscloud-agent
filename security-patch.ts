@@ -22,6 +22,10 @@ export const MAX_KBS = 50;
 export const DEFAULT_TIMEOUT_MINUTES = 90;
 export const MAX_TIMEOUT_MINUTES = 150;
 const OUTPUT_TAIL = 1800;
+/** Free space required on `/var` and `/` before a Linux update starts (package cache + unpack). */
+export const MIN_FREE_KIB = 512 * 1024;
+/** Time allowed for `dpkg --configure -a` when packages were left half-configured. */
+export const RECOVERY_TIMEOUT_MS = 30 * 60_000;
 
 export type RebootPolicy = "never" | "if_required" | "always";
 export type PackageManager = "dpkg" | "rpm" | "apk" | "windows";
@@ -127,6 +131,60 @@ export function linuxPatchSteps(
     ];
   }
   throw new PatchRequestError("Unsupported package manager");
+}
+
+/**
+ * Runs a step at low CPU and IO priority when `nice`/`ionice` exist, so a patch on a busy host does
+ * not starve its services. No memory cap: killing dpkg for memory would leave packages broken.
+ */
+export function lowPriority(step: PatchStep, tools: { nice: boolean; ionice: boolean }): PatchStep {
+  if (!tools.nice) return step;
+  const io = tools.ionice ? ["ionice", "-c2", "-n7"] : [];
+  return { ...step, command: "nice", args: ["-n", "10", ...io, step.command, ...step.args] };
+}
+
+/** Free space of `/var` and `/` (POSIX `df -Pk`), read before the update. */
+export function diskCheckStep(): PatchStep {
+  return { label: "disk", command: "df", args: ["-Pk", "--", "/var", "/"] };
+}
+
+/** Smallest available KiB among the `df -Pk` rows, or null when the output is unreadable. */
+export function parseFreeKiB(text: string): number | null {
+  let min: number | null = null;
+  for (const line of text.split("\n").slice(1)) {
+    const cols = line.trim().split(/\s+/);
+    if (cols.length < 6) continue;
+    const available = Number(cols[3]);
+    if (!Number.isFinite(available)) continue;
+    min = min === null ? available : Math.min(min, available);
+  }
+  return min;
+}
+
+/** `dpkg --audit` lists half-installed or half-configured packages; empty output = consistent. */
+export function dpkgAuditStep(): PatchStep {
+  return { label: "audit", command: "dpkg", args: ["--audit"] };
+}
+
+/** Finishes interrupted package configuration, keeping local config files. */
+export function dpkgRecoverStep(): PatchStep {
+  return {
+    label: "recover",
+    command: "env",
+    args: [
+      "DEBIAN_FRONTEND=noninteractive",
+      "NEEDRESTART_MODE=a",
+      "dpkg",
+      "--force-confdef",
+      "--force-confold",
+      "--configure",
+      "-a",
+    ],
+  };
+}
+
+export function dpkgInconsistent(result: CommandResult) {
+  return result.code !== 0 || result.stdout.trim() !== "";
 }
 
 /** Installed versions of the packages (name -> version), for the before/after comparison. */
@@ -295,6 +353,10 @@ export type PatchResult = {
   rebootRequired: boolean;
   rebootPolicy: RebootPolicy;
   rebootScheduled: boolean;
+  /** Smallest free space found before the update (KiB), null when not measured. */
+  freeKiB: number | null;
+  /** dpkg repair: attempted when packages were found half-configured, before or after the update. */
+  recovery: { attempted: boolean; repaired: boolean } | null;
   durationMs: number;
   output: string;
   error: string | null;
@@ -342,6 +404,8 @@ export async function applyPatch(
     windows: null as WindowsPatchOutput | null,
     rebootPolicy: request.rebootPolicy,
     rebootScheduled: false,
+    freeKiB: null as number | null,
+    recovery: null as { attempted: boolean; repaired: boolean } | null,
   };
   const done = (
     outcome: PatchOutcome,
@@ -413,6 +477,47 @@ export async function applyPatch(
   } catch (error) {
     return done("failed", false, "", String((error as Error).message));
   }
+
+  // Pre-checks: enough disk, and on dpkg a consistent package database (repaired first if not).
+  await progress("precheck", 10, "Checking disk space and the package database");
+  const disk = diskCheckStep();
+  const space = await deps.run(disk.command, disk.args, 60_000);
+  base.freeKiB = space.code === 0 ? parseFreeKiB(space.stdout) : null;
+  if (base.freeKiB !== null && base.freeKiB < MIN_FREE_KIB) {
+    return done(
+      "failed",
+      false,
+      space.stdout,
+      `Not enough free disk space for the update (${
+        Math.floor(base.freeKiB / 1024)
+      } MiB available, ${MIN_FREE_KIB / 1024} MiB required on /var and /)`,
+    );
+  }
+  const repair = async () => {
+    if (manager !== "dpkg") return true;
+    const audit = dpkgAuditStep();
+    const first = await deps.run(audit.command, audit.args, 60_000);
+    if (!dpkgInconsistent(first)) return true;
+    const recover = dpkgRecoverStep();
+    await deps.run(recover.command, recover.args, RECOVERY_TIMEOUT_MS);
+    const again = await deps.run(audit.command, audit.args, 60_000);
+    const repaired = !dpkgInconsistent(again);
+    base.recovery = { attempted: true, repaired };
+    return repaired;
+  };
+  if (!(await repair())) {
+    return done(
+      "failed",
+      await deps.rebootRequired(),
+      "",
+      "The package database has half-configured packages that dpkg --configure -a could not repair",
+    );
+  }
+
+  const tools = {
+    nice: await deps.hasCommand("nice"),
+    ionice: await deps.hasCommand("ionice"),
+  };
   const query = versionQuery(manager, request.packages);
   const versions = async () => {
     if (!query) return {};
@@ -427,9 +532,13 @@ export async function applyPatch(
       20 + Math.round((index / steps.length) * 60),
       `Running ${step.label}`,
     );
-    const result = await deps.run(step.command, step.args, timeoutMs);
+    const slow = lowPriority(step, tools);
+    const result = await deps.run(slow.command, slow.args, timeoutMs);
     output += `${result.stdout}\n${result.stderr}\n`;
     if (result.code !== 0) {
+      // A timeout kills the package manager's process group: finish any interrupted configuration
+      // so the host is never left with half-configured packages.
+      await repair();
       const after = await versions();
       const changes = packageChanges(before, after, request.packages);
       return done(
