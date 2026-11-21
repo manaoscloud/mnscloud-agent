@@ -291,3 +291,43 @@ Deno.test("apply turns a failed upgrade into a failed outcome without throwing",
   assertEquals(result.outcome, "failed");
   assertEquals(result.error?.includes("Unable to lock"), true);
 });
+
+Deno.test("reboot scope is accepted only without packages or KBs", () => {
+  const ok = parsePatchRequest({
+    runUUID: RUN,
+    scope: "reboot",
+    packages: [],
+    kbs: [],
+    rebootPolicy: "always",
+  });
+  assertEquals(ok.scope, "reboot");
+  assertThrows(
+    () => parsePatchRequest({ ...ok, packages: ["openssl"] }),
+    PatchRequestError,
+  );
+  assertThrows(() => parsePatchRequest({ ...ok, kbs: ["KB5034441"] }), PatchRequestError);
+});
+
+Deno.test("reboot scope runs no update command and still reboots under always", async () => {
+  const calls: string[] = [];
+  const req = parsePatchRequest({
+    runUUID: RUN,
+    scope: "reboot",
+    packages: [],
+    kbs: [],
+    rebootPolicy: "always",
+  });
+  for (const windows of [false, true]) {
+    const result = await applyPatch(
+      req,
+      { ...linuxDeps(runner({}, calls)), windows },
+      () => Promise.resolve(),
+    );
+    assertEquals(result.outcome, "nothing");
+    assertEquals(result.error, null);
+  }
+  assertEquals(calls, []);
+  assertEquals(shouldReboot("always", false, false, "reboot"), true);
+  assertEquals(shouldReboot("never", true, true, "reboot"), false);
+  assertEquals(shouldReboot("always", false, false, "findings"), false);
+});

@@ -12,7 +12,7 @@ dnf/yum/rpm or apk.
 | Field | Rule |
 | --- | --- |
 | `runUUID` | Patch run of the platform |
-| `scope` | `findings` (Linux packages of the chosen findings) or `security_all` (Windows: pending security and critical updates) |
+| `scope` | `findings` (Linux packages of the chosen findings) `security_all` (Windows: pending security and critical updates) or `reboot` (reboot campaign, no packages or KBs) |
 | `packages` | Up to 200 package names, `^[A-Za-z0-9][A-Za-z0-9.+_:~-]{0,127}$` |
 | `kbs` | Up to 50 Windows KBs, `^KB\d{4,8}$`; empty = every pending security/critical update |
 | `rebootPolicy` | `never`, `if_required` or `always` |
@@ -49,6 +49,14 @@ The job result (`result.patch = true`) carries `outcome` (`success`, `partial`, 
 Right after the update the Agent collects and uploads the software inventory at once (outside the
 24 h schedule and the 5 min upload spacing), so the platform closes the fixed findings from the
 new inventory.
+
+## Reboot campaign
+
+Scope `reboot` (capability `cyber.security.patch.reboot.v1`, declared under the same condition as
+`cyber.security.patch.v1`) carries empty `packages` and `kbs` and `rebootPolicy: always`. The Agent
+runs no update step (Linux or Windows), reports outcome `nothing` and the pending-reboot state, then
+reboots with the delayed reboot below even when nothing changed. A failed job never reboots. A
+payload with packages or KBs for this scope is refused.
 
 ## Reboot
 
