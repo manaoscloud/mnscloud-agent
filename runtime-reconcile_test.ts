@@ -259,3 +259,36 @@ Deno.test("ThemeDomain App vhosts include the access gateway relays in http and 
   const http = renderNginxEdgeDomainConfig(config, "app.example.test", false);
   assertEquals(http.split(include).length - 1, 1);
 });
+
+Deno.test("ThemeDomain site vhosts declare their own site CSP map and use it on the site root", () => {
+  // deno-lint-ignore no-explicit-any
+  const config: any = {
+    nginxEdgeAcmeRoot: "/var/www/acme",
+    nginxEdgeAppUpstream: "http://app.internal:80",
+    nginxEdgeApiUpstream: "http://api.internal:3000",
+    nginxEdgeWebappsEnabled: true,
+    nginxEdgeWebappsUpstream: "http://webapps.internal:8080",
+    nginxEdgeWebappsPaths: ["/customer-portal/"],
+    nginxEdgeSoftphonePaths: [],
+    nginxEdgeScannerPaths: [],
+    nginxEdgeTimeclockPaths: [],
+    nginxEdgeFieldPaths: [],
+    nginxEdgeWebappsIni: {},
+    nginxEdgeSslLiveDir: "/etc/letsencrypt/live",
+    capabilities: {},
+  };
+  for (const ssl of [true, false]) {
+    const site = renderNginxEdgeDomainConfig(config, "www.loja.test", ssl, "site");
+    const variable = site.match(/^map \$upstream_http_x_mnscloud_site_csp (\$\S+) \{$/m)?.[1];
+    assertEquals(typeof variable, "string");
+    assertEquals(
+      site.split(`add_header Content-Security-Policy "${variable}" always;`).length - 1,
+      1,
+    );
+    assertEquals(site.split("proxy_hide_header X-Mnscloud-Site-Csp;").length - 1, 1);
+  }
+  const app = renderNginxEdgeDomainConfig(config, "www.loja.test", true, "app");
+  assertEquals(app.includes("mnscloud_site_csp"), false);
+  const website = renderNginxEdgeDomainConfig(config, "www.loja.test", true, "website");
+  assertEquals(website.includes("mnscloud_site_csp"), false);
+});

@@ -27,7 +27,7 @@ export type NginxEdgeWebappsSettings = {
  * existing vhosts must pick up: the Agent re-renders every vhost once when its stored revision
  * differs.
  */
-export const NGINX_EDGE_RENDER_REVISION = "2026-11-10.pulse-camera";
+export const NGINX_EDGE_RENDER_REVISION = "2026-11-21.site-csp";
 
 export type EdgeSurface =
   | "app"
@@ -48,6 +48,49 @@ const CSP_BASE =
  */
 const CSP_SITE =
   "default-src 'none'; base-uri 'none'; object-src 'none'; script-src 'none'; style-src 'self'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self'; manifest-src 'self'; form-action 'self'; frame-ancestors 'none'; upgrade-insecure-requests";
+
+/**
+ * Always sent on site pages beside the site policy (browsers enforce every policy): whatever the
+ * snapshot carries, a site is never framed, never loads plugins, never rebases links and only
+ * posts forms to itself.
+ */
+const CSP_SITE_FLOOR =
+  "base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'";
+
+/** Snapshot policy header of the webapps site server; hidden from visitors. */
+const SITE_CSP_HEADER = "X-Mnscloud-Site-Csp";
+
+function fnv1a(value: string) {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index++) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash.toString(16).padStart(8, "0");
+}
+
+/**
+ * nginx variable of the site policy of one vhost file. `map` is an http-level directive, so every
+ * file that serves sites declares its own (unique name: sanitized key plus its hash).
+ */
+export function siteCspVariable(key: string) {
+  const safe = key.toLowerCase().replace(/[^a-z0-9]/g, "_").slice(0, 80);
+  return `$mnscloud_site_csp_${safe}_${fnv1a(key.toLowerCase())}`;
+}
+
+/**
+ * The site policy: the one the API rendered into the snapshot (`.mnscloud-site-csp`, sent by the
+ * webapps site server as X-Mnscloud-Site-Csp from typed integrations only), or the strict site
+ * policy when the snapshot carries none (older renders, older webapps runtimes).
+ */
+export function siteCspMap(variable: string) {
+  return `# Site Content-Security-Policy of the snapshot, or the strict site policy without one.
+map $upstream_http_x_mnscloud_site_csp ${variable} {
+  "" "${CSP_SITE}";
+  default $upstream_http_x_mnscloud_site_csp;
+}
+`;
+}
 
 /**
  * The platform's institutional website (WF1: the webapps root app on its ThemeDomain): a static
@@ -74,10 +117,27 @@ const APP_FRAME_SRC = "frame-src 'self' https://www.youtube-nocookie.com";
  * may use both the geolocation and the camera of its own origin; other web clients keep
  * geolocation, microphone, camera and framing closed.
  */
-export function edgeSecurityHeaders(surface: EdgeSurface, indent = "    ") {
+export function edgeSecurityHeaders(
+  surface: EdgeSurface,
+  indent = "    ",
+  siteCsp?: string,
+) {
+  if (surface === "site" && siteCsp) {
+    // `siteCsp` is the variable of `siteCspMap` declared in the same vhost file.
+    return [
+      `${indent}proxy_hide_header ${SITE_CSP_HEADER};`,
+      `${indent}add_header Content-Security-Policy "${siteCsp}" always;`,
+      `${indent}add_header Content-Security-Policy "${CSP_SITE_FLOOR}" always;`,
+      `${indent}add_header X-Content-Type-Options "nosniff" always;`,
+      `${indent}add_header Referrer-Policy "strict-origin-when-cross-origin" always;`,
+      `${indent}add_header Permissions-Policy "geolocation=(), microphone=(), camera=()" always;`,
+      `${indent}add_header Strict-Transport-Security "${HSTS}" always;`,
+    ].join("\n");
+  }
   if (surface === "site" || surface === "website") {
     const csp = surface === "site" ? CSP_SITE : CSP_WEBSITE;
     return [
+      ...(surface === "site" ? [`${indent}proxy_hide_header ${SITE_CSP_HEADER};`] : []),
       `${indent}add_header Content-Security-Policy "${csp}" always;`,
       `${indent}add_header X-Content-Type-Options "nosniff" always;`,
       `${indent}add_header Referrer-Policy "strict-origin-when-cross-origin" always;`,
