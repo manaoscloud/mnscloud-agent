@@ -136,6 +136,13 @@ import {
   shouldReboot,
 } from "./security-patch.ts";
 import {
+  busySimulation,
+  parseSimulateRequest,
+  SIMULATE_CAPABILITY,
+  SIMULATE_COMMAND,
+  simulatePatch,
+} from "./security-patch-simulate.ts";
+import {
   ANTIVIRUS_COMMAND,
   AntivirusRequestError,
   collectPosture,
@@ -402,6 +409,8 @@ async function applyRuntimeCapabilities(config: AgentConfig) {
   // Cyber Security patch management (V6): typed updates through the host package manager.
   config.capabilities[PATCH_CAPABILITY] = IS_WINDOWS || await hostPackageManager() !== null;
   config.capabilities[PATCH_REBOOT_CAPABILITY] = config.capabilities[PATCH_CAPABILITY];
+  // E2b: read-only simulation of a patch (campaign preview), same hosts as the patch.
+  config.capabilities[SIMULATE_CAPABILITY] = config.capabilities[PATCH_CAPABILITY];
   // Cyber Security hardening checks and native antivirus (V8): every Linux and Windows Agent.
   config.capabilities[POSTURE_CAPABILITY] = true;
   // Cyber Security network devices (V9): read-only SNMP GET of devices on this Agent's network.
@@ -6928,6 +6937,138 @@ async function hostRebootRequired(): Promise<boolean> {
   return false;
 }
 
+const PATCH_PROGRESS_HEARTBEAT_MS = 5 * 60_000;
+
+/**
+ * H6 patch lane: a patch runs beside the job lane, so status, inventory, posture and simulation
+ * jobs keep answering during an update of up to 150 minutes. Patches run one at a time (the
+ * platform queues one patch job per server). While the lane is busy, the jobs that use the package
+ * manager or restart services (the Agent itself included, which would kill a running apt/dpkg) are
+ * queued behind the patch instead of running on the job lane; while they wait they report their
+ * progress every 5 minutes, so their lease holds and the job lane stays free.
+ */
+let patchLane: Promise<void> = Promise.resolve();
+let patchLaneJobs = 0;
+
+const PATCH_LANE_CYBER_COMMANDS = new Set([
+  "cyber.security.install",
+  "cyber.security.profile.apply",
+  ANTIVIRUS_COMMAND,
+]);
+
+/** Jobs that must not run while a patch holds the package manager (see the lane above). */
+function waitsForPatchLane(job: LeaseJob): boolean {
+  if (job.jobType === "runtime.update" || job.jobType === RUNTIME_RECONCILE_JOB_TYPE) return true;
+  if (job.jobType !== "cyber.security") return false;
+  const command = String((job as Record<string, unknown>)["command"] ?? job.commandType ?? "");
+  return PATCH_LANE_CYBER_COMMANDS.has(command);
+}
+
+function enqueuePatchLane(
+  job: LeaseJob,
+  config: AgentConfig,
+  agentUUID: string,
+  agentToken: string,
+  run: () => Promise<void>,
+) {
+  const waiting = patchLaneJobs > 0;
+  patchLaneJobs++;
+  let started = false;
+  let timer: ReturnType<typeof setInterval> | null = null;
+  if (waiting) {
+    log("info", "Job waits for the running security patch.", {
+      jobUUID: job.jobUUID,
+      jobType: job.jobType,
+    });
+    const report = () =>
+      reportJobProgress(
+        config,
+        job.jobUUID,
+        agentUUID,
+        agentToken,
+        "waiting",
+        1,
+        "Waiting for the running security patch to finish",
+        { jobType: job.jobType, status: "running" },
+      );
+    void report();
+    timer = setInterval(() => {
+      if (!started) void report();
+    }, PATCH_PROGRESS_HEARTBEAT_MS);
+  }
+  patchLane = patchLane
+    .then(async () => {
+      started = true;
+      if (timer !== null) clearInterval(timer);
+      await run();
+    })
+    .catch(async (error) => {
+      log("warn", "Patch lane job failed.", { jobUUID: job.jobUUID, error: String(error) });
+      await failJob(
+        config,
+        job.jobUUID,
+        agentUUID,
+        agentToken,
+        job.jobType === "cyber.security" ? "CYBER_COMMAND_FAILED" : "AGENT_JOB_FAILED",
+        error instanceof Error ? error.message : String(error),
+        job.jobType ?? undefined,
+      ).catch((failError) =>
+        log("warn", "Patch lane job failure was not reported.", {
+          jobUUID: job.jobUUID,
+          error: String(failError),
+        })
+      );
+    })
+    .finally(() => {
+      if (timer !== null) clearInterval(timer);
+      patchLaneJobs--;
+    });
+}
+
+/** E2b simulation job: what the patch would change, nothing installed (security-patch-simulate.ts). */
+async function executeCyberSecurityPatchSimulate(
+  job: LeaseJob,
+  config: AgentConfig,
+  agentUUID: string,
+  agentToken: string,
+) {
+  let request;
+  try {
+    request = parseSimulateRequest(job.payload);
+  } catch (error) {
+    await failJob(
+      config,
+      job.jobUUID,
+      agentUUID,
+      agentToken,
+      "CYBER_PATCH_INVALID_REQUEST",
+      error instanceof Error ? error.message : String(error),
+      "cyber.security",
+    );
+    return;
+  }
+  // A patch holds the package manager (dpkg may be mid-transaction): answer at once, run nothing.
+  const result = patchLaneJobs > 0 ? busySimulation(request) : await simulatePatch(request, {
+    run: runLocalCommand,
+    windows: IS_WINDOWS,
+    powershell: powerShellExecutable,
+    encode: encodePowerShell,
+    manager: hostPackageManager,
+    hasCommand: async (name) => await findExecutable(name) !== null,
+  });
+  await jsonRequest(config, `/agent/jobs/${job.jobUUID}/complete`, agentToken, agentUUID, {
+    jobType: "cyber.security",
+    result,
+  });
+  log("info", "Cyber Security patch simulation finished.", {
+    jobUUID: job.jobUUID,
+    outcome: result.outcome,
+    upgrade: result.upgrade.length,
+    install: result.install.length,
+    remove: result.remove.length,
+  });
+}
+
 /**
  * V6 patch job: validates the request, updates, refreshes the inventory (so the platform marks the
  * fixed findings), reports the result and only then reboots, when the run's policy asks for it.
@@ -6938,10 +7079,23 @@ async function executeCyberSecurityPatch(
   agentUUID: string,
   agentToken: string,
 ) {
-  const progress = (step: string, percent: number, message: string) =>
-    reportJobProgress(config, job.jobUUID, agentUUID, agentToken, step, percent, message, {
-      status: "running",
-    });
+  // The last step is reported again every 5 minutes, so a long apt/dnf step keeps the job lease.
+  let last = { step: "start", percent: 5, message: "Patch started" };
+  const report = () =>
+    reportJobProgress(
+      config,
+      job.jobUUID,
+      agentUUID,
+      agentToken,
+      last.step,
+      last.percent,
+      last.message,
+      { status: "running" },
+    );
+  const progress = (step: string, percent: number, message: string) => {
+    last = { step, percent, message };
+    return report();
+  };
   let request;
   try {
     request = parsePatchRequest(job.payload);
@@ -6958,15 +7112,19 @@ async function executeCyberSecurityPatch(
     return;
   }
   await progress("start", 5, "Patch started");
-  const result = await applyPatch(request, {
-    run: runLocalCommand,
-    windows: IS_WINDOWS,
-    powershell: powerShellExecutable,
-    encode: encodePowerShell,
-    manager: hostPackageManager,
-    rebootRequired: hostRebootRequired,
-    hasCommand: async (name) => await findExecutable(name) !== null,
-  }, progress);
+  const result = await withProgressHeartbeat(
+    applyPatch(request, {
+      run: runLocalCommand,
+      windows: IS_WINDOWS,
+      powershell: powerShellExecutable,
+      encode: encodePowerShell,
+      manager: hostPackageManager,
+      rebootRequired: hostRebootRequired,
+      hasCommand: async (name) => await findExecutable(name) !== null,
+    }, progress),
+    report,
+    PATCH_PROGRESS_HEARTBEAT_MS,
+  );
   await progress("inventory", 90, "Refreshing the software inventory");
   const inventoryRefreshed = await securityInventory.refreshNow(
     (payload) => jsonRequest(config, INVENTORY_PATH, agentToken, agentUUID, { ...payload }),
@@ -7228,7 +7386,18 @@ async function executeCyberSecurityJob(
     }
 
     if (leasedCommand === PATCH_COMMAND) {
-      await executeCyberSecurityPatch(job, config, agentUUID, agentToken);
+      enqueuePatchLane(
+        job,
+        config,
+        agentUUID,
+        agentToken,
+        () => executeCyberSecurityPatch(job, config, agentUUID, agentToken),
+      );
+      return;
+    }
+
+    if (leasedCommand === SIMULATE_COMMAND) {
+      await executeCyberSecurityPatchSimulate(job, config, agentUUID, agentToken);
       return;
     }
 
@@ -8423,6 +8592,19 @@ async function executeLeasedJob(
   agentUUID: string,
   agentToken: string,
 ): Promise<void> {
+  if (patchLaneJobs > 0 && waitsForPatchLane(job)) {
+    enqueuePatchLane(job, config, agentUUID, agentToken, () => runLeasedJob(job, config, agentUUID, agentToken));
+    return;
+  }
+  await runLeasedJob(job, config, agentUUID, agentToken);
+}
+
+async function runLeasedJob(
+  job: LeaseJob,
+  config: AgentConfig,
+  agentUUID: string,
+  agentToken: string,
+): Promise<void> {
   if (job.jobType === "filesystem.transfer") {
     await executeFilesystemTransfer(job, config, agentUUID, agentToken);
   } else if (job.jobType === "media.file.sync") {
@@ -8483,7 +8665,8 @@ async function pollJobs(
     waitSeconds > 0 ? { limit: 3, waitSeconds } : { limit: 3 },
   );
   for (const job of result.data?.jobs ?? []) {
-    // Serial execution bounds subprocesses and streams to one active leased job.
+    // Serial execution bounds subprocesses and streams to one active leased job (a security patch
+    // runs in its own lane, enqueuePatchLane, and DNS monitor cycles in the background).
     await executeLeasedJob(job, config, agentUUID, agentToken); // NOSONAR: intentional single-flight job lane.
   }
   return waitSeconds > 0 && Number(result.data?.waitSeconds ?? 0) > 0;
