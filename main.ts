@@ -131,6 +131,7 @@ import {
   parsePatchRequest,
   PATCH_CAPABILITY,
   PATCH_COMMAND,
+  PATCH_REBOOT_CAPABILITY,
   rebootStep,
   shouldReboot,
 } from "./security-patch.ts";
@@ -400,6 +401,7 @@ async function applyRuntimeCapabilities(config: AgentConfig) {
   config.capabilities[DNS_MONITOR_CAPABILITY] = true;
   // Cyber Security patch management (V6): typed updates through the host package manager.
   config.capabilities[PATCH_CAPABILITY] = IS_WINDOWS || await hostPackageManager() !== null;
+  config.capabilities[PATCH_REBOOT_CAPABILITY] = config.capabilities[PATCH_CAPABILITY];
   // Cyber Security hardening checks and native antivirus (V8): every Linux and Windows Agent.
   config.capabilities[POSTURE_CAPABILITY] = true;
   // Cyber Security network devices (V9): read-only SNMP GET of devices on this Agent's network.
@@ -1393,7 +1395,10 @@ async function collectFreeSwitchRegistrations(
       config.commandTimeoutMs,
     );
     if (result.code === 0) {
-      return await withFreeSwitchUserAgents(config, parseFreeSwitchRegistrationsText(result.stdout));
+      return await withFreeSwitchUserAgents(
+        config,
+        parseFreeSwitchRegistrationsText(result.stdout),
+      );
     }
   } catch (error) {
     log(
@@ -6968,7 +6973,7 @@ async function executeCyberSecurityPatch(
   ).catch(() => false);
   const changed = result.updated.length > 0 || (result.windows?.installed.length ?? 0) > 0;
   const reboot = result.outcome !== "failed" &&
-    shouldReboot(request.rebootPolicy, result.rebootRequired, changed);
+    shouldReboot(request.rebootPolicy, result.rebootRequired, changed, request.scope);
   const final = { ...result, inventoryRefreshed, rebootScheduled: reboot };
   await jsonRequest(config, `/agent/jobs/${job.jobUUID}/complete`, agentToken, agentUUID, {
     jobType: "cyber.security",

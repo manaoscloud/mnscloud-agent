@@ -12,6 +12,7 @@ import type { CommandResult, CommandRunner } from "./security-inventory.ts";
 
 export const PATCH_COMMAND = "cyber.security.patch.apply";
 export const PATCH_CAPABILITY = "cyber.security.patch.v1";
+export const PATCH_REBOOT_CAPABILITY = "cyber.security.patch.reboot.v1";
 
 /** Same rule as the platform remediation helper (Debian/RPM/Alpine package names). */
 const PACKAGE_NAME = /^[A-Za-z0-9][A-Za-z0-9.+_:~-]{0,127}$/;
@@ -32,7 +33,7 @@ export type PackageManager = "dpkg" | "rpm" | "apk" | "windows";
 
 export type PatchRequest = {
   runUUID: string;
-  scope: "findings" | "security_all";
+  scope: "findings" | "security_all" | "reboot";
   packages: string[];
   kbs: string[];
   rebootPolicy: RebootPolicy;
@@ -65,6 +66,8 @@ export function parsePatchRequest(raw: unknown): PatchRequest {
     ? "security_all"
     : value.scope === "findings"
     ? "findings"
+    : value.scope === "reboot"
+    ? "reboot"
     : null;
   if (!scope) throw new PatchRequestError("Invalid patch scope");
   const reboot = value.rebootPolicy;
@@ -73,6 +76,9 @@ export function parsePatchRequest(raw: unknown): PatchRequest {
   }
   const packages = list(value.packages, PACKAGE_NAME, MAX_PACKAGES, "packages");
   const kbs = list(value.kbs, KB, MAX_KBS, "KBs");
+  if (scope === "reboot" && (packages.length || kbs.length)) {
+    throw new PatchRequestError("A reboot campaign carries no packages or KBs");
+  }
   const minutes = Number(value.timeoutMinutes ?? DEFAULT_TIMEOUT_MINUTES);
   const timeoutMinutes = Number.isFinite(minutes)
     ? Math.min(Math.max(Math.round(minutes), 5), MAX_TIMEOUT_MINUTES)
@@ -319,7 +325,14 @@ export function parseWindowsPatch(text: string): WindowsPatchOutput {
   };
 }
 
-export function shouldReboot(policy: RebootPolicy, rebootRequired: boolean, changed: boolean) {
+export function shouldReboot(
+  policy: RebootPolicy,
+  rebootRequired: boolean,
+  changed: boolean,
+  scope?: PatchRequest["scope"],
+) {
+  // A reboot-only job reboots even when nothing changed and nothing is pending.
+  if (scope === "reboot") return policy === "always";
   if (policy === "always") return changed || rebootRequired;
   if (policy === "if_required") return rebootRequired;
   return false;
@@ -422,6 +435,12 @@ export async function applyPatch(
     output: tail(output),
     error,
   });
+
+  if (request.scope === "reboot") {
+    // Reboot campaign: no update step; the caller reboots by policy after reporting.
+    await progress("reboot", 20, "Reboot campaign: no update step");
+    return done("nothing", deps.windows ? true : await deps.rebootRequired(), "", null);
+  }
 
   if (!manager) return done("failed", false, "", "No supported package manager on this host");
 
