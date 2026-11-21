@@ -4,10 +4,12 @@
  * downloading or refreshing anything. The campaign preview shows the answer (upgrades, new
  * dependencies, removals) before a person approves the campaign.
  *
- * Read-only by construction: `apt-get -s` with `Debug::NoLocking` (never takes the dpkg lock, so it
- * can run while a real patch holds it), `dnf/yum --assumeno -C` (cache only, answers "no"),
- * `apk upgrade -s`, and on Windows a Windows Update search with no download or install. Same
- * package-name and KB validation as the patch job; the package manager comes from the host.
+ * Nothing is installed, removed or upgraded: `apt-get -s` with `Debug::NoLocking` and no binary
+ * cache (no dpkg lock, no file written), `dnf/yum --assumeno -C` (cache only, answers "no"; the
+ * package manager still writes its own log), `apk upgrade -s`, and on Windows a Windows Update
+ * search with no download or install. Same package-name and KB validation as the patch job; the
+ * package manager comes from the host. While a patch runs, the Agent answers at once with
+ * `busySimulation` instead of running anything.
  *
  * Contract: docs/security-patch.md → Simulation.
  */
@@ -123,6 +125,10 @@ export function simulateStep(
         "-q",
         "-o",
         "Debug::NoLocking=1",
+        "-o",
+        "Dir::Cache::pkgcache=",
+        "-o",
+        "Dir::Cache::srcpkgcache=",
         "install",
         "--only-upgrade",
         "--",
@@ -205,6 +211,12 @@ export function parseDnfSimulation(text: string): SimulationPlan {
       )
     ) {
       section = null;
+      continue;
+    }
+    // Any other unindented "...:" header (skipped packages, groups, modules) ends the section.
+    if (/^\S.*:\s*$/.test(line)) {
+      section = null;
+      wrapped = "";
       continue;
     }
     if (!section || !/^\s/.test(line)) continue;
@@ -306,6 +318,24 @@ function failure(result: CommandResult, label: string) {
   return `${label} failed (exit ${result.code})${detail ? `: ${detail}` : ""}`;
 }
 
+/** Answer while a patch holds the package manager: nothing is run, the preview says why. */
+export function busySimulation(request: SimulateRequest): SimulateResult {
+  return {
+    simulate: true,
+    simulationUUID: request.simulationUUID,
+    outcome: "failed",
+    packageManager: null,
+    upgrade: [],
+    install: [],
+    remove: [],
+    updates: [],
+    rebootLikely: false,
+    durationMs: 0,
+    output: "",
+    error: "A security patch is running on this server; simulate again when it ends",
+  };
+}
+
 /** Runs the simulation. Never throws for a host failure: the outcome says what happened. */
 export async function simulatePatch(
   request: SimulateRequest,
@@ -376,10 +406,9 @@ export async function simulatePatch(
   const result = await deps.run(step.command, step.args, timeoutMs);
   const output = result.stdout + (result.stderr ? `\n${result.stderr}` : "");
   if (manager === "rpm") {
-    // --assumeno answers "no": exit 1 with "Operation aborted" is the normal end of a transaction.
-    const aborted = result.code === 1 &&
-      /Operation aborted|Exiting on user command|Exiting due to strict setting/i.test(output) &&
-      !/^Error:/m.test(output);
+    // --assumeno answers "no": exit 1 with "Operation aborted" (dnf, sometimes as "Error: Operation
+    // aborted.") or "Exiting on user command" (yum) is the normal end of a transaction.
+    const aborted = result.code === 1 && /Operation aborted|Exiting on user command/i.test(output);
     if (result.code !== 0 && !aborted) {
       return done("failed", emptyPlan(), output, failure(result, dnf));
     }

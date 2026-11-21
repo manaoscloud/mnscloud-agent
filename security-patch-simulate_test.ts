@@ -1,5 +1,6 @@
 import { assertEquals, assertThrows } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
+  busySimulation,
   parseApkSimulation,
   parseAptSimulation,
   parseDnfSimulation,
@@ -80,6 +81,8 @@ Deno.test("dnf simulation reads the transaction table", () => {
     "     replacing  openssl-libs.x86_64 1:3.0.7-25.el9",
     "Installing dependencies:",
     " libnew               x86_64   2.0-1.el9            appstream           50 k",
+    "Skipping packages with broken dependencies:",
+    " brokenpkg            x86_64   1.0-1.el9            appstream           10 k",
     "Removing dependent packages:",
     " legacy-tool          x86_64   0.9-3.el9            @baseos            100 k",
     "",
@@ -170,6 +173,19 @@ Deno.test("simulatePatch: dnf --assumeno abort is normal, a real error fails", a
   );
   assertEquals(ok.outcome, "ok");
   assertEquals(ok.upgrade, [{ name: "openssl", to: "2" }]);
+  const dnf4 = await simulatePatch(
+    parseSimulateRequest({ simulationUUID: SIM, scope: "findings", packages: ["openssl"] }),
+    deps(
+      {
+        code: 1,
+        stdout: "Upgrading:\n openssl x86_64 2 baseos 1 M\n",
+        stderr: "Error: Operation aborted.\n",
+      },
+      [],
+      "rpm",
+    ),
+  );
+  assertEquals(dnf4.outcome, "ok");
   const bad = await simulatePatch(
     parseSimulateRequest({ simulationUUID: SIM, scope: "findings", packages: ["openssl"] }),
     deps(
@@ -184,4 +200,13 @@ Deno.test("simulatePatch: dnf --assumeno abort is normal, a real error fails", a
     deps({ code: 0, stdout: "", stderr: "" }, [], null),
   );
   assertEquals(none.outcome, "failed");
+});
+
+Deno.test("a simulation during a patch runs nothing and says why", () => {
+  const busy = busySimulation(
+    parseSimulateRequest({ simulationUUID: SIM, scope: "findings", packages: ["openssl"] }),
+  );
+  assertEquals(busy.outcome, "failed");
+  assertEquals(busy.simulationUUID, SIM);
+  assertEquals(busy.error?.includes("security patch is running"), true);
 });

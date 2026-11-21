@@ -76,10 +76,13 @@ kill in the middle of dpkg would leave packages broken.
 
 A patch job runs in its own lane beside the Agent's job lane (H6), so status, inventory, posture,
 simulation and other jobs keep answering during an update. Patches still run one at a time: the
-platform queues at most one patch job per server, and a second one leased here waits for the first.
-An Agent or runtime update (`runtime.update`, `runtime.reconcile`) restarts services, the Agent
-included, which would kill a running apt/dpkg: it waits until the patch lane is idle, reporting its
-own progress every 5 minutes so its lease holds.
+platform queues at most one patch job per server. While the patch lane is busy, the jobs that use
+the package manager or restart services are queued behind the patch instead of running on the job
+lane: `runtime.update` and `runtime.reconcile` (an Agent restart would kill a running apt/dpkg),
+`cyber.security.install`, `cyber.security.profile.apply` and `cyber.security.antivirus.run` (they
+install packages and would fail on the dpkg lock). While they wait they report their progress every
+5 minutes, so their lease holds. A simulation that arrives during a patch runs nothing and answers
+`failed` with "A security patch is running on this server".
 
 The platform leases a patch job for 180 minutes. The Agent reports the current step again every 5
 minutes while a step runs, and a progress report only extends the lease (never shortens it), so a
@@ -101,8 +104,8 @@ The campaign preview queues one per eligible server and shows the result before 
 
 | Host | Single read-only command |
 | --- | --- |
-| Debian/Ubuntu | `apt-get -s -o Debug::NoLocking=1 install --only-upgrade -- <packages>` (never takes the dpkg lock, so it can run while a patch holds it) |
-| RHEL family | `dnf --assumeno -C upgrade -- <packages>` (`yum` without dnf; cache only, answers "no"; exit 1 with "Operation aborted" is the normal end) |
+| Debian/Ubuntu | `apt-get -s -o Debug::NoLocking=1 -o Dir::Cache::pkgcache= -o Dir::Cache::srcpkgcache= install --only-upgrade -- <packages>` (no dpkg lock, no cache file written) |
+| RHEL family | `dnf --assumeno -C upgrade -- <packages>` (`yum` without dnf; cache only, answers "no"; exit 1 with "Operation aborted" / "Exiting on user command" is the normal end; the package manager still writes its own log) |
 | Alpine | `apk upgrade -s -- <packages>` |
 | Windows | Windows Update Agent search only (no download, no install) |
 
