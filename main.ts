@@ -58,6 +58,8 @@ import {
   NGINX_EDGE_RENDER_REVISION,
   nginxEdgeWebapps,
   type NginxEdgeWebappsIni,
+  siteCspMap,
+  siteCspVariable,
 } from "./nginx-webapps.ts";
 import { prepareSchemaRelease, pruneSchemaArtifacts } from "./schema-release.ts";
 import {
@@ -3426,8 +3428,12 @@ async function nginxEdgeHasCertificate(config: AgentConfig, domain: string) {
     await fileExists(`${base}/privkey.pem`);
 }
 
-function frontendSecurityHeaders(indent = "    ", surface: EdgeSurface = "app") {
-  return edgeSecurityHeaders(surface, indent);
+function frontendSecurityHeaders(
+  indent = "    ",
+  surface: EdgeSurface = "app",
+  siteCsp?: string,
+) {
+  return edgeSecurityHeaders(surface, indent, siteCsp);
 }
 
 /**
@@ -3454,6 +3460,8 @@ export function renderNginxEdgeDomainConfig(
     ? config.nginxEdgeAppUpstream
     : config.nginxEdgeWebappsUpstream;
   const rootSurface: EdgeSurface = servedMode;
+  // Site mode: the snapshot's own policy (or the strict one), through this file's own map.
+  const siteCsp = servedMode === "site" ? siteCspVariable(`d_${domain}`) : undefined;
   const apiUpstream = config.nginxEdgeApiUpstream;
   const webappsLocations = renderNginxEdgeWebappsLocations(config);
   // Public storefront/sign-up API: throttled at the platform edge (same zone as its static vhosts).
@@ -3469,7 +3477,7 @@ ${frontendSecurityHeaders()}
   const httpAppLocation = sslEnabled
     ? "location / { return 301 https://$host$request_uri; }"
     : `location / {
-${frontendSecurityHeaders("    ", rootSurface)}
+${frontendSecurityHeaders("    ", rootSurface, siteCsp)}
     proxy_http_version 1.1;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
@@ -3564,7 +3572,8 @@ ${frontendSecurityHeaders("    ", rootSurface)}
 }
 `;
 
-  if (!sslEnabled) return httpBlock;
+  const siteMap = siteCsp ? `${siteCspMap(siteCsp)}\n` : "";
+  if (!sslEnabled) return `${siteMap}${httpBlock}`;
 
   const sslBase = `${config.nginxEdgeSslLiveDir.replace(/\/+$/, "")}/${domain}`;
   const httpsBlock = `server {
@@ -3657,7 +3666,7 @@ ${frontendSecurityHeaders("    ", rootSurface)}
   ${webappsLocations}
 
   location / {
-${frontendSecurityHeaders("    ", rootSurface)}
+${frontendSecurityHeaders("    ", rootSurface, siteCsp)}
     proxy_http_version 1.1;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
@@ -3670,7 +3679,7 @@ ${frontendSecurityHeaders("    ", rootSurface)}
 }
 `;
 
-  return `${httpBlock}\n${httpsBlock}`;
+  return `${siteMap}${httpBlock}\n${httpsBlock}`;
 }
 
 function renderNginxEdgeWebappsLocations(config: AgentConfig) {
@@ -4265,7 +4274,8 @@ async function activateWebsiteEdge(config: AgentConfig, base: string, sslEnabled
     apiUpstream: config.nginxEdgeApiUpstream,
     webappsUpstream: config.nginxEdgeWebappsUpstream,
     certificateDir: `${config.nginxEdgeSslLiveDir.replace(/\/+$/, "")}/${wildcardCertName(base)}`,
-    securityHeaders: frontendSecurityHeaders("    ", "site"),
+    securityHeaders: frontendSecurityHeaders("    ", "site", siteCspVariable(`w_${base}`)),
+    siteCspMap: siteCspMap(siteCspVariable(`w_${base}`)),
     // The site server of webapps also serves the sub-path clients: keep their own headers.
     appLocations: renderNginxEdgeWebappsLocations({ ...config, nginxEdgeWebappsEnabled: true }),
     publicApiRateLimit: nginxEdgeDefinesApiZone(config),
@@ -8593,7 +8603,13 @@ async function executeLeasedJob(
   agentToken: string,
 ): Promise<void> {
   if (patchLaneJobs > 0 && waitsForPatchLane(job)) {
-    enqueuePatchLane(job, config, agentUUID, agentToken, () => runLeasedJob(job, config, agentUUID, agentToken));
+    enqueuePatchLane(
+      job,
+      config,
+      agentUUID,
+      agentToken,
+      () => runLeasedJob(job, config, agentUUID, agentToken),
+    );
     return;
   }
   await runLeasedJob(job, config, agentUUID, agentToken);

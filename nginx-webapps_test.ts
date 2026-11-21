@@ -3,6 +3,8 @@ import {
   DEFAULT_NGINX_EDGE_WEBAPPS_PATHS,
   edgeSecurityHeaders,
   nginxEdgeWebapps,
+  siteCspMap,
+  siteCspVariable,
 } from "./nginx-webapps.ts";
 
 const legacyIni = {
@@ -147,7 +149,38 @@ Deno.test("site surface: published snapshots run no script and post forms only t
   assertEquals(site.includes("form-action 'self'"), true);
   assertEquals(site.includes("frame-ancestors 'none'"), true);
   assertEquals(site.includes("geolocation=(), microphone=(), camera=()"), true);
-  assertEquals(site.split("\n").every((line) => line.startsWith("  add_header ")), true);
+  assertEquals(
+    site.split("\n").every((line) =>
+      line.startsWith("  add_header ") || line === "  proxy_hide_header X-Mnscloud-Site-Csp;"
+    ),
+    true,
+  );
+});
+
+Deno.test("site surface: the snapshot policy goes through the file's map, with a fixed floor", () => {
+  const variable = siteCspVariable("d_www.loja-exemplo.com.br");
+  assertEquals(/^\$mnscloud_site_csp_[a-z0-9_]+_[0-9a-f]{8}$/.test(variable), true);
+  // Sanitized names alone would collide; the hash keeps them apart.
+  assertEquals(siteCspVariable("d_a-b.com") === siteCspVariable("d_a.b.com"), false);
+  assertEquals(siteCspVariable("d_A.com"), siteCspVariable("d_a.com"));
+  const site = edgeSecurityHeaders("site", "  ", variable);
+  assertEquals(site.includes("  proxy_hide_header X-Mnscloud-Site-Csp;"), true);
+  assertEquals(site.includes(`add_header Content-Security-Policy "${variable}" always;`), true);
+  assertEquals(
+    site.includes(
+      `add_header Content-Security-Policy "base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'" always;`,
+    ),
+    true,
+  );
+  const map = siteCspMap(variable);
+  assertEquals(map.includes(`map $upstream_http_x_mnscloud_site_csp ${variable} {`), true);
+  assertEquals(
+    map.includes(
+      `  "" "default-src 'none'; base-uri 'none'; object-src 'none'; script-src 'none';`,
+    ),
+    true,
+  );
+  assertEquals(map.includes("  default $upstream_http_x_mnscloud_site_csp;"), true);
 });
 
 Deno.test("website surface: the institutional site runs its own scripts, is never framed", () => {
