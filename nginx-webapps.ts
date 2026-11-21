@@ -27,7 +27,7 @@ export type NginxEdgeWebappsSettings = {
  * existing vhosts must pick up: the Agent re-renders every vhost once when its stored revision
  * differs.
  */
-export const NGINX_EDGE_RENDER_REVISION = "2026-11-21.site-csp-2";
+export const NGINX_EDGE_RENDER_REVISION = "2026-11-21.site-csp-3";
 
 export type EdgeSurface =
   | "app"

@@ -3796,12 +3796,8 @@ async function rerenderNginxEdgeDomains(config: AgentConfig) {
   return domains;
 }
 
-/**
- * Re-renders the existing website wildcard vhosts (`<base>.conf` of `website.edge.ensure`) with the
- * current template, keeping each one's TLS state; `website.edge.ensure` itself only runs when the
- * certificate is due or unreported. Each base is tested and restored on failure by itself.
- */
-async function rerenderWebsiteEdges(config: AgentConfig) {
+/** Existing website wildcard bases (`<base>.conf` of `website.edge.ensure`). */
+async function websiteEdgeBases(config: AgentConfig) {
   const bases: string[] = [];
   try {
     for await (const entry of Deno.readDir(config.nginxEdgeWebsiteDir)) {
@@ -3816,12 +3812,64 @@ async function rerenderWebsiteEdges(config: AgentConfig) {
     if (error instanceof Deno.errors.NotFound) return [];
     throw error;
   }
-  // One base at a time: each runs its own nginx test and reload.
-  for (const base of bases.sort((a, b) => a.localeCompare(b))) {
-    const sslEnabled = await nginxEdgeHasCertificate(config, wildcardCertName(base));
-    await activateWebsiteEdge(config, base, sslEnabled);
+  return bases.sort((a, b) => a.localeCompare(b));
+}
+
+/**
+ * Render revision: every existing ThemeDomain vhost and website wildcard vhost is written with the
+ * current template first and nginx is tested once, so a file one group left behind can never block
+ * the other group's fix; on failure every file is restored. Keeps each file's TLS state.
+ */
+async function rerenderEdgeVhosts(config: AgentConfig) {
+  if (!config.capabilities["nginx-edge.manage"]) return { domains: [], websiteBases: [] };
+  await refreshNginxEdgeWebapps(config);
+  const next = new Map<string, string>();
+  const domains: string[] = [];
+  try {
+    for await (const entry of Deno.readDir(config.nginxEdgeConfigDir)) {
+      if (!entry.isFile || !entry.name.endsWith(".conf")) continue;
+      const domain = entry.name.slice(0, -".conf".length);
+      assertSafeDomain(domain);
+      if (nginxEdgeConfigPath(config, domain).endsWith(`/${entry.name}`)) domains.push(domain);
+    }
+  } catch (error) {
+    if (!(error instanceof Deno.errors.NotFound)) throw error;
   }
-  return bases;
+  domains.sort((a, b) => Number(a > b) - Number(a < b));
+  const { site, root } = await websiteEdgeDomainSets(config);
+  for (const domain of domains) {
+    next.set(
+      nginxEdgeConfigPath(config, domain),
+      renderNginxEdgeDomainConfig(
+        config,
+        domain,
+        await nginxEdgeHasCertificate(config, domain),
+        nginxEdgeRootMode(domain, site, root),
+      ),
+    );
+  }
+  const websiteBases = await websiteEdgeBases(config);
+  for (const base of websiteBases) {
+    next.set(
+      websiteEdgeConfigFile(config.nginxEdgeWebsiteDir, base),
+      renderWebsiteEdgeFor(
+        config,
+        base,
+        await nginxEdgeHasCertificate(config, wildcardCertName(base)),
+      ),
+    );
+  }
+  const previous = new Map<string, string>();
+  for (const path of next.keys()) previous.set(path, await Deno.readTextFile(path));
+  try {
+    for (const [path, content] of next) await writeAtomic(path, content);
+    await testNginxEdge(config);
+  } catch (error) {
+    for (const [path, content] of previous) await writeAtomic(path, content);
+    throw error;
+  }
+  if (next.size) await reloadNginxEdge(config);
+  return { domains, websiteBases };
 }
 
 /**
@@ -3832,8 +3880,7 @@ async function ensureNginxEdgeRenderRevision(config: AgentConfig) {
   if (!config.capabilities["nginx-edge.manage"]) return;
   const marker = `${config.nginxEdgeConfigDir.replace(/\/+$/, "")}/.render-revision`;
   if ((await optionalRead(marker))?.trim() === NGINX_EDGE_RENDER_REVISION) return;
-  const domains = await rerenderNginxEdgeDomains(config);
-  const websiteBases = await rerenderWebsiteEdges(config);
+  const { domains, websiteBases } = await rerenderEdgeVhosts(config);
   await writeAtomic(marker, `${NGINX_EDGE_RENDER_REVISION}\n`);
   log("info", "ThemeDomain vhosts re-rendered for the render revision.", {
     revision: NGINX_EDGE_RENDER_REVISION,
@@ -4262,12 +4309,9 @@ async function issueWebsiteWildcard(
   }
 }
 
-async function activateWebsiteEdge(config: AgentConfig, base: string, sslEnabled: boolean) {
-  const path = websiteEdgeConfigFile(config.nginxEdgeWebsiteDir, base);
-  await Deno.mkdir(config.nginxEdgeWebsiteDir, { recursive: true });
-  await Deno.mkdir(config.nginxEdgeAcmeRoot, { recursive: true });
-  const previous = await fileExists(path) ? await Deno.readTextFile(path) : null;
-  const rendered = renderWebsiteEdgeConfig({
+/** The website wildcard vhost of `base` with the current template. */
+function renderWebsiteEdgeFor(config: AgentConfig, base: string, sslEnabled: boolean) {
+  return renderWebsiteEdgeConfig({
     base,
     sslEnabled,
     acmeRoot: config.nginxEdgeAcmeRoot,
@@ -4280,6 +4324,14 @@ async function activateWebsiteEdge(config: AgentConfig, base: string, sslEnabled
     appLocations: renderNginxEdgeWebappsLocations({ ...config, nginxEdgeWebappsEnabled: true }),
     publicApiRateLimit: nginxEdgeDefinesApiZone(config),
   });
+}
+
+async function activateWebsiteEdge(config: AgentConfig, base: string, sslEnabled: boolean) {
+  const path = websiteEdgeConfigFile(config.nginxEdgeWebsiteDir, base);
+  await Deno.mkdir(config.nginxEdgeWebsiteDir, { recursive: true });
+  await Deno.mkdir(config.nginxEdgeAcmeRoot, { recursive: true });
+  const previous = await fileExists(path) ? await Deno.readTextFile(path) : null;
+  const rendered = renderWebsiteEdgeFor(config, base, sslEnabled);
   if (previous === rendered) return { path, changed: false };
   await writeAtomic(path, rendered);
   try {
