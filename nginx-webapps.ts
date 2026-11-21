@@ -27,7 +27,7 @@ export type NginxEdgeWebappsSettings = {
  * existing vhosts must pick up: the Agent re-renders every vhost once when its stored revision
  * differs.
  */
-export const NGINX_EDGE_RENDER_REVISION = "2026-11-21.site-csp";
+export const NGINX_EDGE_RENDER_REVISION = "2026-11-21.site-csp-2";
 
 export type EdgeSurface =
   | "app"
@@ -60,8 +60,8 @@ const CSP_SITE_FLOOR =
 /** Snapshot policy header of the webapps site server; hidden from visitors. */
 const SITE_CSP_HEADER = "X-Mnscloud-Site-Csp";
 
-function fnv1a(value: string) {
-  let hash = 0x811c9dc5;
+function fnv1a(value: string, seed = 0x811c9dc5) {
+  let hash = seed;
   for (let index = 0; index < value.length; index++) {
     hash ^= value.charCodeAt(index);
     hash = Math.imul(hash, 0x01000193) >>> 0;
@@ -71,11 +71,14 @@ function fnv1a(value: string) {
 
 /**
  * nginx variable of the site policy of one vhost file. `map` is an http-level directive, so every
- * file that serves sites declares its own (unique name: sanitized key plus its hash).
+ * file that serves sites declares its own. The name is short and fixed-length (two 32-bit hashes of
+ * the key): nginx refuses the whole configuration ("could not build variables_hash") when a
+ * variable name does not fit `variables_hash_bucket_size` (64 by default), so the domain itself is
+ * never part of it.
  */
 export function siteCspVariable(key: string) {
-  const safe = key.toLowerCase().replace(/[^a-z0-9]/g, "_").slice(0, 80);
-  return `$mnscloud_site_csp_${safe}_${fnv1a(key.toLowerCase())}`;
+  const value = key.toLowerCase();
+  return `$mns_site_csp_${fnv1a(value)}${fnv1a(value, 0x01000193)}`;
 }
 
 /**

@@ -159,7 +159,12 @@ Deno.test("site surface: published snapshots run no script and post forms only t
 
 Deno.test("site surface: the snapshot policy goes through the file's map, with a fixed floor", () => {
   const variable = siteCspVariable("d_www.loja-exemplo.com.br");
-  assertEquals(/^\$mnscloud_site_csp_[a-z0-9_]+_[0-9a-f]{8}$/.test(variable), true);
+  assertEquals(/^\$mns_site_csp_[0-9a-f]{16}$/.test(variable), true);
+  // nginx builds one variables hash with 64-byte buckets: long names break the whole config.
+  assertEquals(
+    siteCspVariable(`d_${"a".repeat(60)}.${"b".repeat(60)}.example.com.br`).length,
+    variable.length,
+  );
   // Sanitized names alone would collide; the hash keeps them apart.
   assertEquals(siteCspVariable("d_a-b.com") === siteCspVariable("d_a.b.com"), false);
   assertEquals(siteCspVariable("d_A.com"), siteCspVariable("d_a.com"));
