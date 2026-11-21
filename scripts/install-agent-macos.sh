@@ -367,6 +367,7 @@ main() {
   run "cp '${AGENT_SOURCE_DIR}/cyber-security-policy.ts' '${install_dir}/cyber-security-policy.ts'"
   run "cp '${AGENT_SOURCE_DIR}/security-inventory.ts' '${install_dir}/security-inventory.ts'"
   run "cp '${AGENT_SOURCE_DIR}/security-patch.ts' '${install_dir}/security-patch.ts'"
+  run "cp '${AGENT_SOURCE_DIR}/security-patch-simulate.ts' '${install_dir}/security-patch-simulate.ts'"
   run "cp '${AGENT_SOURCE_DIR}/security-posture.ts' '${install_dir}/security-posture.ts'"
   run "cp '${AGENT_SOURCE_DIR}/network-device.ts' '${install_dir}/network-device.ts'"
   run "cp '${AGENT_SOURCE_DIR}/macos-agent.ts' '${install_dir}/macos-agent.ts'"

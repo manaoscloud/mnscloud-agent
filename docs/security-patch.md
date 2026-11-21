@@ -70,5 +70,45 @@ The reboot is delayed (Linux `shutdown -r +2`, Windows `shutdown /r /t 120`) wit
 
 The update steps run at low CPU and IO priority (`nice -n 10`, `ionice -c2 -n7` when present), not
 inside `mnscloud-security.slice`: an upgrade needs more memory than the inventory cap, and a memory
-kill in the middle of dpkg would leave packages broken. The platform lease of a patch job is 180
-minutes. Jobs run one at a time, so a patch delays the Agent's other jobs until it ends.
+kill in the middle of dpkg would leave packages broken.
+
+## Patch lane and lease
+
+A patch job runs in its own lane beside the Agent's job lane (H6), so status, inventory, posture,
+simulation and other jobs keep answering during an update. Patches still run one at a time: the
+platform queues at most one patch job per server, and a second one leased here waits for the first.
+An Agent or runtime update (`runtime.update`, `runtime.reconcile`) restarts services, the Agent
+included, which would kill a running apt/dpkg: it waits until the patch lane is idle, reporting its
+own progress every 5 minutes so its lease holds.
+
+The platform leases a patch job for 180 minutes. The Agent reports the current step again every 5
+minutes while a step runs, and a progress report only extends the lease (never shortens it), so a
+long `apt-get install` is never expired by the platform while it still runs.
+
+## Simulation (campaign preview)
+
+Job `cyber.security.patch.simulate` (capability `cyber.security.patch.simulate.v1`, declared under
+the same condition as `cyber.security.patch.v1`; module `security-patch-simulate.ts`) answers what
+a patch of the given packages would do, without installing, downloading or refreshing anything.
+The campaign preview queues one per eligible server and shows the result before approval.
+
+| Field | Rule |
+| --- | --- |
+| `simulationUUID` | Simulation of the platform (one per preview) |
+| `scope` | `findings` (Linux packages) or `security_all` (Windows: pending security/critical updates) |
+| `packages`, `kbs` | Same validation as the patch job |
+| `timeoutMinutes` | 1-15, default 10 |
+
+| Host | Single read-only command |
+| --- | --- |
+| Debian/Ubuntu | `apt-get -s -o Debug::NoLocking=1 install --only-upgrade -- <packages>` (never takes the dpkg lock, so it can run while a patch holds it) |
+| RHEL family | `dnf --assumeno -C upgrade -- <packages>` (`yum` without dnf; cache only, answers "no"; exit 1 with "Operation aborted" is the normal end) |
+| Alpine | `apk upgrade -s -- <packages>` |
+| Windows | Windows Update Agent search only (no download, no install) |
+
+The result (`result.simulate = true`) carries `outcome` (`ok`, `failed`), `upgrade` (name, from,
+to), `install` (new dependencies: name, to), `remove` (name, from), Windows `updates` (kb, title),
+each list capped at 300, `rebootLikely` (kernel, C library, init or a Windows update that asks for
+a reboot), the duration, the last 1,800 characters of output and `error`. The simulation uses the
+package lists already on the host (no `apt-get update`), so it shows what the patch would do with
+the current metadata; the patch itself refreshes them first.
