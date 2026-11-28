@@ -47,6 +47,7 @@ privilege; failures never block the Agent and are retried on its next update.
 | `edge` | `nginx -t` of the system and webapps configurations (masked messages), vhost file names and Let's Encrypt certificate expiry; never configuration content |
 | `access-summary [MINUTES]` | Edge access log counts by method, normalized path (ids/values replaced) and status for the last `MINUTES` (1-1440, default 15), from the newest 32 MiB; no client addresses, users, queries, referrers or agents |
 | `log-usage` | Size of fixed log/data directories, journal disk usage and the 10 largest files under `/var/log` |
+| `storage` | Root filesystem total/available bytes, size of the fixed release/backup/cache directories, each `/opt/mnscloud/mnscloud-*` checkout and its `.git`, counts of schema release, reconcile and App web release entries, and the Agent housekeeping last run; sizes and counts only, never file names |
 | `voip-summary` | Registration, call and session counters of Kamailio, OpenSIPS, Asterisk, FreeSWITCH and rtpengine when installed; numbers only |
 | `gateway-summary` | Access gateway hosts: controller unit state, count of active session units, whether the nftables table `inet mnscloud_access_gateway` exists, whether the listener port (`ACCESS_GATEWAY_LISTEN_PORT`, default 7443) is bound, and the last heartbeat failure (HTTP status and error code) of the last 60 minutes of the controller journal; no session ids, devices, tickets, journal text or credentials |
 | `schema-status` | Database hosts: active `SchemaAppliedRevision` rows and the last 10 `SchemaReconcileJob` stages/status/error codes, through the passwordless local diagnostics database account |
@@ -383,6 +384,20 @@ The only new sudo entry is the exact `collector.py schema-plan` operation. Insta
 preserve the account and key. Validate the security contract and the disposable-container suite
 before release; deliver with the normal Agent DEV rollout and an authorized PROD rollout.
 
+
+## Storage (diagnostics 4.7)
+
+Version 4.7 (2026-11-27, task `release-storage-r1`) adds `storage` so release retention can be
+proven read-only: `du -s -b -x` of a fixed list of directories (App web root and its release lists,
+DB schema release checkouts, runtime kit, webapps, Agent runtime packages, `/var/backups`,
+`/var/lib/docker`, `/var/lib/mnscloud`, apt archives, Deno cache, `/var/log`; never world-writable
+directories such as `/tmp`), each
+`/opt/mnscloud/mnscloud-*` checkout with its `.git`, entry counts of the retention-managed
+directories and `lastRunAt` of the Agent housekeeping state. The whole command has a 30 s budget;
+a directory measured after it reads `SKIPPED`. Symlinks are never followed and no file name is
+returned. Sizes are on-disk usage (`du -B1`, comparable with `df`); one call can read for up to
+30 s, so call it when checking retention, not in a loop. The new sudo entry is the exact
+`collector.py storage` operation.
 
 ## Access gateway summary (diagnostics 4.6)
 

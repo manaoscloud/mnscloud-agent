@@ -2,6 +2,7 @@
 import importlib.util
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -217,7 +218,7 @@ class DiagnosticsContract(unittest.TestCase):
         with patch.object(collector, 'run', side_effect=OSError), \
                 patch.object(collector, 'trusted_read', side_effect=OSError):
             result = collector.versions()
-        self.assertEqual(result['diagnostics'], '4.6')
+        self.assertEqual(result['diagnostics'], '4.7')
         for key in ('rtpengine-daemon', 'coturn', 'clickhouse-server', 'vector', 'pdns-server', 'pdns-recursor',
                     'dnsdist', 'dns_checkout_version', 'access-gateway_checkout_version', 'media_checkout_version',
                     'turn_checkout_version', 'logs_checkout_version',
@@ -712,6 +713,45 @@ class DiagnosticsV4Contract(unittest.TestCase):
         self.assertIn("CREATE USER IF NOT EXISTS 'mns-diagnostics'@'localhost' IDENTIFIED VIA unix_socket;", statements)
         self.assertFalse(any('IDENTIFIED BY' in statement or 'PASSWORD' in statement for statement in statements))
         self.assertFalse(any(statement.startswith('REVOKE') for statement in statements))
+
+
+class StorageContract(unittest.TestCase):
+    def test_storage_reports_sizes_and_counts_only(self):
+        with tempfile.TemporaryDirectory() as root:
+            web = Path(root) / 'www'
+            (web / 'media').mkdir(parents=True)
+            (web / 'chunk-a.js').write_bytes(b'x' * 100)
+            backups = Path(root) / 'backups'
+            backups.mkdir()
+            (backups / 'schema-reconcile-abcdef12').mkdir()
+            (backups / 'other').mkdir()
+            checkouts = Path(root) / 'opt'
+            (checkouts / 'mnscloud-app' / '.git').mkdir(parents=True)
+            (checkouts / 'mnscloud-app' / '.git' / 'pack').write_bytes(b'y' * 50)
+            (checkouts / 'not-ours').mkdir()
+            (checkouts / 'mnscloud-link').symlink_to(web)
+            state = Path(root) / 'housekeeping.json'
+            state.write_text('{"lastRunAt": 1700000000000}')
+            with patch.object(collector, 'STORAGE_DIRS', (str(web), str(Path(root) / 'missing'))), \
+                    patch.object(collector, 'STORAGE_COUNTS',
+                                 ((str(backups), re.compile(r'^schema-reconcile-\w{8,64}$', re.ASCII)),)), \
+                    patch.object(collector, 'STORAGE_CHECKOUT_ROOT', str(checkouts)), \
+                    patch.object(collector, 'HOUSEKEEPING_STATE', str(state)):
+                result = collector.storage()
+        self.assertEqual(result['diagnostics'], collector.DIAGNOSTICS_VERSION)
+        self.assertGreater(result['filesystem']['totalBytes'], 0)
+        self.assertGreaterEqual(result['directories'][str(web)], 100)
+        self.assertNotIn(str(Path(root) / 'missing'), result['directories'])
+        self.assertEqual(list(result['checkouts']), ['mnscloud-app'])
+        self.assertGreaterEqual(result['checkouts']['mnscloud-app']['gitBytes'], 50)
+        self.assertEqual(result['counts'], {str(backups): 1})
+        self.assertEqual(result['housekeepingLastRunAt'], 1700000000000)
+        self.assertNotIn('chunk-a.js', json.dumps(result))
+
+    def test_storage_is_registered_everywhere(self):
+        self.assertIn('storage', collector.OPERATIONS)
+        self.assertIn('  storage', (SOURCE / 'dispatcher.sh').read_text())
+        self.assertIn("'storage'", (SOURCE / 'manage.py').read_text())
 
 
 class HistoricalQueryContract(unittest.TestCase):
