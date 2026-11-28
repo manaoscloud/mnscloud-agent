@@ -123,8 +123,10 @@ skipped. Retention rules belong to each product, never to the Agent. On DB hosts
 cycle also expires old schema release worktrees and reconcile directories (newest 5 and 10 kept,
 younger than 3 days kept) without waiting for a new reconcile. Updates and housekeeping of one
 product never overlap. Runtime packages (`/var/lib/mnscloud/agent/runtime-packages`) are removed
-after each update. The App update lets `scripts/update-nginx-runtime.sh` fetch and check out only its
-target tag, so its rollback restores the commit that was running.
+after each update. The App update fetches only its target tag (older App release tags carry a
+browser tarball each), checks it out and runs the target's updater, passing the running commit in
+`MNSCLOUD_APP_PREVIOUS_COMMIT` for the updater's rollback. Runtime reconcile and schema reconcile
+jobs hold the same per-product lock as housekeeping.
 
 ## Database Table Maintenance
 

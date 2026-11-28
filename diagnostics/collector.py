@@ -1274,7 +1274,7 @@ def directory_bytes(directory, deadline):
     if remaining < 1:
         return 'SKIPPED'
     try:
-        return int(run(['/usr/bin/du', '-s', '-b', '-x', directory], limit=4096, timeout=min(8, remaining)).split()[0])
+        return int(run(['/usr/bin/du', '-s', '-B1', '-x', directory], limit=4096, timeout=min(8, remaining)).split()[0])
     except (OSError, ValueError, IndexError, subprocess.SubprocessError):
         return 'UNAVAILABLE'
 
@@ -1310,7 +1310,7 @@ def storage():
         state = json.loads(Path(HOUSEKEEPING_STATE).read_text(encoding='utf-8')[:4096])
         last = state.get('lastRunAt') if isinstance(state, dict) else None
         output['housekeepingLastRunAt'] = int(last) if isinstance(last, (int, float)) and last > 0 else None
-    except (OSError, ValueError):
+    except (OSError, ValueError, OverflowError):
         output['housekeepingLastRunAt'] = None
     return output
 

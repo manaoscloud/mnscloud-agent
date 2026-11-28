@@ -4694,11 +4694,13 @@ async function downloadRuntimePackage(
   await Deno.mkdir(dir, { recursive: true, mode: 0o700 });
   const target = `${dir}/${product}-${version}.bundle`;
   // Bundles are transport only (removed after each update): drop leftovers of older versions.
-  for await (const entry of Deno.readDir(dir)) {
-    if (entry.isFile && entry.name.startsWith(`${product}-`) && entry.name.endsWith(".bundle")) {
-      await Deno.remove(`${dir}/${entry.name}`).catch(() => undefined);
+  try {
+    for await (const entry of Deno.readDir(dir)) {
+      if (entry.isFile && entry.name.startsWith(`${product}-`) && entry.name.endsWith(".bundle")) {
+        await Deno.remove(`${dir}/${entry.name}`).catch(() => undefined);
+      }
     }
-  }
+  } catch { /* Cleanup only; the download below decides the outcome. */ }
   let expected = "";
   try {
     await withResponse(
@@ -4826,10 +4828,19 @@ function runtimeUpdateTargets() {
           artifactSha256,
         ];
         if (artifactName) updateArgs.push("--artifact-name", artifactName);
-        // The updater fetches only the target tag and checks it out itself (release tags of the
-        // App carried a browser tarball each: fetching every tag filled the host disk), and it
-        // records the running commit before the checkout, so its rollback restores it.
-        return ["bash", "scripts/update-nginx-runtime.sh", ...updateArgs];
+        // Fetch only the target tag (older App release tags carry a browser tarball each:
+        // fetching every tag filled the host disk), then run the TARGET's updater so a fixed
+        // release always heals a broken one. The running commit goes along for its rollback.
+        const tagRef = `+refs/tags/${targetRef}:refs/tags/${targetRef}`;
+        const command = [
+          `MNSCLOUD_APP_PREVIOUS_COMMIT="$(git rev-parse HEAD)"`,
+          `git fetch --no-tags origin ${shellQuote(tagRef)}`,
+          `git checkout ${shellQuote(targetRef)}`,
+          `MNSCLOUD_APP_PREVIOUS_COMMIT="$MNSCLOUD_APP_PREVIOUS_COMMIT" bash scripts/update-nginx-runtime.sh ${
+            updateArgs.map(shellQuote).join(" ")
+          }`,
+        ].join(" && ");
+        return ["bash", "-lc", command];
       },
     },
     "mnscloud-kamailio-softswitch": {
@@ -5101,38 +5112,61 @@ async function executeRuntimeUpdateJob(
       }
       const repoDir = target.repoDir;
       const updateCommand = target.command;
-      const outcome = await productLocks.run(product, async () => {
-        // Refuse before touching anything when the disk cannot hold the update.
-        diskCheck = await ensureDiskForUpdate(product, repoDir, {
-          run: runLocalCommand,
-          exists: pathExists,
-        });
-        if (!diskCheck.ok) return null;
-        const bundlePath = await downloadRuntimePackage(
-          config,
-          agentUUID,
-          agentToken,
-          product,
-          targetVersion || targetRef.replace(/^v/, ""),
-        );
-        try {
-          const updated = await runProductUpdateCommand(
-            bundlePath,
-            repoDir,
-            updateCommand,
+      let heartbeatCount = 0;
+      const timeoutMs = Math.max(config.commandTimeoutMs, 3_600_000);
+      // Progress covers the lock wait, the disk check, housekeeping and the updater.
+      const outcome = await withProgressHeartbeat(
+        productLocks.run(product, async () => {
+          // Refuse before touching anything when the disk cannot hold the update.
+          diskCheck = await ensureDiskForUpdate(product, repoDir, {
+            run: runLocalCommand,
+            exists: pathExists,
+          });
+          if (!diskCheck.ok) return null;
+          const bundlePath = await downloadRuntimePackage(
+            config,
+            agentUUID,
+            agentToken,
+            product,
+            targetVersion || targetRef.replace(/^v/, ""),
           );
-          if (updated.code === 0) {
-            housekeeping = await runHousekeeping(product, repoDir, {
-              run: runLocalCommand,
-              exists: pathExists,
-            });
+          try {
+            const updated = await runProductUpdateCommand(
+              bundlePath,
+              repoDir,
+              updateCommand,
+            );
+            if (updated.code === 0) {
+              housekeeping = await runHousekeeping(product, repoDir, {
+                run: runLocalCommand,
+                exists: pathExists,
+              });
+            }
+            return updated;
+          } finally {
+            // The package is only the transport of this update; the checkout keeps the release.
+            if (bundlePath) await Deno.remove(bundlePath).catch(() => undefined);
           }
-          return updated;
-        } finally {
-          // The package is only the transport of this update; the checkout keeps the release.
-          if (bundlePath) await Deno.remove(bundlePath).catch(() => undefined);
-        }
-      });
+        }),
+        () =>
+          reportJobProgress(
+            config,
+            job.jobUUID,
+            agentUUID,
+            agentToken,
+            "running",
+            40,
+            `${target.label} update to ${targetRef} is still running.`,
+            {
+              jobType: "runtime.update",
+              product,
+              targetRef,
+              targetVersion,
+              heartbeat: ++heartbeatCount,
+            },
+          ),
+        Math.min(Math.max(Math.floor(timeoutMs / 12), 120_000), 300_000),
+      );
       if (!outcome) {
         await failJob(
           config,
@@ -5160,32 +5194,10 @@ async function executeRuntimeUpdateJob(
         `cd ${shellQuote(repoDir)}`,
         updateCommand(targetRef, job, bundlePath).map(shellQuote).join(" "),
       ].join(" && ");
-      const timeoutMs = Math.max(config.commandTimeoutMs, 3_600_000);
-      let heartbeatCount = 0;
-      return await withProgressHeartbeat(
-        runLocalCommand(
-          "/bin/bash",
-          ["-lc", command],
-          timeoutMs,
-        ),
-        () =>
-          reportJobProgress(
-            config,
-            job.jobUUID,
-            agentUUID,
-            agentToken,
-            "running",
-            40,
-            `${target!.label} update to ${targetRef} is still running.`,
-            {
-              jobType: "runtime.update",
-              product,
-              targetRef,
-              targetVersion,
-              heartbeat: ++heartbeatCount,
-            },
-          ),
-        Math.min(Math.max(Math.floor(timeoutMs / 12), 120_000), 300_000),
+      return await runLocalCommand(
+        "/bin/bash",
+        ["-lc", command],
+        Math.max(config.commandTimeoutMs, 3_600_000),
       );
     }
 
@@ -8817,11 +8829,22 @@ async function runLeasedJob(
   } else if (job.jobType === DATABASE_PRINCIPAL_JOB_TYPE) {
     await executeDatabasePrincipalJob(job, config, agentUUID, agentToken);
   } else if (job.jobType === "database.schema.reconcile") {
-    await executeDatabaseSchemaReconcileJob(job, config, agentUUID, agentToken);
+    // Same lock as the daily schema artifact prune: it never removes a checkout in use.
+    await productLocks.run(
+      "mnscloud-db",
+      () => executeDatabaseSchemaReconcileJob(job, config, agentUUID, agentToken),
+    );
   } else if (job.jobType === "database.table.maintenance") {
     await executeDatabaseTableMaintenanceJob(job, config, agentUUID, agentToken);
   } else if (job.jobType === RUNTIME_RECONCILE_JOB_TYPE) {
-    await executeRuntimeReconcileJob(job, config, agentUUID, agentToken);
+    // A product's housekeeping never runs while its configuration is being reconciled.
+    const product = String(job.product ?? job.payload?.product ?? "");
+    await (/^mnscloud-[a-z0-9-]{1,48}$/.test(product)
+      ? productLocks.run(
+        product,
+        () => executeRuntimeReconcileJob(job, config, agentUUID, agentToken),
+      )
+      : executeRuntimeReconcileJob(job, config, agentUUID, agentToken));
   } else if (job.jobType === LOGS_REFRESH_JOB_TYPE) {
     await executeLogsRefreshJob(job);
   } else if (job.jobType === DNS_PROBE_JOB_TYPE) {

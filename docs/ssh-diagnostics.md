@@ -394,7 +394,9 @@ DB schema release checkouts, runtime kit, webapps, Agent runtime packages, `/var
 `/opt/mnscloud/mnscloud-*` checkout with its `.git`, entry counts of the retention-managed
 directories and `lastRunAt` of the Agent housekeeping state. The whole command has a 30 s budget;
 a directory measured after it reads `SKIPPED`. Symlinks are never followed and no file name is
-returned. The new sudo entry is the exact `collector.py storage` operation.
+returned. Sizes are on-disk usage (`du -B1`, comparable with `df`); one call can read for up to
+30 s, so call it when checking retention, not in a loop. The new sudo entry is the exact
+`collector.py storage` operation.
 
 ## Access gateway summary (diagnostics 4.6)
 
