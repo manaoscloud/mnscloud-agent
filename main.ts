@@ -1563,7 +1563,8 @@ async function installedRuntimeProducts(config: AgentConfig) {
   const installed: { product: string; repoDir: string }[] = [];
   for (const [product, target] of Object.entries(runtimeUpdateTargets())) {
     if (product === "mnscloud-agent" || !target.repoDir) continue;
-    if (!config.capabilities[target.capability] || !await pathExists(target.repoDir)) continue;
+    if (!config.capabilities[target.capability]) continue;
+    if (!await pathExists(target.repoDir)) continue; // NOSONAR: a few local stats, in order.
     installed.push({ product, repoDir: target.repoDir });
   }
   return installed;
@@ -8838,7 +8839,8 @@ async function runLeasedJob(
     await executeDatabaseTableMaintenanceJob(job, config, agentUUID, agentToken);
   } else if (job.jobType === RUNTIME_RECONCILE_JOB_TYPE) {
     // A product's housekeeping never runs while its configuration is being reconciled.
-    const product = String(job.product ?? job.payload?.product ?? "");
+    const rawProduct = job.product ?? job.payload?.product;
+    const product = typeof rawProduct === "string" ? rawProduct : "";
     await (/^mnscloud-[a-z0-9-]{1,48}$/.test(product)
       ? productLocks.run(
         product,

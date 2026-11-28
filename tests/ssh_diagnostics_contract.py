@@ -734,7 +734,7 @@ class StorageContract(unittest.TestCase):
             state.write_text('{"lastRunAt": 1700000000000}')
             with patch.object(collector, 'STORAGE_DIRS', (str(web), str(Path(root) / 'missing'))), \
                     patch.object(collector, 'STORAGE_COUNTS',
-                                 ((str(backups), re.compile(r'^schema-reconcile-[A-Za-z0-9_]{8,64}$')),)), \
+                                 ((str(backups), re.compile(r'^schema-reconcile-\w{8,64}$', re.ASCII)),)), \
                     patch.object(collector, 'STORAGE_CHECKOUT_ROOT', str(checkouts)), \
                     patch.object(collector, 'HOUSEKEEPING_STATE', str(state)):
                 result = collector.storage()

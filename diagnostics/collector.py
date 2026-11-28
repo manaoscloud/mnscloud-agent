@@ -1260,10 +1260,10 @@ def log_usage():
 STORAGE_DIRS = ('/var/www/mnscloud-app', '/var/lib/mnscloud/app/web-releases', '/opt/mnscloud/mnscloud-db-releases',
                 '/opt/mnscloud/runtime-kit', '/opt/mnscloud/webapps', '/var/lib/mnscloud/agent/runtime-packages',
                 '/var/backups', '/var/lib/docker', '/var/lib/mnscloud', '/var/cache/apt/archives', '/root/.cache/deno',
-                '/var/log', '/tmp')
-STORAGE_COUNTS = (('/var/backups', re.compile(r'^schema-reconcile-[A-Za-z0-9_]{8,64}$')),
+                '/var/log')
+STORAGE_COUNTS = (('/var/backups', re.compile(r'^schema-reconcile-\w{8,64}$', re.ASCII)),
                   ('/opt/mnscloud/mnscloud-db-releases', re.compile(r'^[A-Za-z0-9._-]{1,128}$')),
-                  ('/var/lib/mnscloud/app/web-releases', re.compile(r'^[0-9]{12}-[0-9]{12}-[0-9A-Za-z.+_-]{1,64}[.]files$')))
+                  ('/var/lib/mnscloud/app/web-releases', re.compile(r'^\d{12}-\d{12}-[0-9A-Za-z.+_-]{1,64}[.]files$', re.ASCII)))
 STORAGE_BUDGET_SECONDS = 30
 STORAGE_CHECKOUT_ROOT = '/opt/mnscloud'
 HOUSEKEEPING_STATE = '/var/lib/mnscloud/agent/housekeeping.json'
@@ -1279,41 +1279,53 @@ def directory_bytes(directory, deadline):
         return 'UNAVAILABLE'
 
 
-def storage():
-    deadline = time.monotonic() + STORAGE_BUDGET_SECONDS
-    info = os.statvfs('/')
-    output = {'diagnostics': DIAGNOSTICS_VERSION,
-              'filesystem': {'path': '/', 'totalBytes': info.f_blocks * info.f_frsize,
-                             'availableBytes': info.f_bavail * info.f_frsize},
-              'directories': {}, 'checkouts': {}, 'counts': {}}
-    for directory in STORAGE_DIRS:
-        if os.path.isdir(directory) and not os.path.islink(directory):
-            output['directories'][directory] = directory_bytes(directory, deadline)
+def storage_checkouts(deadline):
+    checkouts = {}
     try:
         names = sorted(os.listdir(STORAGE_CHECKOUT_ROOT))
     except OSError:
-        names = []
+        return checkouts
     for name in names:
         path = STORAGE_CHECKOUT_ROOT + '/' + name
         if not re.fullmatch(r'mnscloud-[a-z0-9-]{1,48}', name) or os.path.islink(path) or not os.path.isdir(path):
             continue
         entry = {'bytes': directory_bytes(path, deadline)}
-        if os.path.isdir(path + '/.git') and not os.path.islink(path + '/.git'):
-            entry['gitBytes'] = directory_bytes(path + '/.git', deadline)
-        output['checkouts'][name] = entry
+        git = path + '/.git'
+        if os.path.isdir(git) and not os.path.islink(git):
+            entry['gitBytes'] = directory_bytes(git, deadline)
+        checkouts[name] = entry
+    return checkouts
+
+
+def storage_counts():
+    counts = {}
     for directory, pattern in STORAGE_COUNTS:
         try:
-            output['counts'][directory] = sum(1 for name in os.listdir(directory) if pattern.fullmatch(name))
+            counts[directory] = sum(1 for name in os.listdir(directory) if pattern.fullmatch(name))
         except OSError:
             continue
+    return counts
+
+
+def housekeeping_last_run():
     try:
         state = json.loads(Path(HOUSEKEEPING_STATE).read_text(encoding='utf-8')[:4096])
         last = state.get('lastRunAt') if isinstance(state, dict) else None
-        output['housekeepingLastRunAt'] = int(last) if isinstance(last, (int, float)) and last > 0 else None
+        return int(last) if isinstance(last, (int, float)) and last > 0 else None
     except (OSError, ValueError, OverflowError):
-        output['housekeepingLastRunAt'] = None
-    return output
+        return None
 
+
+def storage():
+    deadline = time.monotonic() + STORAGE_BUDGET_SECONDS
+    info = os.statvfs('/')
+    directories = {directory: directory_bytes(directory, deadline) for directory in STORAGE_DIRS
+                   if os.path.isdir(directory) and not os.path.islink(directory)}
+    return {'diagnostics': DIAGNOSTICS_VERSION,
+            'filesystem': {'path': '/', 'totalBytes': info.f_blocks * info.f_frsize,
+                           'availableBytes': info.f_bavail * info.f_frsize},
+            'directories': directories, 'checkouts': storage_checkouts(deadline), 'counts': storage_counts(),
+            'housekeepingLastRunAt': housekeeping_last_run()}
 
 STAT_NAME = re.compile(r'[a-z_]{1,32}:[a-z0-9_]{1,64}')
 

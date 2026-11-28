@@ -25,14 +25,14 @@ const MAX_SUMMARIES = 20;
 const MAX_SUMMARY_CHARS = 2000;
 
 function shellQuote(value: string) {
-  return `'${value.replaceAll("'", "'\\''")}'`;
+  return `'${value.replaceAll("'", String.raw`'\''`)}'`;
 }
 
 /** Available bytes from `df -P -B1 PATH` (POSIX columns: fs, blocks, used, available, ...). */
 export function parseDfAvailable(text: string): number | null {
   const lines = text.trim().split(/\r?\n/).filter(Boolean);
   if (lines.length < 2) return null;
-  const fields = lines[lines.length - 1].trim().split(/\s+/);
+  const fields = (lines.at(-1) ?? "").trim().split(/\s+/);
   const value = Number(fields[3]);
   return Number.isSafeInteger(value) && value >= 0 ? value : null;
 }
@@ -172,13 +172,17 @@ export function formatBytes(value: number | null) {
   return `${amount.toFixed(unit ? 1 : 0)} ${units[unit]}`;
 }
 
+function housekeepingSentence(report: HousekeepingReport) {
+  const outcome = report.ok ? "." : ` (failed: ${report.message}).`;
+  return `Housekeeping ran first and freed ${formatBytes(report.freedBytes)}${outcome}`;
+}
+
 export function insufficientDiskMessage(label: string, check: DiskCheck) {
   return [
     `${label} update refused: ${formatBytes(check.freeBytesAfter)} free on ${check.path}, ` +
     `${formatBytes(check.requiredBytes)} required. The running version was not changed.`,
     check.housekeeping
-      ? `Housekeeping ran first and freed ${formatBytes(check.housekeeping.freedBytes)}` +
-        (check.housekeeping.ok ? "." : ` (failed: ${check.housekeeping.message}).`)
+      ? housekeepingSentence(check.housekeeping)
       : "This release ships no housekeeping script.",
     "Guidance: free space on the host (or grow the disk), then retry the same version.",
   ].join("\n");
@@ -186,14 +190,14 @@ export function insufficientDiskMessage(label: string, check: DiskCheck) {
 
 /** Serializes work per product: updates wait, housekeeping cycles skip a busy product. */
 export class ProductLocks {
-  #held = new Map<string, Promise<void>>();
+  readonly #held = new Map<string, Promise<void>>();
 
   busy(product: string) {
     return this.#held.has(product);
   }
 
   async run<T>(product: string, task: () => Promise<T>): Promise<T> {
-    while (this.#held.has(product)) await this.#held.get(product);
+    while (this.#held.has(product)) await this.#held.get(product); // NOSONAR: wait for the holder.
     let release!: () => void;
     this.#held.set(product, new Promise<void>((resolve) => (release = resolve)));
     try {
@@ -247,39 +251,40 @@ export class HousekeepingCycle {
     }
   }
 
-  /** Runs when due; returns the reports of the products processed (empty when not due). */
-  async tick(): Promise<HousekeepingReport[]> {
-    const now = this.#now();
-    if (this.#nextAt === null) {
-      const jitter = Math.floor((this.deps.random ?? Math.random)() * HOUSEKEEPING_JITTER_MS);
-      const last = await this.#lastRunAt();
-      // A clock that went backwards (last in the future) never postpones housekeeping for long.
-      const base = last > now ? now : last;
-      this.#nextAt = last ? base + HOUSEKEEPING_INTERVAL_MS + jitter : now + jitter;
-    }
-    if (now < this.#nextAt) return [];
-    this.#nextAt = now + HOUSEKEEPING_INTERVAL_MS +
-      Math.floor((this.deps.random ?? Math.random)() * HOUSEKEEPING_JITTER_MS);
+  #jitter() {
+    return Math.floor((this.deps.random ?? Math.random)() * HOUSEKEEPING_JITTER_MS);
+  }
+
+  /** First due time after a start: right after the jitter, or a day after the recorded run. */
+  async #firstDueAt(now: number) {
+    const last = await this.#lastRunAt();
+    // A clock that went backwards (last in the future) never postpones housekeeping for long.
+    return last
+      ? Math.min(last, now) + HOUSEKEEPING_INTERVAL_MS + this.#jitter()
+      : now + this.#jitter();
+  }
+
+  async #saveRun(now: number) {
     try {
       const write = this.deps.writeText ?? Deno.writeTextFile;
       await write(this.deps.stateFile, JSON.stringify({ lastRunAt: now }) + "\n");
     } catch (error) {
       this.deps.log("warn", "Housekeeping state not saved.", String(error));
     }
-    const reports: HousekeepingReport[] = [];
-    for (const item of await this.deps.products()) {
-      const report = await this.deps.locks.tryRun(
-        item.product,
-        () => runHousekeeping(item.product, item.repoDir, this.deps),
-      );
-      if (report === undefined) {
-        this.deps.log("info", "Housekeeping skipped: product update in progress.", {
-          product: item.product,
-        });
-        continue;
-      }
-      if (!report) continue;
-      reports.push(report);
+  }
+
+  async #runProduct(item: InstalledProduct): Promise<HousekeepingReport | null> {
+    const report = await this.deps.locks.tryRun(
+      item.product,
+      () => runHousekeeping(item.product, item.repoDir, this.deps),
+    );
+    if (report === undefined) {
+      this.deps.log("info", "Housekeeping skipped: product update in progress.", {
+        product: item.product,
+      });
+      return null;
+    }
+    if (report) {
       this.deps.log(report.ok ? "info" : "warn", "Housekeeping completed.", {
         product: report.product,
         ok: report.ok,
@@ -287,6 +292,22 @@ export class HousekeepingCycle {
         results: report.results,
         message: report.message,
       });
+    }
+    return report;
+  }
+
+  /** Runs when due; returns the reports of the products processed (empty when not due). */
+  async tick(): Promise<HousekeepingReport[]> {
+    const now = this.#now();
+    this.#nextAt ??= await this.#firstDueAt(now);
+    if (now < this.#nextAt) return [];
+    this.#nextAt = now + HOUSEKEEPING_INTERVAL_MS + this.#jitter();
+    await this.#saveRun(now);
+    const reports: HousekeepingReport[] = [];
+    // One product at a time on purpose: housekeeping must not compete for disk I/O.
+    for (const item of await this.deps.products()) {
+      const report = await this.#runProduct(item); // NOSONAR: sequential by design.
+      if (report) reports.push(report);
     }
     for (const report of this.deps.extra ? await this.deps.extra() : []) {
       reports.push(report);

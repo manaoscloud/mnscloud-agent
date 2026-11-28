@@ -390,7 +390,8 @@ before release; deliver with the normal Agent DEV rollout and an authorized PROD
 Version 4.7 (2026-11-27, task `release-storage-r1`) adds `storage` so release retention can be
 proven read-only: `du -s -b -x` of a fixed list of directories (App web root and its release lists,
 DB schema release checkouts, runtime kit, webapps, Agent runtime packages, `/var/backups`,
-`/var/lib/docker`, `/var/lib/mnscloud`, apt archives, Deno cache, `/var/log`, `/tmp`), each
+`/var/lib/docker`, `/var/lib/mnscloud`, apt archives, Deno cache, `/var/log`; never world-writable
+directories such as `/tmp`), each
 `/opt/mnscloud/mnscloud-*` checkout with its `.git`, entry counts of the retention-managed
 directories and `lastRunAt` of the Agent housekeeping state. The whole command has a 30 s budget;
 a directory measured after it reads `SKIPPED`. Symlinks are never followed and no file name is
