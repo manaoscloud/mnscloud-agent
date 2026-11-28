@@ -22,7 +22,7 @@ collector() {
 case "$COMMAND" in
   help|"")
     printf '%s\n' \
-      "Allowed diagnostic commands (diagnostics 4.6):" \
+      "Allowed diagnostic commands (diagnostics 4.7):" \
       "  identity" \
       "  memory" \
       "  disk" \
@@ -48,6 +48,7 @@ case "$COMMAND" in
       "  edge" \
       "  access-summary [MINUTES]" \
       "  log-usage" \
+      "  storage" \
       "  voip-summary" \
       "  gateway-summary" \
       "  schema-status" \
@@ -111,7 +112,7 @@ case "$COMMAND" in
       mnscloud-access-gateway.service \
       'mnscloud-*'
     ;;
-  config|config-check|logs|logs-text|versions|connectivity|asterisk-odbc|artifacts|health|agent|host|network|timers|edge|log-usage|voip-summary|gateway-summary|schema-status)
+  config|config-check|logs|logs-text|versions|connectivity|asterisk-odbc|artifacts|health|agent|host|network|timers|edge|log-usage|storage|voip-summary|gateway-summary|schema-status)
     collector "$COMMAND"
     ;;
   access-summary)

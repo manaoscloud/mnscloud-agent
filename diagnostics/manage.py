@@ -22,7 +22,7 @@ SUDOERS = Path('/etc/sudoers.d/mns-diagnostics')
 BACKUPS = Path('/var/backups/mns-diagnostics')
 TARGETS = (SHELL, COLLECTOR, SUDOERS)
 OPERATIONS = ('config', 'config-check', 'logs', 'logs-text', 'journal', 'log-query', 'audio-stat', 'container-logs', 'versions', 'connectivity', 'asterisk-odbc',
-              'artifacts', 'health', 'agent', 'host', 'network', 'timers', 'edge', 'access-summary', 'log-usage',
+              'artifacts', 'health', 'agent', 'host', 'network', 'timers', 'edge', 'access-summary', 'log-usage', 'storage',
               'voip-summary', 'gateway-summary', 'schema-status', 'schema-plan')
 
 

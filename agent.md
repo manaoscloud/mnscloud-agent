@@ -110,6 +110,22 @@ source/ref, installed and resolved release, last sync status/time and a one-line
 validates the fields and never sends configuration values beyond them. A `runtime.update` job for
 `mnscloud-webapps` may carry `app` (and optional `appRef`) to update a single app.
 
+## Disk guard and housekeeping
+
+Before a Linux `runtime.update` the Agent checks the free space of the product's filesystem and
+requires at least 1 GiB. When it is short, the housekeeping script of the installed release runs
+first; if the space is still short, the job fails with `INSUFFICIENT_DISK` (free and required bytes)
+before the updater touches the running version. After a successful update, and once a day (24 h
+plus up to 2 h jitter, state in `/var/lib/mnscloud/agent/housekeeping.json`), the Agent runs
+`scripts/housekeeping.sh --apply` of every installed runtime product that ships it (10 minute
+limit, JSON summary lines in the job result and the Agent log); products without the script are
+skipped. Retention rules belong to each product, never to the Agent. On DB hosts the same daily
+cycle also expires old schema release worktrees and reconcile directories (newest 5 and 10 kept,
+younger than 3 days kept) without waiting for a new reconcile. Updates and housekeeping of one
+product never overlap. Runtime packages (`/var/lib/mnscloud/agent/runtime-packages`) are removed
+after each update. The App update lets `scripts/update-nginx-runtime.sh` fetch and check out only its
+target tag, so its rollback restores the commit that was running.
+
 ## Database Table Maintenance
 
 On Linux database hosts the Agent declares `mnscloud.database.table.maintenance.v1` when the

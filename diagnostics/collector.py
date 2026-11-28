@@ -21,7 +21,7 @@ import subprocess
 import sys
 from urllib.parse import urlsplit
 
-DIAGNOSTICS_VERSION = '4.6'
+DIAGNOSTICS_VERSION = '4.7'
 DIAGNOSTICS_USER = 'mns-diagnostics'
 CONFIG_DIR = Path('/etc/mnscloud')
 FILES = ('api', 'app', 'nginx', 'workers', 'rabbitmq', 'db', 'authentication', 'openvault', 'logs', 'dns',
@@ -1255,6 +1255,66 @@ def log_usage():
     return output
 
 
+# storage (diagnostics 4.7): bytes held by the fixed places where releases, backups and caches
+# accumulate, so retention can be verified without a shell. Only sizes and counts, never names.
+STORAGE_DIRS = ('/var/www/mnscloud-app', '/var/lib/mnscloud/app/web-releases', '/opt/mnscloud/mnscloud-db-releases',
+                '/opt/mnscloud/runtime-kit', '/opt/mnscloud/webapps', '/var/lib/mnscloud/agent/runtime-packages',
+                '/var/backups', '/var/lib/docker', '/var/lib/mnscloud', '/var/cache/apt/archives', '/root/.cache/deno',
+                '/var/log', '/tmp')
+STORAGE_COUNTS = (('/var/backups', re.compile(r'^schema-reconcile-[A-Za-z0-9_]{8,64}$')),
+                  ('/opt/mnscloud/mnscloud-db-releases', re.compile(r'^[A-Za-z0-9._-]{1,128}$')),
+                  ('/var/lib/mnscloud/app/web-releases', re.compile(r'^[0-9]{12}-[0-9]{12}-[0-9A-Za-z.+_-]{1,64}[.]files$')))
+STORAGE_BUDGET_SECONDS = 30
+STORAGE_CHECKOUT_ROOT = '/opt/mnscloud'
+HOUSEKEEPING_STATE = '/var/lib/mnscloud/agent/housekeeping.json'
+
+
+def directory_bytes(directory, deadline):
+    remaining = deadline - time.monotonic()
+    if remaining < 1:
+        return 'SKIPPED'
+    try:
+        return int(run(['/usr/bin/du', '-s', '-b', '-x', directory], limit=4096, timeout=min(8, remaining)).split()[0])
+    except (OSError, ValueError, IndexError, subprocess.SubprocessError):
+        return 'UNAVAILABLE'
+
+
+def storage():
+    deadline = time.monotonic() + STORAGE_BUDGET_SECONDS
+    info = os.statvfs('/')
+    output = {'diagnostics': DIAGNOSTICS_VERSION,
+              'filesystem': {'path': '/', 'totalBytes': info.f_blocks * info.f_frsize,
+                             'availableBytes': info.f_bavail * info.f_frsize},
+              'directories': {}, 'checkouts': {}, 'counts': {}}
+    for directory in STORAGE_DIRS:
+        if os.path.isdir(directory) and not os.path.islink(directory):
+            output['directories'][directory] = directory_bytes(directory, deadline)
+    try:
+        names = sorted(os.listdir(STORAGE_CHECKOUT_ROOT))
+    except OSError:
+        names = []
+    for name in names:
+        path = STORAGE_CHECKOUT_ROOT + '/' + name
+        if not re.fullmatch(r'mnscloud-[a-z0-9-]{1,48}', name) or os.path.islink(path) or not os.path.isdir(path):
+            continue
+        entry = {'bytes': directory_bytes(path, deadline)}
+        if os.path.isdir(path + '/.git') and not os.path.islink(path + '/.git'):
+            entry['gitBytes'] = directory_bytes(path + '/.git', deadline)
+        output['checkouts'][name] = entry
+    for directory, pattern in STORAGE_COUNTS:
+        try:
+            output['counts'][directory] = sum(1 for name in os.listdir(directory) if pattern.fullmatch(name))
+        except OSError:
+            continue
+    try:
+        state = json.loads(Path(HOUSEKEEPING_STATE).read_text(encoding='utf-8')[:4096])
+        last = state.get('lastRunAt') if isinstance(state, dict) else None
+        output['housekeepingLastRunAt'] = int(last) if isinstance(last, (int, float)) and last > 0 else None
+    except (OSError, ValueError):
+        output['housekeepingLastRunAt'] = None
+    return output
+
+
 STAT_NAME = re.compile(r'[a-z_]{1,32}:[a-z0-9_]{1,64}')
 
 
@@ -1938,6 +1998,7 @@ OPERATIONS = {
     'edge': ('edge', False, False),
     'access-summary': ('access-summary', True, False),
     'log-usage': ('log-usage', False, False),
+    'storage': ('storage', False, False),
     'voip-summary': ('voip-summary', False, False),
     'gateway-summary': ('gateway-summary', False, False),
     'schema-status': ('schema-status', False, False),
@@ -1997,7 +2058,7 @@ def main():
     else:
         result = {'logs': logs, 'logs-text': logs_text, 'versions': versions, 'asterisk-odbc': asterisk_odbc,
                   'artifacts': artifacts, 'health': health, 'agent': agent, 'host': host, 'network': network,
-                  'timers': timers, 'edge': edge, 'log-usage': log_usage, 'voip-summary': voip_summary,
+                  'timers': timers, 'edge': edge, 'log-usage': log_usage, 'storage': storage, 'voip-summary': voip_summary,
                   'gateway-summary': gateway_summary,
                   'schema-status': schema_status}[operation]()
     print(json.dumps(result, indent=2, ensure_ascii=True))

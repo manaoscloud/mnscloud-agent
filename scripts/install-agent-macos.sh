@@ -345,6 +345,7 @@ main() {
   run "cp '${AGENT_SOURCE_DIR}/bounded-io.ts' '${install_dir}/bounded-io.ts'"
   run "cp '${AGENT_SOURCE_DIR}/scheduler.ts' '${install_dir}/scheduler.ts'"
   run "cp '${AGENT_SOURCE_DIR}/schema-release.ts' '${install_dir}/schema-release.ts'"
+  run "cp '${AGENT_SOURCE_DIR}/storage-guard.ts' '${install_dir}/storage-guard.ts'"
   run "cp '${AGENT_SOURCE_DIR}/openvault-status.ts' '${install_dir}/openvault-status.ts'"
   run "cp '${AGENT_SOURCE_DIR}/webapps-status.ts' '${install_dir}/webapps-status.ts'"
   run "cp '${AGENT_SOURCE_DIR}/webapps-update.ts' '${install_dir}/webapps-update.ts'"

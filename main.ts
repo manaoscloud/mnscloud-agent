@@ -63,6 +63,14 @@ import {
 } from "./nginx-webapps.ts";
 import { prepareSchemaRelease, pruneSchemaArtifacts } from "./schema-release.ts";
 import {
+  ensureDiskForUpdate,
+  HousekeepingCycle,
+  type HousekeepingReport,
+  insufficientDiskMessage,
+  ProductLocks,
+  runHousekeeping,
+} from "./storage-guard.ts";
+import {
   DATABASE_PRINCIPAL_CAPABILITY,
   DATABASE_PRINCIPAL_JOB_TYPE,
   databaseAdapterInput,
@@ -1546,6 +1554,54 @@ const securityInventory = new SecurityInventory({
   log: (level, message, extra) => log(level, message, extra),
   windows: IS_WINDOWS,
 });
+// Runtime updates and housekeeping of one product never overlap (storage-guard.ts).
+const productLocks = new ProductLocks();
+const HOUSEKEEPING_STATE_FILE = "/var/lib/mnscloud/agent/housekeeping.json";
+
+/** Installed runtime products whose updates this Agent runs (Linux only). */
+async function installedRuntimeProducts(config: AgentConfig) {
+  const installed: { product: string; repoDir: string }[] = [];
+  for (const [product, target] of Object.entries(runtimeUpdateTargets())) {
+    if (product === "mnscloud-agent" || !target.repoDir) continue;
+    if (!config.capabilities[target.capability] || !await pathExists(target.repoDir)) continue;
+    installed.push({ product, repoDir: target.repoDir });
+  }
+  return installed;
+}
+
+/** DB hosts: old schema release worktrees and reconcile dirs also expire without a new reconcile. */
+async function schemaArtifactsHousekeeping(config: AgentConfig): Promise<HousekeepingReport[]> {
+  if (!await pathExists("/opt/mnscloud/mnscloud-db-releases")) return [];
+  const report = await productLocks.tryRun("mnscloud-db", async () => {
+    try {
+      const removed = await pruneSchemaArtifacts(
+        "/opt/mnscloud/mnscloud-db",
+        "/var/backups",
+        {},
+        (args) => runLocalCommand("git", args, Math.max(config.commandTimeoutMs, 180_000)),
+      );
+      return {
+        product: "mnscloud-db",
+        ok: true,
+        code: 0,
+        freedBytes: 0,
+        results: [{ kind: "schema-artifacts", removed: removed.length }],
+        message: null,
+      };
+    } catch (error) {
+      return {
+        product: "mnscloud-db",
+        ok: false,
+        code: -1,
+        freedBytes: 0,
+        results: [],
+        message: error instanceof Error ? error.message : String(error),
+      };
+    }
+  });
+  return report ? [report] : [];
+}
+
 // The heartbeat and the event-driven reports share the presence baseline: one at a time.
 let pabxPresenceQueue: Promise<unknown> = Promise.resolve();
 function withPabxPresenceLock<T>(task: () => Promise<T>): Promise<T> {
@@ -4637,6 +4693,12 @@ async function downloadRuntimePackage(
   const dir = "/var/lib/mnscloud/agent/runtime-packages";
   await Deno.mkdir(dir, { recursive: true, mode: 0o700 });
   const target = `${dir}/${product}-${version}.bundle`;
+  // Bundles are transport only (removed after each update): drop leftovers of older versions.
+  for await (const entry of Deno.readDir(dir)) {
+    if (entry.isFile && entry.name.startsWith(`${product}-`) && entry.name.endsWith(".bundle")) {
+      await Deno.remove(`${dir}/${entry.name}`).catch(() => undefined);
+    }
+  }
   let expected = "";
   try {
     await withResponse(
@@ -4711,6 +4773,10 @@ function checkoutRuntimeTarget(name: (typeof CONVENTIONAL_MODULE_RUNTIMES)[numbe
 }
 
 function runtimeUpdateTarget(product: string) {
+  return runtimeUpdateTargets()[product] ?? null;
+}
+
+function runtimeUpdateTargets() {
   const targets: Record<
     string,
     {
@@ -4760,12 +4826,10 @@ function runtimeUpdateTarget(product: string) {
           artifactSha256,
         ];
         if (artifactName) updateArgs.push("--artifact-name", artifactName);
-        const command = [
-          "git fetch --tags --prune origin",
-          `git checkout ${shellQuote(targetRef)}`,
-          `bash scripts/update-nginx-runtime.sh ${updateArgs.map(shellQuote).join(" ")}`,
-        ].join(" && ");
-        return ["bash", "-lc", command];
+        // The updater fetches only the target tag and checks it out itself (release tags of the
+        // App carried a browser tarball each: fetching every tag filled the host disk), and it
+        // records the running commit before the checkout, so its rollback restores it.
+        return ["bash", "scripts/update-nginx-runtime.sh", ...updateArgs];
       },
     },
     "mnscloud-kamailio-softswitch": {
@@ -4918,7 +4982,7 @@ function runtimeUpdateTarget(product: string) {
       ],
     },
   };
-  return targets[product] ?? null;
+  return targets;
 }
 
 async function scheduleLinuxAgentUpdate(
@@ -5017,6 +5081,8 @@ async function executeRuntimeUpdateJob(
 
     let scheduled = false;
     let result: { code: number; stdout: string; stderr: string };
+    let diskCheck: Awaited<ReturnType<typeof ensureDiskForUpdate>> | null = null;
+    let housekeeping: HousekeepingReport | null = null;
     if (product === "mnscloud-agent") {
       scheduled = true;
       if (IS_WINDOWS) result = await scheduleWindowsAgentUpdate(config, targetRef);
@@ -5033,23 +5099,70 @@ async function executeRuntimeUpdateJob(
           `${target.label} runtime update command is not configured.`,
         );
       }
-      const bundlePath = await downloadRuntimePackage(
-        config,
-        agentUUID,
-        agentToken,
-        product,
-        targetVersion || targetRef.replace(/^v/, ""),
-      );
+      const repoDir = target.repoDir;
+      const updateCommand = target.command;
+      const outcome = await productLocks.run(product, async () => {
+        // Refuse before touching anything when the disk cannot hold the update.
+        diskCheck = await ensureDiskForUpdate(product, repoDir, {
+          run: runLocalCommand,
+          exists: pathExists,
+        });
+        if (!diskCheck.ok) return null;
+        const bundlePath = await downloadRuntimePackage(
+          config,
+          agentUUID,
+          agentToken,
+          product,
+          targetVersion || targetRef.replace(/^v/, ""),
+        );
+        try {
+          const updated = await runProductUpdateCommand(
+            bundlePath,
+            repoDir,
+            updateCommand,
+          );
+          if (updated.code === 0) {
+            housekeeping = await runHousekeeping(product, repoDir, {
+              run: runLocalCommand,
+              exists: pathExists,
+            });
+          }
+          return updated;
+        } finally {
+          // The package is only the transport of this update; the checkout keeps the release.
+          if (bundlePath) await Deno.remove(bundlePath).catch(() => undefined);
+        }
+      });
+      if (!outcome) {
+        await failJob(
+          config,
+          job.jobUUID,
+          agentUUID,
+          agentToken,
+          "INSUFFICIENT_DISK",
+          insufficientDiskMessage(target.label, diskCheck!),
+          "runtime.update",
+        );
+        return;
+      }
+      result = outcome;
+    }
+
+    async function runProductUpdateCommand(
+      bundlePath: string | null,
+      repoDir: string,
+      updateCommand: NonNullable<NonNullable<typeof target>["command"]>,
+    ) {
       const command = [
         `export MNSCLOUD_RUNTIME_UPDATE_IN_PROGRESS=1`,
         `export MNSCLOUD_RUNTIME_UPDATE_JOB_UUID=${shellQuote(job.jobUUID)}`,
         `export MNSCLOUD_RUNTIME_UPDATE_PRODUCT=${shellQuote(product)}`,
-        `cd ${shellQuote(target.repoDir)}`,
-        target.command(targetRef, job, bundlePath).map(shellQuote).join(" "),
+        `cd ${shellQuote(repoDir)}`,
+        updateCommand(targetRef, job, bundlePath).map(shellQuote).join(" "),
       ].join(" && ");
       const timeoutMs = Math.max(config.commandTimeoutMs, 3_600_000);
       let heartbeatCount = 0;
-      result = await withProgressHeartbeat(
+      return await withProgressHeartbeat(
         runLocalCommand(
           "/bin/bash",
           ["-lc", command],
@@ -5063,7 +5176,7 @@ async function executeRuntimeUpdateJob(
             agentToken,
             "running",
             40,
-            `${target.label} update to ${targetRef} is still running.`,
+            `${target!.label} update to ${targetRef} is still running.`,
             {
               jobType: "runtime.update",
               product,
@@ -5121,6 +5234,8 @@ async function executeRuntimeUpdateJob(
           targetBuildRef: job.targetBuildRef ?? null,
           installedRuntime,
           scheduled,
+          diskCheck,
+          housekeeping,
           stdout: result.stdout,
           stderr: result.stderr,
         },
@@ -8763,6 +8878,15 @@ async function main() {
   let jobLongPoll = false;
   const reportError = (lane: string) => (error: unknown) =>
     log("warn", `Agent ${lane} failed.`, String(error));
+  const housekeepingCycle = new HousekeepingCycle({
+    products: () => installedRuntimeProducts(config),
+    extra: () => schemaArtifactsHousekeeping(config),
+    run: runLocalCommand,
+    exists: pathExists,
+    locks: productLocks,
+    log,
+    stateFile: HOUSEKEEPING_STATE_FILE,
+  });
   await Promise.all([
     runLane(
       async () => {
@@ -8815,6 +8939,16 @@ async function main() {
       () => jobLongPoll ? 1000 : Math.max(1000, config.pollIntervalMs),
       reportError("jobs"),
     ),
+    // Daily (24 h + jitter) retention of every installed runtime product (Linux runtime hosts).
+    ...(IS_WINDOWS || IS_MACOS ? [] : [
+      runLane(
+        async () => {
+          await housekeepingCycle.tick();
+        },
+        60_000,
+        reportError("housekeeping"),
+      ),
+    ]),
     // Collects only when enabled and due (24 h + jitter or a package change); never in the heartbeat.
     runLane(
       async () => {
